@@ -32,6 +32,7 @@ Everything runs locally. No accounts, no cloud, no telemetry. Connect to any Ope
 - **Agent Data Toggle** — Show/hide agent data panels per chat.
 
 **Bug Fixes:**
+- Fixed stop/pause generation button not actually stopping the stream.
 - Fixed SillyTavern character and chat import failures.
 - Fixed persona import not loading correctly.
 - Fixed preset save errors when creating new presets.

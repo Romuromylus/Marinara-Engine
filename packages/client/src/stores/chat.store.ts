@@ -15,6 +15,8 @@ interface ChatState {
   messages: Message[];
   isStreaming: boolean;
   streamBuffer: string;
+  /** Active AbortController for the current generation — call .abort() to stop. */
+  abortController: AbortController | null;
   /** When regenerating, the ID of the message being regenerated (so streaming shows in-place). */
   regenerateMessageId: string | null;
   /** During group chat individual mode, the character currently streaming. */
@@ -30,6 +32,8 @@ interface ChatState {
   addMessage: (message: Message) => void;
   updateLastMessage: (content: string) => void;
   setStreaming: (streaming: boolean) => void;
+  setAbortController: (controller: AbortController | null) => void;
+  stopGeneration: () => void;
   appendStreamBuffer: (text: string) => void;
   setStreamBuffer: (text: string) => void;
   clearStreamBuffer: () => void;
@@ -53,6 +57,7 @@ export const useChatStore = create<ChatState>()(
     messages: [],
     isStreaming: false,
     streamBuffer: "",
+    abortController: null,
     regenerateMessageId: null,
     streamingCharacterId: null,
     swipeIndex: new Map(),
@@ -85,6 +90,11 @@ export const useChatStore = create<ChatState>()(
       }),
 
     setStreaming: (streaming) => set({ isStreaming: streaming }),
+    setAbortController: (controller) => set({ abortController: controller }),
+    stopGeneration: () => {
+      const { abortController } = useChatStore.getState();
+      if (abortController) abortController.abort();
+    },
     appendStreamBuffer: (text) => set((state) => ({ streamBuffer: state.streamBuffer + text })),
     setStreamBuffer: (text) => set({ streamBuffer: text }),
     clearStreamBuffer: () => set({ streamBuffer: "" }),
@@ -109,6 +119,7 @@ export const useChatStore = create<ChatState>()(
         messages: [],
         isStreaming: false,
         streamBuffer: "",
+        abortController: null,
         streamingCharacterId: null,
         swipeIndex: new Map(),
       });

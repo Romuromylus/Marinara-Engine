@@ -128,11 +128,12 @@ export const api = {
    * Stream an SSE endpoint. Returns an async iterable of all typed events.
    * Unlike `stream()`, this does NOT filter to only token events.
    */
-  streamEvents: async function* (path: string, body?: unknown): AsyncGenerator<{ type: string; data: unknown }> {
+  streamEvents: async function* (path: string, body?: unknown, signal?: AbortSignal): AsyncGenerator<{ type: string; data: unknown }> {
     const res = await fetch(`${BASE}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     });
 
     if (!res.ok || !res.body) {

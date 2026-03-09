@@ -34,6 +34,10 @@ export function useGenerate() {
       userMessage?: string;
       regenerateMessageId?: string;
     }) => {
+      // Create an AbortController so the stop button can cancel this generation
+      const abortController = new AbortController();
+      useChatStore.getState().setAbortController(abortController);
+
       setStreaming(true);
       clearStreamBuffer();
       clearThoughtBubbles();
@@ -107,7 +111,7 @@ export function useGenerate() {
       try {
         const debugMode = useUIStore.getState().debugMode;
 
-        for await (const event of api.streamEvents("/generate", { ...params, debugMode })) {
+        for await (const event of api.streamEvents("/generate", { ...params, debugMode }, abortController.signal)) {
           switch (event.type) {
             case "token": {
               if (streamingEnabled) {
@@ -322,6 +326,8 @@ export function useGenerate() {
         pendingText = "";
         typingActive = false;
         if (fullBuffer) setStreamBuffer(fullBuffer);
+        // Abort is intentional — don't log or rethrow
+        if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("Generation error:", error);
         throw error;
       } finally {
@@ -336,6 +342,7 @@ export function useGenerate() {
         clearStreamBuffer();
         setRegenerateMessageId(null);
         setStreamingCharacterId(null);
+        useChatStore.getState().setAbortController(null);
       }
     },
     [

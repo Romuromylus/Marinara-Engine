@@ -294,7 +294,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
 
         {/* Send / Stop button */}
         <button
-          onClick={isStreaming ? undefined : handleSend}
+          onClick={isStreaming ? () => useChatStore.getState().stopGeneration() : handleSend}
           disabled={(!hasInput && !isStreaming) || !activeChatId}
           className={cn(
             "flex h-8 w-8 items-center justify-center rounded-xl transition-all duration-200",
