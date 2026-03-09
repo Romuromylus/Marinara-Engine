@@ -3,6 +3,7 @@
 // ──────────────────────────────────────────────
 import { useCallback } from "react";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api } from "../lib/api-client";
 import { useChatStore } from "../stores/chat.store";
 import { useAgentStore } from "../stores/agent.store";
@@ -21,8 +22,16 @@ export function useGenerate() {
   const qc = useQueryClient();
   const { setStreaming, setStreamBuffer, clearStreamBuffer, setRegenerateMessageId, setStreamingCharacterId } =
     useChatStore();
-  const { setProcessing, addResult, addThoughtBubble, clearThoughtBubbles, addEchoMessage, clearEchoMessages } =
-    useAgentStore();
+  const {
+    setProcessing,
+    addResult,
+    addThoughtBubble,
+    clearThoughtBubbles,
+    addEchoMessage,
+    clearEchoMessages,
+    setFailedAgentTypes,
+    clearFailedAgentTypes,
+  } = useAgentStore();
   const setGameState = useGameStateStore((s) => s.setGameState);
 
   const generate = useCallback(
@@ -42,6 +51,7 @@ export function useGenerate() {
       clearStreamBuffer();
       clearThoughtBubbles();
       clearEchoMessages();
+      clearFailedAgentTypes();
       setRegenerateMessageId(params.regenerateMessageId ?? null);
 
       // Optimistically show the user message in the chat immediately
@@ -80,6 +90,14 @@ export function useGenerate() {
       const MIN_CHARS = 1; // Minimum characters per frame
       const MAX_CHARS = 8; // Maximum characters per frame
       const RAMP_THRESHOLD = 120; // Start ramping up speed at this queue length
+
+      const flushTypewriterBuffer = () => {
+        cancelAnimationFrame(rafId);
+        fullBuffer += pendingText;
+        pendingText = "";
+        typingActive = false;
+        if (fullBuffer) setStreamBuffer(fullBuffer);
+      };
 
       const startTypewriter = () => {
         if (typingActive) return;
@@ -303,6 +321,23 @@ export function useGenerate() {
               setProcessing(false);
               break;
             }
+
+            case "error": {
+              // Flush pending text so the user sees what arrived before the error
+              flushTypewriterBuffer();
+              toast.error((event.data as string) || "Generation failed");
+              break;
+            }
+
+            case "agents_retry_failed": {
+              const failedList = event.data as Array<{ agentType: string; error: string | null }>;
+              const types = failedList.map((f) => f.agentType);
+              setFailedAgentTypes(types);
+              toast.error(
+                `${types.length} agent${types.length > 1 ? "s" : ""} failed after retry. Use the retry button in the chat header to try again.`,
+              );
+              break;
+            }
           }
         }
 
@@ -321,11 +356,7 @@ export function useGenerate() {
         setStreamBuffer(fullBuffer + pendingText);
       } catch (error) {
         // Flush everything instantly on error so user sees what arrived
-        cancelAnimationFrame(rafId);
-        fullBuffer += pendingText;
-        pendingText = "";
-        typingActive = false;
-        if (fullBuffer) setStreamBuffer(fullBuffer);
+        flushTypewriterBuffer();
         // Abort is intentional — don't log or rethrow
         if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("Generation error:", error);
@@ -339,7 +370,7 @@ export function useGenerate() {
         });
         // Wait one frame so React renders the fetched messages before
         // removing the streaming overlay — prevents a visible flash.
-        await new Promise<void>((r) => requestAnimationFrame(r));
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
         setStreaming(false);
         setProcessing(false);
         clearStreamBuffer();
@@ -361,11 +392,100 @@ export function useGenerate() {
       clearThoughtBubbles,
       addEchoMessage,
       clearEchoMessages,
+      clearFailedAgentTypes,
+      setFailedAgentTypes,
       setGameState,
     ],
   );
 
-  return { generate };
+  const retryAgents = useCallback(
+    async (chatId: string, agentTypes: string[]) => {
+      setProcessing(true);
+      clearFailedAgentTypes();
+
+      try {
+        let hasError = false;
+        for await (const event of api.streamEvents("/generate/retry-agents", { chatId, agentTypes })) {
+          switch (event.type) {
+            case "agent_result": {
+              const result = event.data as {
+                agentType: string;
+                agentName: string;
+                resultType: string;
+                data: unknown;
+                success: boolean;
+                error: string | null;
+                durationMs: number;
+              };
+              addResult(result.agentType, {
+                agentId: result.agentType,
+                agentType: result.agentType,
+                type: result.resultType as any,
+                data: result.data,
+                tokensUsed: 0,
+                durationMs: result.durationMs,
+                success: result.success,
+                error: result.error,
+              });
+              if (result.success && result.data) {
+                const bubble = formatAgentBubble(result.agentType, result.agentName, result.data);
+                if (bubble) addThoughtBubble(result.agentType, result.agentName, bubble);
+                if (result.agentType === "echo-chamber") {
+                  const d = result.data as Record<string, unknown>;
+                  const reactions = (d.reactions as Array<{ characterName: string; reaction: string }>) ?? [];
+                  for (const r of reactions) addEchoMessage(r.characterName, r.reaction);
+                }
+                if (result.resultType === "background_change") {
+                  const bg = result.data as { chosen?: string | null };
+                  if (bg.chosen) {
+                    useUIStore.getState().setChatBackground(`/api/backgrounds/file/${encodeURIComponent(bg.chosen)}`);
+                  }
+                }
+              }
+              break;
+            }
+            case "agents_retry_failed": {
+              const failedList = event.data as Array<{ agentType: string; error: string | null }>;
+              const types = failedList.map((f) => f.agentType);
+              setFailedAgentTypes(types);
+              toast.error(
+                `${types.length} agent${types.length > 1 ? "s" : ""} failed after retry. Use the retry button in the chat header to try again.`,
+              );
+              break;
+            }
+            case "game_state": {
+              setGameState(event.data as any);
+              break;
+            }
+            case "game_state_patch": {
+              const patch = event.data as Record<string, unknown>;
+              const current = useGameStateStore.getState().current;
+              if (current) setGameState({ ...current, ...patch } as any);
+              break;
+            }
+            case "error": {
+              hasError = true;
+              toast.error((event.data as string) || "Agent retry failed");
+              break;
+            }
+            case "done": {
+              break;
+            }
+          }
+        }
+        if (!hasError) toast.success("Agent retry completed");
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        const msg = error instanceof Error ? error.message : "Agent retry failed";
+        toast.error(msg);
+      } finally {
+        setProcessing(false);
+      }
+    },
+    [addResult, addThoughtBubble, addEchoMessage, clearFailedAgentTypes, setProcessing, setGameState],
+  );
+
+  return { generate, retryAgents };
 }
 
 /**
