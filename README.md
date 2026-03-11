@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>An AI-powered chat & roleplay engine</b> built around one idea: <b>you install it, you run it, it works.</b><br/>
-  No setup wizards, no config files, no cloud accounts. Just your characters, your stories, and your rules.<br/>
+  No setup wizards, no config files, no cloud accounts. Created with agentic use in mind, allowing multiple requests at once.<br/>
   Designed to be <b>the most fun, approachable, and feature-rich</b> local AI frontend out there.
 </p>
 
@@ -175,13 +175,12 @@ All agents are disabled by default — enable only the ones you want. You can al
 
 ## Installation
 
-### Windows Installer
-
+## Windows EASIEST METHOD
 Download **[Marinara-Engine-Installer-1.3.0.exe](https://github.com/SpicyMarinara/Marinara-Engine/releases/download/v1.3.0/Marinara-Engine-Installer-1.3.0.exe)** from the [Releases](https://github.com/SpicyMarinara/Marinara-Engine/releases) page and run it. The installer checks for Node.js and Git, clones the repo, installs dependencies, builds the app, and creates a desktop shortcut.
 
-You need **Node.js 20+** and **Git** installed first (the installer will tell you if they're missing).
-
 ---
+
+## Alternatives
 
 ### Run from Source (All Platforms)
 
