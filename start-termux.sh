@@ -14,8 +14,7 @@ echo ""
 cd "$(dirname "$0")"
 
 # ── Ensure required Termux packages ──
-# build-essential provides clang/make/pkg-config needed for better-sqlite3 native compilation
-for pkg_name in git python build-essential; do
+for pkg_name in git; do
     if ! dpkg -s "$pkg_name" &> /dev/null; then
         echo "  [..] Installing $pkg_name..."
         pkg install -y "$pkg_name" 2>/dev/null || true
@@ -83,20 +82,19 @@ if [ ! -d "node_modules" ]; then
     pnpm install
 fi
 
-# ── Ensure better-sqlite3 native binary is built ──
+# ── Ensure better-sqlite3 native binary ──
 # @libsql/client has no Android ARM64 binary, so we fall back to better-sqlite3.
-# pnpm install may skip native compilation if build tools were missing at the time.
+# We ship a prebuilt .node binary to avoid needing build tools on the phone.
+export DATABASE_DRIVER="better-sqlite3"
+
 BS3_PKG=$(find node_modules -path "*/better-sqlite3/package.json" -not -path "*/.cache/*" 2>/dev/null | head -1)
 if [ -n "$BS3_PKG" ]; then
     BS3_DIR=$(dirname "$BS3_PKG")
 else
-    # Package not installed — pnpm may have skipped the optional dep entirely.
     echo "  [..] Installing better-sqlite3 (required for Termux)..."
     pnpm --filter @marinara-engine/server add -O better-sqlite3@"^11.0.0" 2>&1 || true
     BS3_PKG=$(find node_modules -path "*/better-sqlite3/package.json" -not -path "*/.cache/*" 2>/dev/null | head -1)
-    if [ -n "$BS3_PKG" ]; then
-        BS3_DIR=$(dirname "$BS3_PKG")
-    fi
+    [ -n "$BS3_PKG" ] && BS3_DIR=$(dirname "$BS3_PKG")
 fi
 
 if [ -z "$BS3_DIR" ]; then
@@ -106,45 +104,55 @@ if [ -z "$BS3_DIR" ]; then
 fi
 
 if [ ! -f "$BS3_DIR/build/Release/better_sqlite3.node" ]; then
-    echo "  [..] Compiling better-sqlite3 native module..."
-    echo "       This takes 2-5 minutes on a phone. Please wait."
-    echo ""
+    mkdir -p "$BS3_DIR/build/Release"
 
-    # Ensure node-addon-api is available (better-sqlite3 binding.gyp needs it)
-    if [ ! -d "$BS3_DIR/node_modules/node-addon-api" ]; then
-        NAPI_DIR=$(find node_modules -path "*/node-addon-api/napi.h" 2>/dev/null | head -1)
-        if [ -n "$NAPI_DIR" ]; then
-            mkdir -p "$BS3_DIR/node_modules"
-            ln -sf "$(cd "$(dirname "$NAPI_DIR")" && pwd)" "$BS3_DIR/node_modules/node-addon-api"
+    # --- Try 1: Download prebuilt binary from GitHub releases ---
+    PREBUILT_URL="https://github.com/SpicyMarinara/Marinara-Engine/releases/latest/download/better_sqlite3-android-arm64.node"
+    echo "  [..] Downloading prebuilt better-sqlite3 for Android ARM64..."
+    if curl -fSL --connect-timeout 15 --max-time 120 \
+         -o "$BS3_DIR/build/Release/better_sqlite3.node" \
+         "$PREBUILT_URL" 2>/dev/null; then
+        echo "  [OK] Prebuilt binary downloaded"
+    else
+        rm -f "$BS3_DIR/build/Release/better_sqlite3.node"
+        echo "  [WARN] Prebuilt not available — compiling from source."
+        echo "         This takes 2-5 minutes. Please wait."
+
+        # --- Try 2: Compile from source (needs build tools) ---
+        for pkg_name in python build-essential; do
+            if ! dpkg -s "$pkg_name" &>/dev/null; then
+                echo "  [..] Installing $pkg_name..."
+                pkg install -y "$pkg_name" 2>/dev/null || true
+            fi
+        done
+
+        # Symlink node-addon-api so binding.gyp can resolve it from pnpm's virtual store
+        if [ ! -d "$BS3_DIR/node_modules/node-addon-api" ]; then
+            NAPI_DIR=$(find node_modules -path "*/node-addon-api/napi.h" 2>/dev/null | head -1)
+            if [ -n "$NAPI_DIR" ]; then
+                mkdir -p "$BS3_DIR/node_modules"
+                ln -sf "$(cd "$(dirname "$NAPI_DIR")" && pwd)" "$BS3_DIR/node_modules/node-addon-api"
+            fi
         fi
-    fi
 
-    # Install node-gyp globally — npx creates a temp env that breaks
-    # require('node-addon-api') resolution inside pnpm's virtual store.
-    if ! command -v node-gyp &>/dev/null; then
-        echo "  [..] Installing node-gyp..."
-        npm install -g node-gyp
-    fi
+        if ! command -v node-gyp &>/dev/null; then
+            npm install -g node-gyp
+        fi
 
-    # Run node-gyp from the package directory.
-    # Do NOT pass --nodedir (it can stall if the path has no usable headers;
-    # node-gyp will auto-download the correct headers for this Node version).
-    #
-    # On Termux, Node 22+ reports process.platform === "android" which triggers
-    # the Android NDK code path in binding.gyp (requires android_ndk_path).
-    # Termux has no NDK — it uses its own clang directly — so we force OS=linux
-    # to use the standard Linux build path instead.
-    export GYP_DEFINES="OS=linux"
-    (cd "$BS3_DIR" && node-gyp rebuild --release --loglevel=verbose) || {
-        echo ""
-        echo "  [ERR] Failed to compile better-sqlite3."
-        echo "        Make sure build tools are installed:"
-        echo "          pkg install build-essential python"
-        echo "        Then delete node_modules and try again:"
-        echo "          rm -rf node_modules && ./start-termux.sh"
-        exit 1
-    }
-    echo "  [OK] better-sqlite3 compiled successfully"
+        # Force Linux build path — Termux's Node 22+ reports platform=android
+        # which triggers the Android NDK code path in binding.gyp.
+        export GYP_DEFINES="OS=linux"
+        (cd "$BS3_DIR" && node-gyp rebuild --release --loglevel=verbose) || {
+            echo ""
+            echo "  [ERR] Failed to compile better-sqlite3."
+            echo "        Make sure build tools are installed:"
+            echo "          pkg install build-essential python"
+            echo "        Then delete node_modules and try again:"
+            echo "          rm -rf node_modules && ./start-termux.sh"
+            exit 1
+        }
+        echo "  [OK] better-sqlite3 compiled from source"
+    fi
 fi
 
 # ── Build if needed ──
