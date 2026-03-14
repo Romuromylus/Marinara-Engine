@@ -74,7 +74,6 @@ Everything runs locally. No accounts, no cloud, no telemetry. Connect to any Ope
 - **Chat Setup Wizard** — New guided setup flow when creating a chat, letting you pick characters, presets, and connections in one step.
 - **Gallery Persistence** — Gallery images are now saved to disk and persist across server restarts.
 - **Reorderable Chat Settings** — Chat settings panels can be reordered via drag-and-drop.
-- **Toggle Contrast Mode** — New high-contrast UI toggle for improved readability.
 
 **Changes:**
 - Cancel generation now aborts **all** in-flight work — pre-generation agents, the main LLM response, and post-generation agents are all stopped immediately via abort signal propagation.
@@ -82,37 +81,15 @@ Everything runs locally. No accounts, no cloud, no telemetry. Connect to any Ope
 - Termux `.npmrc` platform fix now detects CPU architecture dynamically instead of hardcoding ARM64.
 
 **Fixes:**
-- Fixed Lorebook Keeper agent not persisting entries — the agent ran and reported results but never wrote them to the database. Entries are now saved to the first enabled lorebook (or an auto-created one).
+- Fixed Lorebook Keeper agent not persisting entries — the agent ran and reported results, but never wrote them to the database. Entries are now saved to the first enabled lorebook (or an auto-created one).
 - Fixed conversation input box being wider than roleplay mode (padding now unconditional).
 - Fixed Termux startup failing due to ABI mismatch in better-sqlite3 prebuilt binaries.
 - Fixed Character Maker button not working correctly.
-- Fixed connection name truncation in settings panel.
+- Fixed connection name truncation in the settings panel.
 - Fixed agents panel text alignment issues.
-- Fixed per-chat function picker not displaying correctly.
+- Fixed the per-chat function picker not displaying correctly.
 - Fixed agent toggle removal not persisting.
 - Fixed tab/browser refresh causing stale UI state.
-
-### v1.3.2
-
-**Added:**
-- **Knowledge Retrieval Agent** — A new pre-generation RAG agent that scans lorebook entries and uploaded files for relevant context. It uses chunked multi-pass extraction to handle large knowledge bases within a configurable token budget, injecting findings directly into the prompt.
-- **File Upload Knowledge Sources** — Upload documents (.txt, .md, .csv, .json, .xml, .html, .pdf) as knowledge sources for the Knowledge Retrieval agent. Files are stored locally and managed through the Agent Editor UI.
-- **Docker Support** — Added a multi-stage Dockerfile and .dockerignore for containerized deployment. Supports GHCR hosting with a single `docker run` command.
-
-**Changes:**
-- Knowledge Retrieval agent output is now injected with its own `<knowledge_retrieval>` XML tag instead of being merged into `<prose_guardian>`, giving models clearer context boundaries.
-- Agent table updated to 19 built-in agents (Knowledge Retrieval added).
-
-**Fixes:**
-- Fixed Knowledge Retrieval agent output never reaching the prompt on first generation (injection block ran before the agent executed).
-- Fixed race condition in knowledge-sources route where directory creation was fire-and-forget (async import not awaited).
-- Fixed knowledge-sources meta file reader using `require("fs")` in an ESM context — replaced with proper synchronous `readFileSync`.
-- Added path traversal guard to `extractFileText()` ensuring only files within the knowledge-sources directory are accessible.
-- Fixed home page content getting cut off on small viewports (replaced `justify-center` with `overflow-y-auto` + `my-auto` pattern).
-- Fixed send button not appearing after a failed generation (retry state).
-- Fixed tab/browser refresh causing a brief UI flicker.
-- Fixed mobile floating action buttons being hidden behind side panels (z-index).
-- Fixed send button design inconsistency on mobile.
 
 ---
 
@@ -155,9 +132,9 @@ Agents are autonomous AI assistants that run alongside your chat, each handling 
 | **Lorebook Keeper** | Automatically creates and updates lorebook entries |
 | **Immersive HTML** | Formats roleplay output with styled HTML |
 | **Consistency Editor** | Edits responses for internal consistency |
-| **Spotify DJ** | Controls Spotify playback to match the scene mood |
+| **Spotify DJ** | Controls Spotify playback to match the scene's mood |
 | **Chat Summarizer** | Generates condensed summaries of long conversations |
-| **Knowledge Retrieval** | Scans lorebooks and uploaded files for relevant context using chunked RAG |
+| **Knowledge Retrieval** | Scans lorebooks and uploads files for relevant context using chunked RAG |
 
 All agents are disabled by default — enable only the ones you want. You can also create **custom agents** with your own prompts and tool configurations.
 
@@ -280,11 +257,11 @@ Then open **http://localhost:7860**. That's it — no account, no cloud, everyth
 3. Reinstalls dependencies and rebuilds automatically
 4. Runs database migrations
 
-**You don't need to do anything** — just launch the app as usual and you'll always be on the latest version.
+**You don't need to do anything** — just launch the app as usual, and you'll always be on the latest version.
 
 This works for all platforms: Windows (installer or manual), macOS, Linux, and Termux.
 
-To update manually (e.g. if you don't use the start scripts):
+To update manually (e.g., if you don't use the start scripts):
 ```bash
 git pull
 pnpm install
@@ -323,7 +300,7 @@ Copy `.env.example` to `.env` to customize:
 | `ENCRYPTION_KEY` | *(empty)* | AES key for API key encryption (generate with `openssl rand -hex 32`) |
 | `LOG_LEVEL` | `info` | Logging verbosity |
 | `CORS_ORIGINS` | `http://localhost:5173` | Allowed CORS origins |
-| `SSL_CERT` | *(empty)* | Path to TLS certificate (e.g. `fullchain.pem`). Set both `SSL_CERT` and `SSL_KEY` to enable HTTPS |
+| `SSL_CERT` | *(empty)* | Path to TLS certificate (e.g., `fullchain.pem`). Set both `SSL_CERT` and `SSL_KEY` to enable HTTPS |
 | `SSL_KEY` | *(empty)* | Path to TLS private key (e.g. `privkey.pem`) |
 
 ---
