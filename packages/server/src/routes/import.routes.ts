@@ -3,7 +3,9 @@
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
 import { execFile } from "child_process";
-import { platform } from "os";
+import { platform, homedir } from "os";
+import { readdir, stat } from "fs/promises";
+import { resolve as pathResolve } from "path";
 import { importSTChat } from "../services/import/st-chat.importer.js";
 import { importSTCharacter } from "../services/import/st-character.importer.js";
 import { importSTPreset } from "../services/import/st-prompt.importer.js";
@@ -297,5 +299,27 @@ export async function importRoutes(app: FastifyInstance) {
     const selected = await pickFolder();
     if (!selected) return { success: false, error: "No folder selected" };
     return { success: true, path: selected };
+  });
+
+  /** List directories at a given path (for remote/headless folder browsing). */
+  app.post<{ Body: { path?: string } }>("/list-directory", async (req) => {
+    const requestedPath = (req.body?.path || "").trim();
+    const dirPath = requestedPath || homedir();
+    const resolved = pathResolve(dirPath);
+
+    try {
+      const info = await stat(resolved);
+      if (!info.isDirectory()) return { success: false, error: "Not a directory" };
+
+      const entries = await readdir(resolved, { withFileTypes: true });
+      const folders = entries
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+
+      return { success: true, path: resolved, folders };
+    } catch {
+      return { success: false, error: "Cannot read directory" };
+    }
   });
 }
