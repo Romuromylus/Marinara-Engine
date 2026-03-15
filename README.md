@@ -103,36 +103,6 @@ Everything runs locally. No accounts, no cloud, no telemetry. Connect to any Ope
 
 ---
 
-### v1.3.3
-
-**Added:**
-
-- **Unified Chat UI** — Conversation and Roleplay modes now share the same visual layout. Background layers, toolbar, HUD sidebars, sprites, and weather effects are available in both modes.
-- **Per-Chat Agents** — Toggle individual agents on or off per chat, overriding global agent settings.
-- **Chat Setup Wizard** — New guided setup flow when creating a chat, letting you pick characters, presets, and connections in one step.
-- **Gallery Persistence** — Gallery images are now saved to disk and persist across server restarts.
-- **Reorderable Chat Settings** — Chat settings panels can be reordered via drag-and-drop.
-
-**Changes:**
-
-- Cancel generation now aborts **all** in-flight work — pre-generation agents, the main LLM response, and post-generation agents are all stopped immediately via abort signal propagation.
-- Streaming auto-scroll no longer locks you to the bottom — scroll up during generation to read at your own pace; auto-scroll re-engages when you return to the bottom.
-- Termux `.npmrc` platform fix now detects CPU architecture dynamically instead of hardcoding ARM64.
-
-**Fixes:**
-
-- Fixed Lorebook Keeper agent not persisting entries — the agent ran and reported results, but never wrote them to the database. Entries are now saved to the first enabled lorebook (or an auto-created one).
-- Fixed conversation input box being wider than roleplay mode (padding now unconditional).
-- Fixed Termux startup failing due to ABI mismatch in better-sqlite3 prebuilt binaries.
-- Fixed Character Maker button not working correctly.
-- Fixed connection name truncation in the settings panel.
-- Fixed agents panel text alignment issues.
-- Fixed the per-chat function picker not displaying correctly.
-- Fixed agent toggle removal not persisting.
-- Fixed tab/browser refresh causing stale UI state.
-
----
-
 ## Features
 
 ### Chat & Roleplay
