@@ -217,7 +217,7 @@ export function createLorebooksStorage(db: DB) {
         caseSensitive: String(input.caseSensitive ?? false),
         useRegex: String(input.useRegex ?? false),
         position: input.position ?? 0,
-        depth: input.depth ?? 4,
+        depth: input.depth ?? 0,
         order: input.order ?? 100,
         role: input.role ?? "system",
         sticky: input.sticky ?? null,

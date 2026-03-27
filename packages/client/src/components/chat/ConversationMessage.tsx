@@ -295,7 +295,10 @@ export const ConversationMessage = memo(function ConversationMessage({
     return null;
   }, [isUser, message.content, charByName]);
 
-  const extra = typeof message.extra === "string" ? JSON.parse(message.extra) : (message.extra ?? {});
+  const extra = useMemo(() => {
+    if (!message.extra) return {};
+    return typeof message.extra === "string" ? JSON.parse(message.extra) : message.extra;
+  }, [message.extra]);
   const thinking = extra?.thinking;
 
   // Actions
@@ -308,15 +311,26 @@ export const ConversationMessage = memo(function ConversationMessage({
   const startEditing = useCallback(() => {
     setEditing(true);
     setEditValue(message.content);
-    requestAnimationFrame(() => editRef.current?.focus());
+    requestAnimationFrame(() => {
+      const el = editRef.current;
+      if (el) {
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
+        el.focus();
+      }
+    });
   }, [message.content]);
 
+  const editValueRef = useRef(editValue);
+  editValueRef.current = editValue;
+
   const handleSaveEdit = useCallback(() => {
-    if (editValue.trim() !== message.content) {
-      onEdit?.(message.id, editValue.trim());
+    const val = editValueRef.current.trim();
+    if (val !== message.content) {
+      onEdit?.(message.id, val);
     }
     setEditing(false);
-  }, [editValue, message.content, message.id, onEdit]);
+  }, [message.content, message.id, onEdit]);
 
   // System messages — minimal display
   if (isSystem) {
@@ -524,9 +538,15 @@ export const ConversationMessage = memo(function ConversationMessage({
             <textarea
               ref={editRef}
               value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
+              onChange={(e) => {
+                setEditValue(e.target.value);
+                const el = e.target;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
+              }}
               className="w-full resize-none rounded-lg border border-white/25 bg-[var(--secondary)] p-2.5 text-[0.9375rem] leading-relaxed outline-none"
-              rows={Math.min(editValue.split("\n").length + 1, 12)}
+              rows={1}
+              style={{ overflow: "auto" }}
               onKeyDown={(e) => {
                 if (e.key === "Backspace" && editValue === "") {
                   e.preventDefault();
@@ -540,11 +560,11 @@ export const ConversationMessage = memo(function ConversationMessage({
             />
             <div className="flex items-center gap-2 text-[0.6875rem] text-[var(--muted-foreground)]">
               backspace (empty) to{" "}
-              <button onClick={() => setEditing(false)} className="text-white/70 hover:underline hover:text-white">
+              <button onClick={() => setEditing(false)} className="text-foreground/70 hover:underline hover:text-foreground">
                 cancel
               </button>{" "}
               · enter to{" "}
-              <button onClick={handleSaveEdit} className="text-white/70 hover:underline hover:text-white">
+              <button onClick={handleSaveEdit} className="text-foreground/70 hover:underline hover:text-foreground">
                 save
               </button>
             </div>
@@ -697,7 +717,7 @@ function MsgAction({
         onClick();
       }}
       title={title}
-      className={cn("rounded p-1 text-white/70 transition-colors hover:bg-white/20 hover:text-white", className)}
+      className={cn("rounded p-1 text-foreground/70 transition-colors hover:bg-foreground/20 hover:text-foreground", className)}
     >
       {icon}
     </button>

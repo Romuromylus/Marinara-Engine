@@ -31,12 +31,12 @@ export function buildWorldInfoBlocks(activatedEntries: ActivatedEntry[]): {
   const sorted = [...activatedEntries].sort((a, b) => a.entry.order - b.entry.order);
 
   for (const { entry } of sorted) {
-    // Only entries using ordered position (not depth-injected)
-    if (entry.depth === 0 || entry.position <= 0) {
+    if (entry.position <= 0) {
       beforeParts.push(entry.content);
     } else if (entry.position === 1) {
       afterParts.push(entry.content);
     }
+    // position >= 2 entries are handled by getDepthInjectedEntries
   }
 
   return {
@@ -47,7 +47,8 @@ export function buildWorldInfoBlocks(activatedEntries: ActivatedEntry[]): {
 
 /**
  * Get entries that should be injected at specific depths in the message array.
- * These entries have depth > 0 and get inserted counting from the bottom.
+ * Only entries with position >= 2 (depth injection mode) are included.
+ * Position 0/1 entries always go to worldInfoBefore/After via buildWorldInfoBlocks.
  */
 export function getDepthInjectedEntries(activatedEntries: ActivatedEntry[]): Array<{
   content: string;
@@ -56,7 +57,7 @@ export function getDepthInjectedEntries(activatedEntries: ActivatedEntry[]): Arr
   order: number;
 }> {
   return activatedEntries
-    .filter((a) => a.entry.depth > 0)
+    .filter((a) => a.entry.position >= 2 && a.entry.depth > 0)
     .map((a) => ({
       content: a.entry.content,
       role: a.entry.role,

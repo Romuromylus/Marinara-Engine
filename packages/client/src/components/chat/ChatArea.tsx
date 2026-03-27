@@ -1074,7 +1074,7 @@ export function ChatArea() {
                     <button
                       onClick={handleLoadMore}
                       disabled={isFetchingNextPage}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-xs font-medium text-white/70 backdrop-blur-sm transition-all hover:bg-white/10 hover:text-white/90 disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-foreground/10 bg-black/40 px-3 py-1.5 text-xs font-medium text-foreground/70 backdrop-blur-sm transition-all hover:bg-foreground/10 hover:text-foreground/90 disabled:opacity-50"
                     >
                       {isFetchingNextPage ? (
                         <Loader2 size="0.75rem" className="animate-spin" />
@@ -1178,7 +1178,7 @@ export function ChatArea() {
                   <div className="flex justify-center py-1">
                     <button
                       onClick={() => startEncounter()}
-                      className="flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs text-white/50 transition-all hover:bg-white/10 hover:text-orange-300"
+                      className="flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs text-foreground/50 transition-all hover:bg-foreground/10 hover:text-orange-300"
                       title="Start Combat Encounter"
                     >
                       <Swords size="0.875rem" />
@@ -1264,7 +1264,7 @@ function RpToolbarButton({
     <button
       onClick={onClick}
       className={cn(
-        "flex items-center justify-center rounded-full bg-white/5 border border-white/10 text-white/60 backdrop-blur-md transition-all hover:bg-white/10 hover:text-white",
+        "flex items-center justify-center rounded-full bg-foreground/5 border border-foreground/10 text-foreground/60 backdrop-blur-md transition-all hover:bg-foreground/10 hover:text-foreground",
         size === "sm" ? "p-1" : "p-1.5",
       )}
       title={title}
@@ -1370,8 +1370,8 @@ function ToolbarMenu({ children }: { children: React.ReactNode }) {
           onClick={() => setOpen(!open)}
           className={cn(
             "flex w-9 items-center justify-center rounded-xl border backdrop-blur-md transition-all p-1.5",
-            "bg-black/40 border-white/10 text-white/60 hover:bg-black/60 hover:text-white",
-            open && "bg-black/60 border-white/20 text-white",
+            "bg-black/40 border-foreground/10 text-foreground/60 hover:bg-black/60 hover:text-foreground",
+            open && "bg-black/60 border-foreground/20 text-foreground",
           )}
           title="More options"
         >
@@ -1381,7 +1381,7 @@ function ToolbarMenu({ children }: { children: React.ReactNode }) {
           createPortal(
             <div
               ref={popRef}
-              className="fixed z-[9999] flex w-9 flex-col items-center gap-0.5 rounded-xl border border-white/10 bg-black/80 p-1 shadow-xl backdrop-blur-xl animate-message-in"
+              className="fixed z-[9999] flex w-9 flex-col items-center gap-0.5 rounded-xl border border-foreground/10 bg-black/80 p-1 shadow-xl backdrop-blur-xl animate-message-in"
               style={{ top: pos.top, right: pos.right }}
               onClick={() => setOpen(false)}
             >
@@ -1404,10 +1404,10 @@ function SummaryButton({ chatId, summary }: { chatId: string | null; summary: st
         className={cn(
           "flex items-center justify-center rounded-full border p-1.5 backdrop-blur-md transition-all",
           open
-            ? "bg-white/15 border-white/20 text-white/90"
+            ? "bg-foreground/15 border-foreground/20 text-foreground/90"
             : summary
-              ? "bg-white/10 border-white/25 text-white/80 hover:bg-white/15 hover:text-white"
-              : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white",
+              ? "bg-foreground/10 border-foreground/25 text-foreground/80 hover:bg-foreground/15 hover:text-foreground"
+              : "bg-foreground/5 border-foreground/10 text-foreground/60 hover:bg-foreground/10 hover:text-foreground",
         )}
         title="Chat Summary"
       >
@@ -1449,28 +1449,28 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
 
   const panelContent = (
     <>
-      <h3 className="mb-2 text-xs font-semibold text-white/90 flex items-center gap-1.5">
+      <h3 className="mb-2 text-xs font-semibold text-foreground/90 flex items-center gap-1.5">
         <Globe size="0.75rem" />
         Active World Info
         {isMobile && (
           <button
             onClick={() => setOpen(false)}
-            className="ml-auto rounded-md p-1 text-white/40 hover:bg-white/10 hover:text-white/70"
+            className="ml-auto rounded-md p-1 text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70"
           >
             <X size="0.75rem" />
           </button>
         )}
       </h3>
       {isLoading ? (
-        <div className="flex items-center gap-2 py-4 text-xs text-white/40">
+        <div className="flex items-center gap-2 py-4 text-xs text-foreground/40">
           <Loader2 size="0.75rem" className="animate-spin" />
           Scanning entries…
         </div>
       ) : entries.length === 0 ? (
-        <p className="py-3 text-center text-xs text-white/40">No active entries for this chat</p>
+        <p className="py-3 text-center text-xs text-foreground/40">No active entries for this chat</p>
       ) : (
         <>
-          <p className="mb-2 text-[0.625rem] text-white/40">
+          <p className="mb-2 text-[0.625rem] text-foreground/40">
             {entries.length} active • ~{(data?.totalTokens ?? 0).toLocaleString()} tokens
           </p>
           <div className="space-y-1.5">
@@ -1490,10 +1490,10 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
         className={cn(
           "flex items-center justify-center rounded-full border p-1.5 backdrop-blur-md transition-all",
           open
-            ? "bg-white/15 border-white/20 text-white/90"
+            ? "bg-foreground/15 border-foreground/20 text-foreground/90"
             : hasEntries && !isLoading
-              ? "bg-white/10 border-white/25 text-white/80 hover:bg-white/15 hover:text-white"
-              : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white",
+              ? "bg-foreground/10 border-foreground/25 text-foreground/80 hover:bg-foreground/15 hover:text-foreground"
+              : "bg-foreground/5 border-foreground/10 text-foreground/60 hover:bg-foreground/10 hover:text-foreground",
         )}
         title="Active World Info"
       >
@@ -1504,14 +1504,14 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
           createPortal(
             <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 max-md:pt-[max(1rem,env(safe-area-inset-top))]">
               <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
-              <div className="relative w-full max-w-sm max-h-[calc(100dvh-4rem)] overflow-y-auto rounded-xl border border-white/10 bg-black/90 p-3 shadow-2xl backdrop-blur-xl animate-message-in">
+              <div className="relative w-full max-w-sm max-h-[calc(100dvh-4rem)] overflow-y-auto rounded-xl border border-foreground/10 bg-black/90 p-3 shadow-2xl backdrop-blur-xl animate-message-in">
                 {panelContent}
               </div>
             </div>,
             document.body,
           )
         ) : (
-          <div className="absolute right-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] max-h-[60vh] overflow-y-auto rounded-xl border border-white/10 bg-black/90 p-3 shadow-2xl backdrop-blur-xl animate-message-in">
+          <div className="absolute right-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] max-h-[60vh] overflow-y-auto rounded-xl border border-foreground/10 bg-black/90 p-3 shadow-2xl backdrop-blur-xl animate-message-in">
             {panelContent}
           </div>
         ))}
@@ -1527,27 +1527,27 @@ function WorldInfoEntryRow({
   const [expanded, setExpanded] = useState(false);
   return (
     <div
-      className="rounded-lg bg-white/5 p-2 text-xs cursor-pointer transition-colors hover:bg-white/10"
+      className="rounded-lg bg-foreground/5 p-2 text-xs cursor-pointer transition-colors hover:bg-foreground/10"
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-center gap-2">
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
-        <span className="font-medium text-white/80 truncate">{entry.name}</span>
+        <span className="font-medium text-foreground/80 truncate">{entry.name}</span>
         {entry.constant && (
           <span className="rounded bg-amber-400/15 px-1 py-0.5 text-[0.5rem] font-medium text-amber-400 shrink-0">
             CONST
           </span>
         )}
-        <span className="ml-auto text-[0.625rem] text-white/30 shrink-0">#{entry.order}</span>
+        <span className="ml-auto text-[0.625rem] text-foreground/30 shrink-0">#{entry.order}</span>
       </div>
       {entry.keys.length > 0 && (
-        <p className="mt-0.5 truncate text-[0.625rem] text-white/30">
+        <p className="mt-0.5 truncate text-[0.625rem] text-foreground/30">
           Keys: {entry.keys.slice(0, 5).join(", ")}
           {entry.keys.length > 5 && ` +${entry.keys.length - 5}`}
         </p>
       )}
       {expanded && (
-        <p className="mt-1.5 whitespace-pre-wrap text-[0.6875rem] text-white/50 leading-relaxed border-t border-white/5 pt-1.5 max-h-40 overflow-y-auto">
+        <p className="mt-1.5 whitespace-pre-wrap text-[0.6875rem] text-foreground/50 leading-relaxed border-t border-foreground/5 pt-1.5 max-h-40 overflow-y-auto">
           {entry.content || "(empty)"}
         </p>
       )}

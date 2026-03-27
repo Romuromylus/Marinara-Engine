@@ -613,12 +613,12 @@ function buildLoreBlock(context: AgentContext): string {
     if (context.persona.rpgStats?.enabled) {
       const rpg = context.persona.rpgStats;
       parts.push(`RPG Stats:`);
-      parts.push(`- HP: ${rpg.hp.value}/${rpg.hp.max}`);
-      parts.push(`- MP: ${rpg.mp.value}/${rpg.mp.max}`);
+      parts.push(`- Max HP: ${rpg.hp.max}`);
+      parts.push(`- Max MP: ${rpg.mp.max}`);
       if (rpg.attributes.length > 0) {
         parts.push(`Attributes:`);
         for (const attr of rpg.attributes) {
-          parts.push(`- ${attr.name}: ${attr.value}/${attr.max}`);
+          parts.push(`- ${attr.name}: ${attr.max}`);
         }
       }
     }

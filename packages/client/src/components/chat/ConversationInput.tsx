@@ -362,7 +362,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
               }}
               className={cn(
                 "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors",
-                i === selectedCompletion ? "bg-white/10 text-white" : "hover:bg-[var(--accent)]",
+                i === selectedCompletion ? "bg-foreground/10 text-foreground" : "hover:bg-[var(--accent)]",
               )}
             >
               <span className="font-mono text-xs">/{cmd.name}</span>
@@ -377,7 +377,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
       {/* Feedback toast */}
       {feedback && (
         <div className="absolute bottom-full left-3 right-3 mb-2 flex justify-center">
-          <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-medium text-white shadow-md">
+          <span className="rounded-full bg-foreground/15 px-3 py-1 text-xs font-medium text-foreground shadow-md">
             {feedback}
           </span>
         </div>
@@ -406,7 +406,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
       {/* Input bar */}
       <div
         ref={inputBarRef}
-        className="relative flex items-center gap-1.5 rounded-2xl border-2 px-2.5 py-2.5 transition-all duration-200 sm:gap-2 sm:px-4 bg-black/40 border-white/25"
+        className="relative flex items-center gap-1.5 rounded-2xl border-2 px-2.5 py-2.5 transition-all duration-200 sm:gap-2 sm:px-4 bg-black/40 border-foreground/25"
       >
         {/* Attach button */}
         <input
@@ -418,7 +418,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="rounded-lg p-1.5 text-white/40 transition-all hover:bg-white/10 hover:text-white/70 active:scale-90"
+          className="rounded-lg p-1.5 text-foreground/40 transition-all hover:bg-foreground/10 hover:text-foreground/70 active:scale-90"
           title="Attach file"
         >
           <Plus size="1rem" />
@@ -431,7 +431,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
           rows={1}
           onInput={handleInput}
           onKeyDown={handleKeyDown}
-          className="max-h-[12.5rem] min-w-0 flex-1 resize-none bg-transparent py-0 text-[1rem] leading-normal text-white/90 outline-none placeholder:text-white/30"
+          className="max-h-[12.5rem] min-w-0 flex-1 resize-none bg-transparent py-0 text-[1rem] leading-normal text-[#c3c2c2] outline-none placeholder:text-foreground/30"
         />
 
         {/* Right actions */}
@@ -445,7 +445,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
               }}
               className={cn(
                 "flex h-8 w-8 items-center justify-center rounded-full transition-colors",
-                gifOpen ? "text-white bg-white/10" : "text-white/70 hover:bg-white/10 hover:text-white",
+                gifOpen ? "text-foreground bg-foreground/10" : "text-foreground/70 hover:bg-foreground/10 hover:text-foreground",
               )}
               title="GIF"
             >
@@ -469,7 +469,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
               }}
               className={cn(
                 "flex h-8 w-8 items-center justify-center rounded-full transition-colors",
-                emojiOpen ? "text-white bg-white/10" : "text-white/70 hover:bg-white/10 hover:text-white",
+                emojiOpen ? "text-foreground bg-foreground/10" : "text-foreground/70 hover:bg-foreground/10 hover:text-foreground",
               )}
               title="Emoji"
             >
@@ -489,10 +489,10 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
             className={cn(
               "flex h-8 w-8 items-center justify-center rounded-xl transition-all duration-200",
               isActuallyGenerating
-                ? "text-white hover:opacity-80"
+                ? "text-foreground hover:opacity-80"
                 : hasInput || attachments.length > 0
-                  ? "text-white hover:text-white/80 active:scale-90"
-                  : "text-white/20",
+                  ? "text-foreground hover:text-foreground/80 active:scale-90"
+                  : "text-foreground/20",
             )}
             title={isActuallyGenerating ? "Stop generating" : "Send"}
           >

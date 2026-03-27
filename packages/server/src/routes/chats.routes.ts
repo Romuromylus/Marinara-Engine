@@ -2,9 +2,11 @@
 // Routes: Chats
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
-import { createChatSchema, createMessageSchema, getDefaultAgentPrompt } from "@marinara-engine/shared";
+import { createChatSchema, createMessageSchema, getDefaultAgentPrompt, nameToXmlTag } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
+import { createRegexScriptsStorage } from "../services/storage/regex-scripts.storage.js";
+import { wrapContent } from "../services/prompt/format-engine.js";
 import { newId } from "../utils/id-generator.js";
 import { characters } from "../db/schema/index.js";
 import { eq } from "drizzle-orm";
@@ -317,6 +319,41 @@ export async function chatsRoutes(app: FastifyInstance) {
             mappedMessages.pop();
           }
 
+          // ── Apply prompt-only regex scripts (mirrors generate.routes.ts) ──
+          const regexStore = createRegexScriptsStorage(app.db);
+          const allRegexScripts = await regexStore.list();
+          const promptOnlyScripts = allRegexScripts.filter(
+            (s: any) => s.enabled === "true" && s.promptOnly === "true",
+          );
+          if (promptOnlyScripts.length > 0) {
+            const totalMessages = mappedMessages.length;
+            for (let msgIdx = 0; msgIdx < totalMessages; msgIdx++) {
+              const msg = mappedMessages[msgIdx]!;
+              const messageDepth = totalMessages - 1 - msgIdx;
+              const placement = msg.role === "user" ? "user_input" : "ai_output";
+              let text = msg.content;
+              for (const script of promptOnlyScripts) {
+                const placements: string[] = (() => {
+                  try { return JSON.parse(script.placement as string); } catch { return []; }
+                })();
+                if (!placements.includes(placement)) continue;
+                const sMinDepth = script.minDepth as number | null;
+                const sMaxDepth = script.maxDepth as number | null;
+                if (sMinDepth != null && messageDepth < sMinDepth) continue;
+                if (sMaxDepth != null && messageDepth > sMaxDepth) continue;
+                try {
+                  const re = new RegExp(script.findRegex as string, script.flags as string);
+                  text = text.replace(re, script.replaceString as string);
+                  const trims: string[] = (() => {
+                    try { return JSON.parse(script.trimStrings as string); } catch { return []; }
+                  })();
+                  for (const t of trims) { if (t) text = text.split(t).join(""); }
+                } catch { /* invalid regex — skip */ }
+              }
+              msg.content = text;
+            }
+          }
+
           const [sections, groups, choiceBlocks] = await Promise.all([
             presetStore.listSections(presetId),
             presetStore.listGroups(presetId),
@@ -367,6 +404,16 @@ export async function chatsRoutes(app: FastifyInstance) {
             };
           }
 
+          const personaStats = (() => {
+            if (!persona?.personaStats) return undefined;
+            if (typeof persona.personaStats !== "string") return persona.personaStats;
+            try {
+              return JSON.parse(persona.personaStats as string);
+            } catch {
+              return undefined;
+            }
+          })();
+
           const chatChoices = (chatMeta.presetChoices ?? {}) as Record<string, string | string[]>;
           const assembled = await assemblePrompt({
             db: app.db,
@@ -380,6 +427,7 @@ export async function chatsRoutes(app: FastifyInstance) {
             personaName,
             personaDescription,
             personaFields,
+            personaStats,
             chatMessages: mappedMessages,
             chatSummary: (chatMeta.summary as string) ?? null,
             enableAgents: chatMeta.enableAgents === true,
@@ -500,6 +548,71 @@ export async function chatsRoutes(app: FastifyInstance) {
                     "\n\n" +
                     (wrapFmt === "xml" ? `<immersive_html>\n${htmlPrompt}\n</immersive_html>` : htmlBlock),
                 };
+              }
+            }
+          }
+
+          // ── Fallback: inject character & persona info if the preset didn't include them ──
+          const wrapFormat = ((preset as any).wrapFormat as "xml" | "markdown" | "none") || "xml";
+          const allContent = assembled.messages.map((m) => m.content).join("\n");
+
+          // Character info fallback
+          for (const cid of characterIds) {
+            const charRow = await charStore.getById(cid);
+            if (!charRow) continue;
+            const charData = JSON.parse(charRow.data as string);
+            const charName = charData.name ?? "Unknown";
+            const charDesc = charData.description ?? "";
+            const xmlTag = nameToXmlTag(charName);
+            const hasCharInfo =
+              (charDesc && allContent.includes(charDesc.split("\n")[0]!.trim().slice(0, 80))) ||
+              allContent.includes(`<${xmlTag}>`) ||
+              allContent.includes(`<${charName}>`) ||
+              new RegExp(`^#{1,6} ${charName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m").test(allContent);
+            if (!hasCharInfo && charDesc) {
+              const parts: string[] = [];
+              if (charDesc) parts.push(wrapContent(charDesc, "description", wrapFormat, 2));
+              if (charData.personality) parts.push(wrapContent(charData.personality, "personality", wrapFormat, 2));
+              if (charData.scenario) parts.push(wrapContent(charData.scenario, "scenario", wrapFormat, 2));
+              if (charData.system_prompt) parts.push(wrapContent(charData.system_prompt, "system_prompt", wrapFormat, 2));
+              if (parts.length > 0) {
+                const block = wrapContent(parts.join("\n"), charName, wrapFormat, 1);
+                const firstSysIdx = assembled.messages.findIndex((m) => m.role === "system");
+                const insertAt = firstSysIdx >= 0 ? firstSysIdx + 1 : 0;
+                assembled.messages.splice(insertAt, 0, { role: "system", content: block });
+              }
+            }
+          }
+
+          // Persona info fallback
+          if (personaDescription) {
+            const personaXmlTag = nameToXmlTag(personaName);
+            const hasPersonaInfo =
+              allContent.includes(personaDescription.split("\n")[0]!.trim().slice(0, 80)) ||
+              allContent.includes(`<${personaXmlTag}>`) ||
+              allContent.includes(`<${personaName}>`) ||
+              new RegExp(`^#{1,6} ${personaName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m").test(allContent);
+            if (!hasPersonaInfo) {
+              const fieldParts: string[] = [];
+              if (personaDescription) fieldParts.push(wrapContent(personaDescription, "description", wrapFormat, 2));
+              if (personaFields.personality) fieldParts.push(wrapContent(personaFields.personality, "personality", wrapFormat, 2));
+              if (personaFields.backstory) fieldParts.push(wrapContent(personaFields.backstory, "backstory", wrapFormat, 2));
+              if (personaFields.appearance) fieldParts.push(wrapContent(personaFields.appearance, "appearance", wrapFormat, 2));
+              if (personaFields.scenario) fieldParts.push(wrapContent(personaFields.scenario, "scenario", wrapFormat, 2));
+              // Include enabled RPG attributes (max values only — current state tracked by agents)
+              if (personaStats?.rpgStats?.enabled) {
+                const rpg = personaStats.rpgStats as { attributes: Array<{ name: string; value: number; max: number }>; hp: { value: number; max: number }; mp: { value: number; max: number } };
+                const rpgLines = [`Max HP: ${rpg.hp.max}`, `Max MP: ${rpg.mp.max}`];
+                for (const attr of rpg.attributes) {
+                  rpgLines.push(`${attr.name}: ${attr.max}`);
+                }
+                fieldParts.push(wrapContent(rpgLines.join("\n"), "rpg_attributes", wrapFormat, 2));
+              }
+              if (fieldParts.length > 0) {
+                const block = wrapContent(fieldParts.join("\n"), personaName, wrapFormat, 1);
+                const firstUserIdx = assembled.messages.findIndex((m) => m.role === "user" || m.role === "assistant");
+                const insertAt = firstUserIdx >= 0 ? firstUserIdx : assembled.messages.length;
+                assembled.messages.splice(insertAt, 0, { role: "system", content: block });
               }
             }
           }

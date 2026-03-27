@@ -342,7 +342,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
               }}
               className={cn(
                 "flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors",
-                i === selectedCompletion ? "bg-white/10 text-white" : "text-white/70 hover:bg-white/5",
+                i === selectedCompletion ? "bg-foreground/10 text-foreground" : "text-foreground/70 hover:bg-foreground/5",
               )}
             >
               <span className="font-mono font-semibold text-blue-400">/{cmd.name}</span>
@@ -372,7 +372,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
           {attachments.map((att, i) => (
             <div
               key={i}
-              className="group relative flex items-center gap-1.5 rounded-lg bg-white/10 px-2 py-1 text-xs text-white/70"
+              className="group relative flex items-center gap-1.5 rounded-lg bg-foreground/10 px-2 py-1 text-xs text-foreground/70"
             >
               {att.type.startsWith("image/") ? (
                 <img src={att.data} alt={att.name} className="h-8 w-8 rounded object-cover" />
@@ -394,7 +394,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
         className={cn(
           "mari-chat-input-box relative flex items-center gap-2 rounded-2xl border-2 px-4 py-2.5 transition-all duration-200",
           "bg-black/40",
-          hasInput || attachments.length ? "border-blue-400/30 shadow-md shadow-blue-500/5" : "border-white/25",
+          hasInput || attachments.length ? "border-blue-400/30 shadow-md shadow-blue-500/5" : "border-foreground/25",
         )}
       >
         {/* Attachment button */}
@@ -412,8 +412,8 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
           className={cn(
             "rounded-lg p-1.5 transition-all active:scale-90",
             attachments.length
-              ? "text-blue-400 hover:bg-white/10"
-              : "text-white/40 hover:bg-white/10 hover:text-white/70",
+              ? "text-blue-400 hover:bg-foreground/10"
+              : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
           )}
           title="Attach files"
         >
@@ -430,7 +430,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
           rows={1}
           spellCheck
           autoCorrect="on"
-          className="mari-chat-input-textarea max-h-[12.5rem] flex-1 resize-none bg-transparent py-0 text-sm leading-normal text-white/90 placeholder:text-white/30 outline-none disabled:cursor-not-allowed disabled:opacity-40"
+          className="mari-chat-input-textarea max-h-[12.5rem] flex-1 resize-none bg-transparent py-0 text-sm leading-normal text-[#c3c2c2] placeholder:text-foreground/30 outline-none disabled:cursor-not-allowed disabled:opacity-40"
         />
 
         {/* Send / Stop button */}
@@ -440,10 +440,10 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
           className={cn(
             "mari-chat-send-btn flex h-8 w-8 items-center justify-center rounded-xl transition-all duration-200",
             isStreaming
-              ? "text-white hover:opacity-80"
+              ? "text-foreground hover:opacity-80"
               : (hasInput || attachments.length || canRetry) && activeChatId
-                ? "text-white hover:text-white/80 active:scale-90"
-                : "text-white/20",
+                ? "text-foreground hover:text-foreground/80 active:scale-90"
+                : "text-foreground/20",
           )}
         >
           {isStreaming ? (

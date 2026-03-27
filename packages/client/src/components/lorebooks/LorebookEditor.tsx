@@ -440,22 +440,31 @@ export function LorebookEditor() {
             <FieldGroup
               label="Injection"
               icon={Settings2}
-              help="Controls where in the prompt this entry's content is placed. Position 0 = before chat history, 1 = after. Depth = how many messages back. Order = priority among entries."
+              help="Position controls where in the prompt this entry appears. 'Before Chat' and 'After Chat' place it in the lore section. 'At Depth' injects it into the chat history at the specified depth."
             >
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <NumberField
-                  label="Position"
-                  value={entryForm.position ?? 0}
-                  onChange={(v) => setEntryForm((f) => (f ? { ...f, position: v } : f))}
-                  min={0}
-                  max={1}
-                />
-                <NumberField
-                  label="Depth"
-                  value={entryForm.depth ?? 4}
-                  onChange={(v) => setEntryForm((f) => (f ? { ...f, depth: v } : f))}
-                  min={0}
-                />
+                <div>
+                  <label className="mb-1 block text-[0.6875rem] text-[var(--muted-foreground)]">Position</label>
+                  <select
+                    value={entryForm.position ?? 0}
+                    onChange={(e) =>
+                      setEntryForm((f) => (f ? { ...f, position: Number(e.target.value) } : f))
+                    }
+                    className="w-full rounded-lg bg-[var(--secondary)] px-2 py-1.5 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                  >
+                    <option value={0}>Before Chat</option>
+                    <option value={1}>After Chat</option>
+                    <option value={2}>At Depth</option>
+                  </select>
+                </div>
+                {(entryForm.position ?? 0) >= 2 && (
+                  <NumberField
+                    label="Depth"
+                    value={entryForm.depth ?? 4}
+                    onChange={(v) => setEntryForm((f) => (f ? { ...f, depth: v } : f))}
+                    min={0}
+                  />
+                )}
                 <NumberField
                   label="Order"
                   value={entryForm.order ?? 100}

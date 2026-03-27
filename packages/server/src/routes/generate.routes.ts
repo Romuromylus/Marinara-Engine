@@ -1445,14 +1445,14 @@ export async function generateRoutes(app: FastifyInstance) {
             },
             wrapFormat,
           );
-          // Include enabled RPG attributes alongside persona fields
+          // Include enabled RPG attributes alongside persona fields (max values only — current state tracked by agents)
           if (persona?.personaStats) {
             const pStats = typeof persona.personaStats === "string" ? JSON.parse(persona.personaStats) : persona.personaStats;
             if (pStats?.rpgStats?.enabled) {
               const rpg = pStats.rpgStats as { attributes: Array<{ name: string; value: number; max: number }>; hp: { value: number; max: number }; mp: { value: number; max: number } };
-              const rpgLines = [`HP: ${rpg.hp.value}/${rpg.hp.max}`, `MP: ${rpg.mp.value}/${rpg.mp.max}`];
+              const rpgLines = [`Max HP: ${rpg.hp.max}`, `Max MP: ${rpg.mp.max}`];
               for (const attr of rpg.attributes) {
-                rpgLines.push(`${attr.name}: ${attr.value}/${attr.max}`);
+                rpgLines.push(`${attr.name}: ${attr.max}`);
               }
               fieldParts.push(wrapContent(rpgLines.join("\n"), "rpg_attributes", wrapFormat, 2));
             }

@@ -416,6 +416,11 @@ strong {
   font-weight: bolder;
 }
 
+/* Chat message narration text color */
+.mari-message-content {
+  color: #c3c2c2;
+}
+
 /* Markdown heading sizes inside chat messages — mirrors Discord / ST sizing */
 .mari-message-content h1.mari-md-heading,
 .mari-message-content h2.mari-md-heading,

@@ -145,14 +145,14 @@ function getCharacterField(data: CharacterData, field: string): string {
   }
 }
 
-/** Format RPG stats into a readable block. */
+/** Format RPG stats into a readable block (max values only — current state is tracked by agents). */
 function formatRPGStats(rpgStats: RPGStatsConfig | undefined): string {
   if (!rpgStats?.enabled) return "";
   const lines: string[] = [];
-  lines.push(`HP: ${rpgStats.hp.value}/${rpgStats.hp.max}`);
-  lines.push(`MP: ${rpgStats.mp.value}/${rpgStats.mp.max}`);
+  lines.push(`Max HP: ${rpgStats.hp.max}`);
+  lines.push(`Max MP: ${rpgStats.mp.max}`);
   if (rpgStats.attributes.length > 0) {
-    lines.push(rpgStats.attributes.map((a) => `${a.name}: ${a.value}/${a.max}`).join(", "));
+    lines.push(rpgStats.attributes.map((a) => `${a.name}: ${a.max}`).join(", "));
   }
   return lines.join("\n");
 }

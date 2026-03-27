@@ -554,7 +554,7 @@ export function ConversationView({
                     {c.avatarUrl ? (
                       <img src={c.avatarUrl} alt={c.name} className="h-5 w-5 rounded-full object-cover" />
                     ) : (
-                      <div className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-[0.5rem] font-bold text-white">
+                      <div className="flex h-5 w-5 items-center justify-center rounded-full bg-foreground/20 text-[0.5rem] font-bold text-foreground">
                         {c.name[0]}
                       </div>
                     )}
@@ -562,7 +562,7 @@ export function ConversationView({
                       className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-[1.5px] ring-black/30 ${statusColor(c.conversationStatus)}`}
                     />
                   </div>
-                  <span className="text-[0.75rem] font-medium text-white/90">{c.name}</span>
+                  <span className="text-[0.75rem] font-medium text-foreground/90">{c.name}</span>
                 </div>
               );
             }
@@ -584,7 +584,7 @@ export function ConversationView({
                             className="h-5 w-5 rounded-full object-cover ring-1 ring-black/30"
                           />
                         ) : (
-                          <div className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-[0.5rem] font-bold text-white ring-1 ring-black/30">
+                          <div className="flex h-5 w-5 items-center justify-center rounded-full bg-foreground/20 text-[0.5rem] font-bold text-foreground ring-1 ring-black/30">
                             {c.name[0]}
                           </div>
                         )}
@@ -605,14 +605,14 @@ export function ConversationView({
           <div className="flex items-center gap-1.5">
             <button
               onClick={onOpenFiles}
-              className="flex items-center justify-center rounded-lg bg-black/30 p-1.5 text-white/80 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-white"
+              className="flex items-center justify-center rounded-lg bg-black/30 p-1.5 text-foreground/80 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-foreground"
               title="Chat Files"
             >
               <FolderOpen size="0.875rem" />
             </button>
             <button
               onClick={onOpenGallery}
-              className="flex items-center justify-center rounded-lg bg-black/30 p-1.5 text-white/80 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-white"
+              className="flex items-center justify-center rounded-lg bg-black/30 p-1.5 text-foreground/80 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-foreground"
               title="Gallery"
             >
               <ImageIcon size="0.875rem" />
@@ -620,7 +620,7 @@ export function ConversationView({
             {onSwitchChat && (
               <button
                 onClick={onSwitchChat}
-                className="flex items-center justify-center rounded-lg bg-black/30 p-1.5 text-white/80 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-white"
+                className="flex items-center justify-center rounded-lg bg-black/30 p-1.5 text-foreground/80 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-foreground"
                 title={connectedChatName ? `Switch to ${connectedChatName}` : "Switch to connected chat"}
               >
                 <ArrowRightLeft size="0.875rem" />
@@ -628,7 +628,7 @@ export function ConversationView({
             )}
             <button
               onClick={onOpenSettings}
-              className="flex items-center justify-center rounded-lg bg-black/30 p-1.5 text-white/80 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-white"
+              className="flex items-center justify-center rounded-lg bg-black/30 p-1.5 text-foreground/80 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-foreground"
               title="Chat Settings"
             >
               <Settings2 size="0.875rem" />
@@ -828,7 +828,7 @@ export function ConversationView({
           <span>{notification.name} messaged you!</span>
           <button
             onClick={() => setNotification(null)}
-            className="ml-1 rounded p-0.5 transition-colors hover:bg-white/20"
+            className="ml-1 rounded p-0.5 transition-colors hover:bg-foreground/20"
           >
             <X size="0.75rem" />
           </button>
@@ -939,11 +939,11 @@ function SplitMessageGroup({
           />
           <div className="flex items-center gap-2 text-[0.6875rem] text-[var(--muted-foreground)]">
             backspace (empty) to{" "}
-            <button onClick={() => setEditing(false)} className="text-white/70 hover:underline hover:text-white">
+            <button onClick={() => setEditing(false)} className="text-foreground/70 hover:underline hover:text-foreground">
               cancel
             </button>{" "}
             · enter to{" "}
-            <button onClick={handleSaveEdit} className="text-white/70 hover:underline hover:text-white">
+            <button onClick={handleSaveEdit} className="text-foreground/70 hover:underline hover:text-foreground">
               save
             </button>
           </div>
