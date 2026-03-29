@@ -778,12 +778,18 @@ export const ChatMessage = memo(function ChatMessage({
           {/* Multi-select checkbox */}
           {multiSelectMode && (
             <div className="flex items-start pt-2 flex-shrink-0">
-              <div className={cn(
-                "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
-                isSelected ? "border-[var(--destructive)] bg-[var(--destructive)]" : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)]",
-              )}>
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={isSelected}
+                aria-label={isSelected ? "Deselect message" : "Select message"}
+                className={cn(
+                  "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
+                  isSelected ? "border-[var(--destructive)] bg-[var(--destructive)]" : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)]",
+                )}
+              >
                 {isSelected && <span className="text-white text-xs font-bold">✓</span>}
-              </div>
+              </button>
             </div>
           )}
           {/* Avatar Column */}

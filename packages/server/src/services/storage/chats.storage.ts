@@ -263,9 +263,16 @@ export function createChatsStorage(db: DB) {
       await db.delete(messages).where(eq(messages.id, id));
     },
 
-    async removeMessages(ids: string[]) {
+    async removeMessages(ids: string[], chatId?: string) {
       if (ids.length === 0) return;
-      await db.delete(messages).where(inArray(messages.id, ids));
+      const CHUNK = 500;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const condition = chatId
+          ? and(inArray(messages.id, chunk), eq(messages.chatId, chatId))
+          : inArray(messages.id, chunk);
+        await db.delete(messages).where(condition);
+      }
     },
 
     async getSwipes(messageId: string) {

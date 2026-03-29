@@ -96,7 +96,10 @@ export function EchoChamberPanel() {
   const loadedChatRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!activeChatId || !echoEnabled) return;
+    if (!activeChatId || !echoEnabled) {
+      loadedChatRef.current = null;
+      return;
+    }
     if (loadedChatRef.current === activeChatId) return;
 
     // Chat changed — clear old messages and reset reveal

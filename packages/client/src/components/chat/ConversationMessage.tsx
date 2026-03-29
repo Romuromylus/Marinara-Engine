@@ -380,12 +380,18 @@ export const ConversationMessage = memo(function ConversationMessage({
         {/* Multi-select checkbox */}
         {multiSelectMode && (
           <div className="absolute left-1 top-1/2 -translate-y-1/2 z-10">
-            <div className={cn(
-              "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
-              isSelected ? "border-[var(--destructive)] bg-[var(--destructive)]" : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)]",
-            )}>
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={isSelected}
+              aria-label={isSelected ? "Deselect message" : "Select message"}
+              className={cn(
+                "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
+                isSelected ? "border-[var(--destructive)] bg-[var(--destructive)]" : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)]",
+              )}
+            >
               {isSelected && <span className="text-white text-xs font-bold">✓</span>}
-            </div>
+            </button>
           </div>
         )}
         {/* Render each grouped speaker as a mini-message row */}

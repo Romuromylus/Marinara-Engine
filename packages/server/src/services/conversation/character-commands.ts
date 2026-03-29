@@ -213,9 +213,15 @@ export function parseCharacterCommands(content: string): {
       }
     }
     const intensityMatch = params.match(/intensity=([0-9.]+)/);
-    if (intensityMatch) cmd.intensity = Math.max(0, Math.min(1, parseFloat(intensityMatch[1]!)));
+    if (intensityMatch) {
+      const v = parseFloat(intensityMatch[1]!);
+      if (Number.isFinite(v)) cmd.intensity = Math.max(0, Math.min(1, v));
+    }
     const durationMatch = params.match(/duration=([0-9.]+)/);
-    if (durationMatch) cmd.duration = parseFloat(durationMatch[1]!);
+    if (durationMatch) {
+      const v = parseFloat(durationMatch[1]!);
+      if (Number.isFinite(v)) cmd.duration = Math.max(0, v);
+    }
     commands.push(cmd);
   }
 

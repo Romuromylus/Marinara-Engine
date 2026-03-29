@@ -159,14 +159,17 @@ class ButtplugService {
     const outputType = ACTION_TO_OUTPUT[cmd.action];
     if (!outputType) throw new Error(`Unknown action: ${cmd.action}`);
 
-    const intensity = Math.max(0, Math.min(1, cmd.intensity ?? 0.5));
+    const rawIntensity = cmd.intensity ?? 0.5;
+    const rawDuration = cmd.duration ?? 0;
+    const intensity = Number.isFinite(rawIntensity) ? Math.max(0, Math.min(1, rawIntensity)) : 0.5;
+    const duration = Number.isFinite(rawDuration) ? Math.max(0, rawDuration) : 0;
 
     for (const device of targets) {
       if (!device.hasOutput(outputType)) continue;
 
       if (cmd.action === "position") {
         // Position/linear commands use duration in ms
-        const durationMs = (cmd.duration ?? 1) * 1000;
+        const durationMs = (duration || 1) * 1000;
         const posCmd = new DeviceOutputPositionWithDurationConstructor().percent(intensity, durationMs);
         await device.runOutput(posCmd);
       } else {
@@ -176,7 +179,7 @@ class ButtplugService {
     }
 
     // Schedule auto-stop if duration is specified and action isn't position
-    if (cmd.duration && cmd.duration > 0 && cmd.action !== "position") {
+    if (duration > 0 && cmd.action !== "position") {
       const timerKey = cmd.deviceIndex;
       // Clear any existing timer for this target
       const existing = this.stopTimers.get(timerKey);
@@ -193,7 +196,7 @@ class ButtplugService {
               // Device may have disconnected
             }
           }
-        }, cmd.duration * 1000),
+        }, duration * 1000),
       );
     }
   }
@@ -209,7 +212,7 @@ class ButtplugService {
     const all = devicesArray(this.client);
     if (deviceIndex === "all") return all;
     const device = this.client.devices.get(deviceIndex);
-    return device ? [device] : all; // fallback to all if index not found
+    return device ? [device] : []; // return empty if index not found
   }
 
   private clearAllTimers(): void {

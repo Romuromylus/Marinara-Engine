@@ -157,7 +157,7 @@ export async function chatsRoutes(app: FastifyInstance) {
     if (!Array.isArray(messageIds) || messageIds.length === 0) {
       return reply.status(400).send({ error: "messageIds array is required" });
     }
-    await storage.removeMessages(messageIds);
+    await storage.removeMessages(messageIds, req.params.chatId);
     return reply.status(204).send();
   });
 

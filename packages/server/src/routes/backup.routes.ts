@@ -9,7 +9,6 @@ import { cp, mkdir, copyFile, readFile } from "fs/promises";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createPromptsStorage } from "../services/storage/prompts.storage.js";
-import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import type { ExportEnvelope } from "@marinara-engine/shared";
 
@@ -106,7 +105,6 @@ export async function backupRoutes(app: FastifyInstance) {
     const chars = createCharactersStorage(app.db);
     const lbs = createLorebooksStorage(app.db);
     const presets = createPromptsStorage(app.db);
-    const conns = createConnectionsStorage(app.db);
     const agents = createAgentsStorage(app.db);
 
     // Characters — include avatar as base64 if available
@@ -155,9 +153,6 @@ export async function backupRoutes(app: FastifyInstance) {
       }),
     );
 
-    // Connections (redacted)
-    const allConns = await conns.list();
-
     // Agent configs
     const allAgents = await agents.list();
 
@@ -170,7 +165,6 @@ export async function backupRoutes(app: FastifyInstance) {
         personas: allPersonas,
         lorebooks: lorebookExports,
         presets: presetExports,
-        connections: allConns,
         agents: allAgents,
       },
     };
@@ -183,7 +177,6 @@ export async function backupRoutes(app: FastifyInstance) {
 
   // ── Profile Import ──
   // Accepts a profile JSON envelope and creates all entities.
-  // Skips duplicates by name to avoid cluttering the database.
   app.post("/import-profile", async (req, reply) => {
     const envelope = req.body as ExportEnvelope;
     if (!envelope || envelope.type !== "marinara_profile" || envelope.version !== 1) {
