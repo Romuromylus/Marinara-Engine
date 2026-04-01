@@ -82,6 +82,7 @@ export function SummaryPopover({ chatId, summary, onClose }: SummaryPopoverProps
   const content = (
     <div
       ref={panelRef}
+      onMouseDown={(e) => e.stopPropagation()}
       className={cn(
         isMobile
           ? "fixed inset-0 z-[9999] flex items-center justify-center p-4 max-md:pt-[max(1rem,env(safe-area-inset-top))]"

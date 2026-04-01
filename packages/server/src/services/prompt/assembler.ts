@@ -215,6 +215,7 @@ export async function assemblePrompt(input: AssemblerInput): Promise<AssemblerOu
   const orderedSections: ResolvedSection[] = [];
   const depthSections: ResolvedSection[] = [];
   let lorebookDepthEntriesCount = 0;
+  let hasChatSummaryMarker = false;
 
   for (const sectionId of sectionOrder) {
     const section = sectionMap.get(sectionId);
@@ -225,6 +226,16 @@ export async function assemblePrompt(input: AssemblerInput): Promise<AssemblerOu
     if (section.groupId) {
       const group = groupMap.get(section.groupId);
       if (group && group.enabled !== "true") continue;
+    }
+
+    // Track whether a chat_summary marker is present in the preset
+    if (section.isMarker === "true" && section.markerConfig) {
+      try {
+        const mc = JSON.parse(section.markerConfig) as MarkerConfig;
+        if (mc.type === "chat_summary") hasChatSummaryMarker = true;
+      } catch {
+        /* ignore */
+      }
     }
 
     const resolved = await resolveSection(section, {
@@ -284,6 +295,25 @@ export async function assemblePrompt(input: AssemblerInput): Promise<AssemblerOu
         chatHistoryEndIdx = messages.length;
       } else {
         messages.push(...section.messages);
+      }
+    }
+  }
+
+  // ── Phase 2b: Fallback chat summary injection ──
+  // If the preset has no chat_summary marker but a summary exists, append it
+  // to the bottom of the first system message so it's always included.
+  if (!hasChatSummaryMarker && markerCtx.chatSummary) {
+    const wrapped = wrapContent(markerCtx.chatSummary, "Chat Summary", wrapFormat);
+    if (wrapped) {
+      const firstSystemIdx = messages.findIndex((m) => m.role === "system");
+      if (firstSystemIdx >= 0) {
+        messages[firstSystemIdx] = {
+          ...messages[firstSystemIdx]!,
+          content: `${messages[firstSystemIdx]!.content}\n\n${wrapped}`,
+        };
+      } else {
+        // No system message at all — prepend one
+        messages.unshift({ role: "system", content: wrapped });
       }
     }
   }
