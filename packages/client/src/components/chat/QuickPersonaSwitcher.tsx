@@ -87,7 +87,7 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
         }
         className={cn(
           "flex h-8 w-8 items-center justify-center rounded-full overflow-hidden transition-all border-2",
-          open ? "border-[var(--primary)]" : "border-transparent hover:border-[var(--primary)] hover:opacity-90",
+          open ? "border-foreground/40" : "border-transparent hover:border-foreground/30 hover:opacity-90",
           className,
         )}
       >
@@ -119,14 +119,14 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
               onClick={() => handleSwitch(null)}
               className={cn(
                 "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--accent)]",
-                !activePersonaId && "text-[var(--primary)]",
+                !activePersonaId && "text-foreground",
               )}
             >
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--secondary)] text-xs font-semibold text-[var(--muted-foreground)]">
                 ?
               </div>
               <div className="flex min-w-0 flex-1 flex-col">
-                <span className={cn("text-xs font-semibold", !activePersonaId && "text-[var(--primary)]")}>None</span>
+                <span className={cn("text-xs font-semibold", !activePersonaId && "text-foreground")}>None</span>
                 <span className="text-[0.625rem] text-[var(--muted-foreground)]">No persona selected</span>
               </div>
               {!activePersonaId && <span className="ml-auto text-[0.6875rem]">✓</span>}
@@ -142,7 +142,7 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
                   onClick={() => handleSwitch(persona.id)}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--accent)]",
-                    isActive && "text-[var(--primary)]",
+                    isActive && "text-foreground",
                   )}
                 >
                   {persona.avatarPath ? (
@@ -157,7 +157,7 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
                     </div>
                   )}
                   <div className="flex min-w-0 flex-1 flex-col">
-                    <span className={cn("text-xs font-semibold", isActive && "text-[var(--primary)]")}>
+                    <span className={cn("text-xs font-semibold", isActive && "text-foreground")}>
                       {persona.name || persona.id}
                     </span>
                     {persona.comment && (

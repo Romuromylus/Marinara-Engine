@@ -333,6 +333,7 @@ export function createChatsStorage(db: DB) {
               ...(typeof msg.extra === "string" ? JSON.parse(msg.extra) : (msg.extra ?? {})),
               thinking: null,
               generationInfo: null,
+              attachments: null,
             }
           : {};
         await db

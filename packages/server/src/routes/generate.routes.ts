@@ -3827,65 +3827,52 @@ export async function generateRoutes(app: FastifyInstance) {
             try {
               const gs = result.data as Record<string, unknown>;
 
-              // ── Preserve manual overrides from previous snapshot ──
+              // Manual overrides are one-shot: they live on the snapshot the user
+              // edited and are visible to the agent as the prevSnap values, but they
+              // are NOT carried forward to new snapshots.  The agent naturally reads
+              // the edited prevSnap values and produces its own output.
               const prevSnap = await gameStateStore.getLatest(input.chatId);
-              let manualOverrides: Record<string, string> | null = null;
-              if (prevSnap?.manualOverrides) {
-                manualOverrides = JSON.parse(prevSnap.manualOverrides as string);
-              }
 
-              // Build the new snapshot, letting manual overrides win.
-              // Fall back to previous snapshot values if the agent returns null.
-              const newDate = manualOverrides?.date ?? (gs.date as string) ?? (prevSnap?.date as string | null) ?? null;
-              const newTime = manualOverrides?.time ?? (gs.time as string) ?? (prevSnap?.time as string | null) ?? null;
+              // Build the new snapshot from agent output, falling back to previous snapshot.
+              const newDate = (gs.date as string) ?? (prevSnap?.date as string | null) ?? null;
+              const newTime = (gs.time as string) ?? (prevSnap?.time as string | null) ?? null;
               const newLocation =
-                manualOverrides?.location ?? (gs.location as string) ?? (prevSnap?.location as string | null) ?? null;
+                (gs.location as string) ?? (prevSnap?.location as string | null) ?? null;
               const newWeather =
-                manualOverrides?.weather ?? (gs.weather as string) ?? (prevSnap?.weather as string | null) ?? null;
+                (gs.weather as string) ?? (prevSnap?.weather as string | null) ?? null;
               const newTemperature =
-                manualOverrides?.temperature ??
                 (gs.temperature as string) ??
                 (prevSnap?.temperature as string | null) ??
                 null;
 
-              // Carry forward fields the world-state agent doesn't produce
-              // (presentCharacters, personaStats, playerStats) from the previous snapshot
-              const prevChars = prevSnap?.presentCharacters
+              // The world-state agent ONLY produces date/time/location/weather/temperature
+              // (and optionally recentEvents).  In batch mode the model often cross-
+              // contaminates the world-state result with fields from other agent task
+              // schemas (presentCharacters, personaStats, playerStats).  Even a partial
+              // cross-contaminated playerStats (e.g. { status: "...", activeQuests: [] })
+              // would clobber the real data and break downstream handlers (quest, persona-
+              // stats) that read from this snapshot.  Therefore we ALWAYS carry forward
+              // these fields from the previous snapshot — the dedicated tracker agents
+              // (character-tracker, persona-stats, quest, custom-tracker) will update
+              // them with authoritative data in their own handler blocks below.
+              const snapshotChars = prevSnap?.presentCharacters
                 ? typeof prevSnap.presentCharacters === "string"
                   ? JSON.parse(prevSnap.presentCharacters)
                   : prevSnap.presentCharacters
                 : [];
-              const prevPersonaStats = prevSnap?.personaStats
+              const snapshotPersonaStats = prevSnap?.personaStats
                 ? typeof prevSnap.personaStats === "string"
                   ? JSON.parse(prevSnap.personaStats)
                   : prevSnap.personaStats
                 : null;
-
-              // The world-state agent only produces date/time/location/weather/temperature.
-              // In batch mode the model may "helpfully" include empty presentCharacters/personaStats
-              // from the character-tracker/persona-stats task descriptions. We must check for actual
-              // content, not just nullish — empty arrays still overwrite previous data with `??`.
-              const wsChars = gs.presentCharacters as any[] | undefined;
-              const snapshotChars = wsChars && wsChars.length > 0 ? wsChars : prevChars;
-              const wsPersonaStats = gs.personaStats as CharacterStat[] | null | undefined;
-              const snapshotPersonaStats =
-                wsPersonaStats && (Array.isArray(wsPersonaStats) ? wsPersonaStats.length > 0 : true)
-                  ? wsPersonaStats
-                  : prevPersonaStats;
-              console.log(
-                `[generate] world-state snapshot: chars=${snapshotChars.length} (prevChars=${prevChars.length}), personaStats=${snapshotPersonaStats ? "present" : "null"}`,
-              );
-              const prevPlayerStats = prevSnap?.playerStats
+              const snapshotPlayerStats = prevSnap?.playerStats
                 ? typeof prevSnap.playerStats === "string"
                   ? JSON.parse(prevSnap.playerStats)
                   : prevSnap.playerStats
                 : null;
-              // Same guard: only use world-state's playerStats if it has real content
-              const wsPlayerStats = gs.playerStats as PlayerStats | null | undefined;
-              const snapshotPlayerStats =
-                wsPlayerStats && typeof wsPlayerStats === "object" && Object.keys(wsPlayerStats).length > 0
-                  ? wsPlayerStats
-                  : prevPlayerStats;
+              console.log(
+                `[generate] world-state snapshot: chars=${snapshotChars.length} (prev), personaStats=${snapshotPersonaStats ? "present" : "null"} (prev)`,
+              );
               await gameStateStore.create(
                 {
                   chatId: input.chatId,
@@ -3901,7 +3888,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   playerStats: snapshotPlayerStats,
                   personaStats: snapshotPersonaStats,
                 },
-                manualOverrides,
+                null, // manual overrides are one-shot — never carry forward
               );
               // Send game state to client so HUD updates live
               // ONLY send the fields world-state actually produces (date/time/location/weather/temperature).
@@ -3964,9 +3951,16 @@ export async function generateRoutes(app: FastifyInstance) {
               const bars = (psData.stats as any[]) ?? [];
               const status = (psData.status as string) ?? "";
               const inventory = (psData.inventory as any[]) ?? [];
-              const snap =
-                (await gameStateStore.getByMessage(messageId, targetSwipeIndex)) ??
-                (await gameStateStore.getLatest(input.chatId));
+
+              // Ensure a snapshot exists for this (messageId, swipeIndex).
+              // If world-state didn't create one, updateByMessage clones the
+              // latest snapshot into a new row so we don't corrupt old data.
+              let snap =
+                (await gameStateStore.getByMessage(messageId, targetSwipeIndex));
+              if (!snap) {
+                await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {});
+                snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
+              }
               if (snap) {
                 const updates: Record<string, unknown> = {};
                 if (bars.length > 0) updates.personaStats = JSON.stringify(bars);
@@ -4010,9 +4004,12 @@ export async function generateRoutes(app: FastifyInstance) {
               const ctData = result.data as Record<string, unknown>;
               const fields = (ctData.fields as any[]) ?? [];
               if (fields.length > 0) {
-                const snap =
-                  (await gameStateStore.getByMessage(messageId, targetSwipeIndex)) ??
-                  (await gameStateStore.getLatest(input.chatId));
+                // Ensure a snapshot exists for this (messageId, swipeIndex)
+                let snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
+                if (!snap) {
+                  await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {});
+                  snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
+                }
                 const existingPS = snap?.playerStats
                   ? typeof snap.playerStats === "string"
                     ? JSON.parse(snap.playerStats)
@@ -4044,9 +4041,12 @@ export async function generateRoutes(app: FastifyInstance) {
                 JSON.stringify(qData).slice(0, 500),
               );
               if (updates.length > 0) {
-                const snap =
-                  (await gameStateStore.getByMessage(messageId, targetSwipeIndex)) ??
-                  (await gameStateStore.getLatest(input.chatId));
+                // Ensure a snapshot exists for this (messageId, swipeIndex)
+                let snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
+                if (!snap) {
+                  await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {});
+                  snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
+                }
                 const existingPS = snap?.playerStats
                   ? typeof snap.playerStats === "string"
                     ? JSON.parse(snap.playerStats)
@@ -4318,23 +4318,43 @@ export async function generateRoutes(app: FastifyInstance) {
                       height: imgHeight,
                     });
 
-                    // Attach to the assistant message
+                    // Attach to the assistant message + its specific swipe row
                     const filename = filePath.split("/").pop()!;
                     const imageUrl = `/api/gallery/file/${input.chatId}/${encodeURIComponent(filename)}`;
                     if (messageId) {
-                      const msgRow = await chats.getMessage(messageId);
-                      const msgExtra = msgRow?.extra
-                        ? typeof msgRow.extra === "string"
-                          ? JSON.parse(msgRow.extra)
-                          : msgRow.extra
-                        : {};
-                      const existingAttachments = (msgExtra.attachments as any[]) ?? [];
-                      existingAttachments.push({
+                      const attachment = {
                         type: "image",
                         url: imageUrl,
                         filename: `illustration.${imageResult.ext}`,
-                      });
-                      await chats.updateMessageExtra(messageId, { attachments: existingAttachments });
+                      };
+
+                      // Always persist to the swipe row so the attachment survives
+                      // swipe switches even if the user has already navigated away.
+                      const swipeRow = (await chats.getSwipes(messageId)).find(
+                        (s: any) => s.index === targetSwipeIndex,
+                      );
+                      if (swipeRow) {
+                        const swipeExtra = typeof swipeRow.extra === "string"
+                          ? JSON.parse(swipeRow.extra)
+                          : (swipeRow.extra ?? {});
+                        const swipeAtts = (swipeExtra.attachments as any[]) ?? [];
+                        swipeAtts.push(attachment);
+                        await chats.updateSwipeExtra(messageId, targetSwipeIndex, { attachments: swipeAtts });
+                      }
+
+                      // Also update the live message row if this swipe is still active,
+                      // so the SSE illustration event is immediately visible.
+                      const msgRow = await chats.getMessage(messageId);
+                      if (msgRow && (msgRow.activeSwipeIndex ?? 0) === targetSwipeIndex) {
+                        const msgExtra = msgRow.extra
+                          ? typeof msgRow.extra === "string"
+                            ? JSON.parse(msgRow.extra)
+                            : msgRow.extra
+                          : {};
+                        const existingAttachments = (msgExtra.attachments as any[]) ?? [];
+                        existingAttachments.push(attachment);
+                        await chats.updateMessageExtra(messageId, { attachments: existingAttachments });
+                      }
                     }
 
                     // Notify client

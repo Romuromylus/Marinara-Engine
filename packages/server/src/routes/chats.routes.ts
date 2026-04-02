@@ -229,6 +229,8 @@ export async function chatsRoutes(app: FastifyInstance) {
     const gameStateStore = createGameStateStorage(app.db);
     const body = req.body as Record<string, unknown>;
     const manual = body.manual === true;
+    // Explicit flag to wipe all manual overrides (e.g. from the Clear button)
+    const clearOverrides = body.clearOverrides === true;
     const fields = body as Partial<{
       date: string;
       time: string;
@@ -240,6 +242,13 @@ export async function chatsRoutes(app: FastifyInstance) {
       personaStats: any[];
     }>;
     let updated = await gameStateStore.updateLatest(req.params.id, fields, manual);
+    // Wipe all manual overrides when explicitly requested
+    if (clearOverrides && updated) {
+      const { eq } = await import("drizzle-orm");
+      const { gameStateSnapshots } = await import("../db/schema/index.js");
+      await app.db.update(gameStateSnapshots).set({ manualOverrides: null }).where(eq(gameStateSnapshots.id, (updated as any).id));
+      updated = { ...updated, manualOverrides: null };
+    }
     // If no snapshot exists yet, create one so manual edits aren't lost
     if (!updated && manual) {
       const manualOverrides: Record<string, string> = {};

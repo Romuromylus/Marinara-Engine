@@ -76,8 +76,8 @@ export function QuickConnectionSwitcher({ className }: { className?: string }) {
         className={cn(
           "flex h-8 w-8 items-center justify-center rounded-xl transition-all",
           open
-            ? "text-[var(--primary)]"
-            : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+            ? "text-foreground bg-foreground/10"
+            : "text-foreground/70 hover:bg-foreground/10 hover:text-foreground",
           className,
         )}
       >
@@ -98,7 +98,7 @@ export function QuickConnectionSwitcher({ className }: { className?: string }) {
               onClick={() => handleSwitch("random")}
               className={cn(
                 "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--accent)]",
-                activeConnectionId === "random" && "text-[var(--primary)] font-semibold",
+                activeConnectionId === "random" && "text-foreground font-semibold",
               )}
             >
               <span>🎲 Random</span>
@@ -113,7 +113,7 @@ export function QuickConnectionSwitcher({ className }: { className?: string }) {
                 onClick={() => handleSwitch(conn.id)}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--accent)]",
-                  activeConnectionId === conn.id && "text-[var(--primary)] font-semibold",
+                  activeConnectionId === conn.id && "text-foreground font-semibold",
                 )}
               >
                 <span>{conn.name || conn.id}</span>

@@ -126,6 +126,11 @@ export function createGameStateStorage(db: DB) {
      * Same as updateLatest but targets a specific (messageId, swipeIndex) snapshot
      * instead of the chronologically newest one. This ensures tracker agents write
      * to the exact same snapshot the world-state agent created for a given swipe.
+     *
+     * When no snapshot exists for the target (messageId, swipeIndex) — e.g. because
+     * the world-state agent is disabled or failed — we clone the latest snapshot
+     * into a NEW row for this message+swipe and apply the update there. This avoids
+     * corrupting a previous turn's snapshot with new tracker data.
      */
     async updateByMessage(
       messageId: string,
@@ -148,9 +153,57 @@ export function createGameStateStorage(db: DB) {
     ) {
       const snap = await this.getByMessage(messageId, swipeIndex);
       if (snap) return this._applyUpdate(snap, fields, manual);
-      // Fall back to latest so callers still work when no per-swipe snapshot exists
+
+      // No snapshot for this swipe yet — clone the latest one into a new row
+      // so each (messageId, swipeIndex) gets its own snapshot and we don't
+      // corrupt a previous turn's data.
       const latest = await this.getLatest(chatId);
-      return latest ? this._applyUpdate(latest, fields, manual) : null;
+      if (!latest && !messageId) return null;
+
+      const baseState = {
+        chatId,
+        messageId,
+        swipeIndex,
+        date: (latest?.date as string) ?? null,
+        time: (latest?.time as string) ?? null,
+        location: (latest?.location as string) ?? null,
+        weather: (latest?.weather as string) ?? null,
+        temperature: (latest?.temperature as string) ?? null,
+        presentCharacters: latest?.presentCharacters
+          ? typeof latest.presentCharacters === "string"
+            ? JSON.parse(latest.presentCharacters)
+            : latest.presentCharacters
+          : [],
+        recentEvents: latest?.recentEvents
+          ? typeof latest.recentEvents === "string"
+            ? JSON.parse(latest.recentEvents)
+            : latest.recentEvents
+          : [],
+        playerStats: latest?.playerStats
+          ? typeof latest.playerStats === "string"
+            ? JSON.parse(latest.playerStats)
+            : latest.playerStats
+          : null,
+        personaStats: latest?.personaStats
+          ? typeof latest.personaStats === "string"
+            ? JSON.parse(latest.personaStats)
+            : latest.personaStats
+          : null,
+      };
+
+      // Apply the incoming fields on top of the cloned base
+      if (fields.date !== undefined) baseState.date = fields.date as any;
+      if (fields.time !== undefined) baseState.time = fields.time as any;
+      if (fields.location !== undefined) baseState.location = fields.location as any;
+      if (fields.weather !== undefined) baseState.weather = fields.weather as any;
+      if (fields.temperature !== undefined) baseState.temperature = fields.temperature as any;
+      if (fields.presentCharacters !== undefined) baseState.presentCharacters = fields.presentCharacters as any;
+      if (fields.playerStats !== undefined) baseState.playerStats = fields.playerStats as any;
+      if (fields.personaStats !== undefined) baseState.personaStats = fields.personaStats as any;
+
+      // Manual overrides are one-shot — do not carry forward to the new snapshot.
+      const newId = await this.create(baseState as any, null);
+      return this.getByMessage(messageId, swipeIndex);
     },
 
     /** Internal: apply field updates + optional manual-override tracking to a snapshot row. */
@@ -189,9 +242,16 @@ export function createGameStateStorage(db: DB) {
         const TRACKABLE = ["date", "time", "location", "weather", "temperature"] as const;
         const existing: Record<string, string> = row.manualOverrides ? JSON.parse(row.manualOverrides as string) : {};
         for (const key of TRACKABLE) {
-          if (fields[key] !== undefined) existing[key] = fields[key] as string;
+          if (fields[key] !== undefined) {
+            // Setting a field to null/empty removes the override so the agent can update it again
+            if (fields[key] == null || fields[key] === "") {
+              delete existing[key];
+            } else {
+              existing[key] = fields[key] as string;
+            }
+          }
         }
-        updates.manualOverrides = JSON.stringify(existing);
+        updates.manualOverrides = Object.keys(existing).length > 0 ? JSON.stringify(existing) : null;
       }
 
       await db.update(gameStateSnapshots).set(updates).where(eq(gameStateSnapshots.id, row.id));

@@ -688,8 +688,10 @@ export function useGenerate() {
                 setGameState(merged as any);
               } else {
                 // Agent data may arrive before the base game state is loaded —
-                // seed a minimal state so data isn't lost.
-                setGameState(patch as any);
+                // seed a minimal state so data isn't lost. Include chatId so the
+                // RoleplayHUD mount-guard (`existing?.chatId === chatId`) recognises
+                // this state belongs to the active chat and skips a redundant fetch.
+                setGameState({ chatId: params.chatId, ...patch } as any);
               }
               break;
             }
@@ -734,7 +736,13 @@ export function useGenerate() {
             case "message_saved": {
               const savedMessage = event.data as Message;
               persistedMessages.set(savedMessage.id, savedMessage);
-              upsertPersistedMessages(qc, params.chatId, [savedMessage]);
+              // During non-regeneration streaming, defer the cache upsert until
+              // streaming ends. Otherwise the saved message appears in the list
+              // while the StreamingIndicator is still visible — causing a
+              // duplicate message that vanishes on refresh.
+              if (params.regenerateMessageId || !streamingEnabled) {
+                upsertPersistedMessages(qc, params.chatId, [savedMessage]);
+              }
               break;
             }
 
@@ -960,17 +968,24 @@ export function useGenerate() {
         // Retry once on failure (transient network hiccup, service-worker race, etc.)
         // so a temporary glitch doesn't leave the chat showing stale data.
         const msgKey = chatKeys.messages(params.chatId);
+        let invalidateOk = false;
         try {
           await qc.invalidateQueries({ queryKey: msgKey });
+          invalidateOk = true;
         } catch {
           try {
             await new Promise((r) => setTimeout(r, 250));
             await qc.invalidateQueries({ queryKey: msgKey });
+            invalidateOk = true;
           } catch {
             /* best-effort — the user can pull-to-refresh */
           }
         }
-        if (persistedMessages.size > 0) {
+        // Only upsert persisted messages as a fallback when invalidation failed.
+        // When invalidation succeeds, the refetch returns authoritative data from the
+        // server (including any attachments added by agents after message_saved).
+        // Upserting the stale message_saved snapshot would overwrite that fresh data.
+        if (!invalidateOk && persistedMessages.size > 0) {
           upsertPersistedMessages(qc, params.chatId, [...persistedMessages.values()]);
         }
         // Refresh game state from DB so the HUD shows the correct tracker data
@@ -978,14 +993,16 @@ export function useGenerate() {
         // during generation, but React scheduling / streaming can cause them
         // to not fully propagate — this authoritative DB fetch ensures the
         // final state is always correct (especially after swipe regeneration).
-        api
-          .get<import("@marinara-engine/shared").GameState | null>(
+        // Awaited so the store is updated BEFORE setStreaming(false) triggers
+        // UI transitions that could flash stale data.
+        try {
+          const gs = await api.get<import("@marinara-engine/shared").GameState | null>(
             `/chats/${params.chatId}/game-state`,
-          )
-          .then((gs) => {
-            if (gs) useGameStateStore.getState().setGameState(gs);
-          })
-          .catch(() => {});
+          );
+          if (gs) useGameStateStore.getState().setGameState(gs);
+        } catch {
+          /* best-effort — SSE patches already populated the store */
+        }
         // Re-sort sidebar so this chat floats to the top
         qc.invalidateQueries({ queryKey: chatKeys.list() });
         // If the user navigated away from this chat during generation,

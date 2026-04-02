@@ -216,7 +216,7 @@ export function RoleplayHUD({
         ...cleared,
       } as GameState);
     }
-    api.patch(`/chats/${chatId}/game-state`, cleared).catch(() => {});
+    api.patch(`/chats/${chatId}/game-state`, { ...cleared, manual: true, clearOverrides: true }).catch(() => {});
     // Clear committed agent runs & memory from DB + reset client state
     api.delete(`/agents/runs/${chatId}`).catch(() => {});
     resetAgentStore();

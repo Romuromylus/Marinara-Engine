@@ -117,8 +117,8 @@ export function QuickSwitcherMobile() {
         className={cn(
           "flex h-8 w-8 items-center justify-center rounded-xl transition-all",
           open
-            ? "text-[var(--primary)]"
-            : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+            ? "text-foreground bg-foreground/10"
+            : "text-foreground/70 hover:bg-foreground/10 hover:text-foreground",
         )}
       >
         <ChevronUp size="1rem" className={cn("transition-transform", open && "rotate-180")} />
@@ -166,7 +166,7 @@ export function QuickSwitcherMobile() {
                   onClick={() => handleSwitchConnection("random")}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--accent)]",
-                    activeConnectionId === "random" && "text-[var(--primary)] font-semibold",
+                    activeConnectionId === "random" && "text-foreground font-semibold",
                   )}
                 >
                   <span>🎲 Random</span>
@@ -181,7 +181,7 @@ export function QuickSwitcherMobile() {
                     onClick={() => handleSwitchConnection(conn.id)}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--accent)]",
-                      activeConnectionId === conn.id && "text-[var(--primary)] font-semibold",
+                      activeConnectionId === conn.id && "text-foreground font-semibold",
                     )}
                   >
                     <span>{conn.name || conn.id}</span>
@@ -203,14 +203,14 @@ export function QuickSwitcherMobile() {
                   onClick={() => handleSwitchPersona(null)}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--accent)]",
-                    !activePersonaId && "text-[var(--primary)]",
+                    !activePersonaId && "text-foreground",
                   )}
                 >
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--secondary)] text-xs font-semibold text-[var(--muted-foreground)]">
                     ?
                   </div>
                   <div className="flex min-w-0 flex-1 flex-col">
-                    <span className={cn("text-xs font-semibold", !activePersonaId && "text-[var(--primary)]")}>
+                    <span className={cn("text-xs font-semibold", !activePersonaId && "text-foreground")}>
                       None
                     </span>
                     <span className="text-[0.625rem] text-[var(--muted-foreground)]">No persona selected</span>
@@ -228,7 +228,7 @@ export function QuickSwitcherMobile() {
                       onClick={() => handleSwitchPersona(persona.id)}
                       className={cn(
                         "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--accent)]",
-                        isActive && "text-[var(--primary)]",
+                        isActive && "text-foreground",
                       )}
                     >
                       {persona.avatarPath ? (
@@ -243,7 +243,7 @@ export function QuickSwitcherMobile() {
                         </div>
                       )}
                       <div className="flex min-w-0 flex-1 flex-col">
-                        <span className={cn("text-xs font-semibold", isActive && "text-[var(--primary)]")}>
+                        <span className={cn("text-xs font-semibold", isActive && "text-foreground")}>
                           {persona.name || persona.id}
                         </span>
                         {persona.comment && (
