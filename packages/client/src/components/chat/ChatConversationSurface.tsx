@@ -28,6 +28,7 @@ type ConversationSurfaceProps = {
   characterMap: CharacterMap;
   characterNames: string[];
   personaInfo?: PersonaInfo;
+  chatMeta: Record<string, any>;
   chatCharIds: string[];
   connectedChatName?: string;
   sceneInfo?: SceneInfo;
@@ -79,6 +80,7 @@ export function ChatConversationSurface({
   characterMap,
   characterNames,
   personaInfo,
+  chatMeta,
   chatCharIds,
   connectedChatName,
   sceneInfo,
@@ -131,6 +133,7 @@ export function ChatConversationSurface({
           characterMap={characterMap}
           characterNames={characterNames}
           personaInfo={personaInfo}
+          chatMeta={chatMeta}
           chatCharIds={chatCharIds}
           onDelete={onDelete}
           onRegenerate={onRegenerate}

@@ -1,7 +1,17 @@
 // ──────────────────────────────────────────────
 // Chat: Main chat area — mode-aware rendering
 // ──────────────────────────────────────────────
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   useChatMessages,
   useChat,
@@ -22,12 +32,7 @@ import { useGenerate } from "../../hooks/use-generate";
 import { useCharacters, usePersonas } from "../../hooks/use-characters";
 import { api } from "../../lib/api-client";
 import { useGameStateStore } from "../../stores/game-state.store";
-import {
-  BookOpen,
-  HelpCircle,
-  MessageSquare,
-  Theater,
-} from "lucide-react";
+import { BookOpen, HelpCircle, MessageSquare, Theater } from "lucide-react";
 import type { SpritePlacement, SpriteSide } from "@marinara-engine/shared";
 import { useUIStore } from "../../stores/ui.store";
 import { useAgentStore } from "../../stores/agent.store";
@@ -224,7 +229,10 @@ export function ChatArea() {
   }, [chat]);
   const spriteCharacterIds: string[] = Array.isArray(chatMeta.spriteCharacterIds) ? chatMeta.spriteCharacterIds : [];
   const spritePosition: SpriteSide = chatMeta.spritePosition === "right" ? "right" : "left";
-  const spritePlacements = useMemo(() => normalizeSpritePlacements(chatMeta.spritePlacements), [chatMeta.spritePlacements]);
+  const spritePlacements = useMemo(
+    () => normalizeSpritePlacements(chatMeta.spritePlacements),
+    [chatMeta.spritePlacements],
+  );
   const hasCustomSpritePlacements = Object.keys(spritePlacements).length > 0;
   // Prefer per-swipe expressions from the last assistant message's extra (survives swipe switching),
   // falling back to chat-level metadata for backward compatibility.
@@ -815,7 +823,9 @@ export function ChatArea() {
   // ═══════════════════════════════════════════════
   const msgPayload = (messages ?? []).map((m) => ({ role: m.role, characterId: m.characterId, content: m.content }));
   const chatList = (allChats as Array<{ id: string; name: string }> | undefined) ?? [];
-  const connectedChatName = chat?.connectedChatId ? chatList.find((item) => item.id === chat.connectedChatId)?.name : undefined;
+  const connectedChatName = chat?.connectedChatId
+    ? chatList.find((item) => item.id === chat.connectedChatId)?.name
+    : undefined;
   const conversationSceneInfo =
     chatMeta.activeSceneChatId && chatList.some((item) => item.id === chatMeta.activeSceneChatId)
       ? { variant: "origin" as const, sceneChatId: chatMeta.activeSceneChatId }
@@ -847,6 +857,7 @@ export function ChatArea() {
           characterMap={characterMap}
           characterNames={characterNames}
           personaInfo={personaInfo}
+          chatMeta={chatMeta}
           chatCharIds={chatCharIds}
           connectedChatName={connectedChatName}
           sceneInfo={conversationSceneInfo}
@@ -1054,4 +1065,3 @@ function QuickStartCard({
     </div>
   );
 }
-
