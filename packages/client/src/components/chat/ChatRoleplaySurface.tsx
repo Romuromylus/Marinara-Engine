@@ -22,7 +22,6 @@ import {
   ScrollText,
   Settings2,
   Swords,
-  X,
   ChevronUp,
   ArrowRightLeft,
   FlipHorizontal2,
@@ -31,7 +30,6 @@ import { cn } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useGameStateStore } from "../../stores/game-state.store";
-import { useUpdateChatMetadata } from "../../hooks/use-chats";
 import { useActiveLorebookEntries } from "../../hooks/use-lorebooks";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
@@ -75,6 +73,16 @@ const EncounterModal = lazy(async () => {
 const SummaryPopover = lazy(async () => {
   const module = await import("./SummaryPopover");
   return { default: module.SummaryPopover };
+});
+
+const WorldInfoPanel = lazy(async () => {
+  const module = await import("./ChatRoleplayPanels");
+  return { default: module.WorldInfoPanel };
+});
+
+const AuthorNotesPanel = lazy(async () => {
+  const module = await import("./ChatRoleplayPanels");
+  return { default: module.AuthorNotesPanel };
 });
 
 function WeatherEffectsConnected() {
@@ -332,43 +340,6 @@ function SummaryButton({
   );
 }
 
-function WorldInfoEntryRow({
-  entry,
-}: {
-  entry: { name: string; keys: string[]; content: string; constant: boolean; order: number };
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div
-      className="cursor-pointer rounded-lg bg-[var(--secondary)] p-2 text-xs transition-colors hover:bg-[var(--accent)]"
-      onClick={() => setExpanded(!expanded)}
-    >
-      <div className="flex items-center gap-2">
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-        <span className="truncate font-medium text-[var(--foreground)]/80">{entry.name}</span>
-        {entry.constant && (
-          <span className="shrink-0 rounded bg-amber-400/15 px-1 py-0.5 text-[0.5rem] font-medium text-amber-400">
-            CONST
-          </span>
-        )}
-        <span className="ml-auto shrink-0 text-[0.625rem] text-[var(--muted-foreground)]">#{entry.order}</span>
-      </div>
-      {entry.keys.length > 0 && (
-        <p className="mt-0.5 truncate text-[0.625rem] text-[var(--muted-foreground)]">
-          Keys: {entry.keys.slice(0, 5).join(", ")}
-          {entry.keys.length > 5 && ` +${entry.keys.length - 5}`}
-        </p>
-      )}
-      {expanded && (
-        <p className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-[var(--border)] pt-1.5 text-[0.6875rem] leading-relaxed text-[var(--muted-foreground)]">
-          {entry.content || "(empty)"}
-        </p>
-      )}
-    </div>
-  );
-}
-
 function WorldInfoButton({ chatId }: { chatId: string | null }) {
   const [open, setOpen] = useState(false);
   const { data, isLoading } = useActiveLorebookEntries(chatId, true);
@@ -398,41 +369,6 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
 
   const entries = data?.entries ?? [];
   const hasEntries = entries.length > 0;
-  const panelContent = (
-    <>
-      <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[var(--foreground)]">
-        <Globe size="0.75rem" />
-        Active World Info
-        {isMobile && (
-          <button
-            onClick={() => setOpen(false)}
-            className="ml-auto rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-          >
-            <X size="0.75rem" />
-          </button>
-        )}
-      </h3>
-      {isLoading ? (
-        <div className="flex items-center gap-2 py-4 text-xs text-[var(--muted-foreground)]">
-          <Loader2 size="0.75rem" className="animate-spin" />
-          Scanning entries…
-        </div>
-      ) : entries.length === 0 ? (
-        <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">No active entries for this chat</p>
-      ) : (
-        <>
-          <p className="mb-2 text-[0.625rem] text-[var(--muted-foreground)]">
-            {entries.length} active • ~{(data?.totalTokens ?? 0).toLocaleString()} tokens
-          </p>
-          <div className="space-y-1.5">
-            {entries.map((entry) => (
-              <WorldInfoEntryRow key={entry.id} entry={entry} />
-            ))}
-          </div>
-        </>
-      )}
-    </>
-  );
 
   return (
     <div className="relative" ref={ref} onClick={(e) => e.stopPropagation()}>
@@ -463,14 +399,32 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
                 className="relative max-h-[calc(100dvh-4rem)] w-full max-w-sm overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-2xl shadow-black/40 animate-message-in"
                 onClick={(e) => e.stopPropagation()}
               >
-                {panelContent}
+                <Suspense
+                  fallback={
+                    <div className="flex items-center gap-2 py-4 text-xs text-[var(--muted-foreground)]">
+                      <Loader2 size="0.75rem" className="animate-spin" />
+                      Loading world info...
+                    </div>
+                  }
+                >
+                  <WorldInfoPanel chatId={chatId} isMobile={isMobile} onClose={() => setOpen(false)} />
+                </Suspense>
               </div>
             </div>,
             document.body,
           )
         ) : (
           <div className="absolute right-0 top-full z-50 mt-2 max-h-[60vh] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-2xl shadow-black/40 animate-message-in">
-            {panelContent}
+            <Suspense
+              fallback={
+                <div className="flex items-center gap-2 py-4 text-xs text-[var(--muted-foreground)]">
+                  <Loader2 size="0.75rem" className="animate-spin" />
+                  Loading world info...
+                </div>
+              }
+            >
+              <WorldInfoPanel chatId={chatId} isMobile={isMobile} onClose={() => setOpen(false)} />
+            </Suspense>
           </div>
         ))}
     </div>
@@ -479,19 +433,9 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
 
 function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMeta: Record<string, any> }) {
   const [open, setOpen] = useState(false);
-  const [notes, setNotes] = useState((chatMeta.authorNotes as string) ?? "");
-  const [depthStr, setDepthStr] = useState(String((chatMeta.authorNotesDepth as number) ?? 4));
-  const updateMeta = useUpdateChatMetadata();
   const ref = useRef<HTMLDivElement>(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const compact = useUIStore((s) => s.centerCompact);
-
-  useEffect(() => {
-    setNotes((chatMeta.authorNotes as string) ?? "");
-    setDepthStr(String((chatMeta.authorNotesDepth as number) ?? 4));
-  }, [chatMeta.authorNotes, chatMeta.authorNotesDepth]);
-
-  const depth = parseInt(depthStr, 10) || 0;
 
   useEffect(() => {
     if (!open || isMobile) return;
@@ -513,56 +457,7 @@ function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMe
 
   if (!chatId) return null;
 
-  const hasNotes = !!notes.trim();
-  const handleSave = () => {
-    updateMeta.mutate({ id: chatId, authorNotes: notes, authorNotesDepth: depth });
-  };
-
-  const panelContent = (
-    <>
-      <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[var(--foreground)]">
-        <PenLine size="0.75rem" />
-        Author's Notes
-        {isMobile && (
-          <button
-            onClick={() => setOpen(false)}
-            className="ml-auto rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-          >
-            <X size="0.75rem" />
-          </button>
-        )}
-      </h3>
-      <p className="mb-2 text-[0.625rem] text-[var(--muted-foreground)]">
-        Text here is injected into the prompt at the chosen depth every generation.
-      </p>
-      <textarea
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        onBlur={handleSave}
-        placeholder="e.g. Keep the tone dark and suspenseful. The villain is secretly an ally."
-        className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-2 text-xs text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)] focus:ring-2 focus:ring-[var(--ring)]"
-        rows={4}
-      />
-      <div className="mt-2 flex items-center gap-2">
-        <span className="shrink-0 text-[0.625rem] text-[var(--muted-foreground)]">Injection Depth</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={depthStr}
-          onChange={(e) => setDepthStr(e.target.value.replace(/[^0-9]/g, ""))}
-          onBlur={() => {
-            const nextDepth = Math.max(0, parseInt(depthStr, 10) || 0);
-            setDepthStr(String(nextDepth));
-            updateMeta.mutate({ id: chatId, authorNotes: notes, authorNotesDepth: nextDepth });
-          }}
-          className="w-14 rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-0.5 text-center text-[0.625rem] text-[var(--foreground)] outline-none transition-colors [appearance:textfield] focus:ring-2 focus:ring-[var(--ring)] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-        />
-      </div>
-      <p className="mt-1 text-[0.5625rem] text-[var(--muted-foreground)]/60">
-        Depth 0 = end of conversation, 4 = four messages from the end.
-      </p>
-    </>
-  );
+  const hasNotes = !!String(chatMeta.authorNotes ?? "").trim();
 
   return (
     <div className="relative" ref={ref} onClick={(e) => e.stopPropagation()}>
@@ -593,14 +488,42 @@ function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMe
                 className="relative max-h-[calc(100dvh-4rem)] w-full max-w-sm overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-2xl shadow-black/40 animate-message-in"
                 onClick={(e) => e.stopPropagation()}
               >
-                {panelContent}
+                <Suspense
+                  fallback={
+                    <div className="flex items-center gap-2 py-4 text-xs text-[var(--muted-foreground)]">
+                      <Loader2 size="0.75rem" className="animate-spin" />
+                      Loading author's notes...
+                    </div>
+                  }
+                >
+                  <AuthorNotesPanel
+                    chatId={chatId}
+                    chatMeta={chatMeta}
+                    isMobile={isMobile}
+                    onClose={() => setOpen(false)}
+                  />
+                </Suspense>
               </div>
             </div>,
             document.body,
           )
         ) : (
           <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-2xl shadow-black/40 animate-message-in">
-            {panelContent}
+            <Suspense
+              fallback={
+                <div className="flex items-center gap-2 py-4 text-xs text-[var(--muted-foreground)]">
+                  <Loader2 size="0.75rem" className="animate-spin" />
+                  Loading author's notes...
+                </div>
+              }
+            >
+              <AuthorNotesPanel
+                chatId={chatId}
+                chatMeta={chatMeta}
+                isMobile={isMobile}
+                onClose={() => setOpen(false)}
+              />
+            </Suspense>
           </div>
         ))}
     </div>
@@ -837,7 +760,11 @@ export function ChatRoleplaySurface({
                     />
                     <WorldInfoButton chatId={chat?.id ?? null} />
                     <AuthorNotesButton chatId={chat?.id ?? null} chatMeta={chatMeta} />
-                    <RpToolbarButton icon={<FolderOpen size="0.875rem" />} title="Manage Chat Files" onClick={onOpenFiles} />
+                    <RpToolbarButton
+                      icon={<FolderOpen size="0.875rem" />}
+                      title="Manage Chat Files"
+                      onClick={onOpenFiles}
+                    />
                     {expressionAgentEnabled && spriteCharacterIds.length > 0 && (
                       <RpToolbarButton
                         icon={<Move size="0.875rem" />}
@@ -864,11 +791,20 @@ export function ChatRoleplaySurface({
                         onClick={() => useChatStore.getState().setActiveChatId(chat.connectedChatId!)}
                       />
                     )}
-                    <RpToolbarButton icon={<Settings2 size="0.875rem" />} title="Chat Settings" onClick={onOpenSettings} />
+                    <RpToolbarButton
+                      icon={<Settings2 size="0.875rem" />}
+                      title="Chat Settings"
+                      onClick={onOpenSettings}
+                    />
                   </ToolbarMenu>
                 </div>
               </div>
-              <div className={cn("pointer-events-auto relative z-40 w-full flex-col", centerCompact ? "flex" : "flex md:hidden")}>
+              <div
+                className={cn(
+                  "pointer-events-auto relative z-40 w-full flex-col",
+                  centerCompact ? "flex" : "flex md:hidden",
+                )}
+              >
                 {chat && chatMeta.enableAgents && (
                   <div className="flex w-full items-center justify-between px-2 pb-1 pt-2">
                     <Suspense fallback={null}>
@@ -891,7 +827,11 @@ export function ChatRoleplaySurface({
                       />
                       <WorldInfoButton chatId={chat?.id ?? null} />
                       <AuthorNotesButton chatId={chat?.id ?? null} chatMeta={chatMeta} />
-                      <RpToolbarButton icon={<FolderOpen size="0.875rem" />} title="Manage Chat Files" onClick={onOpenFiles} />
+                      <RpToolbarButton
+                        icon={<FolderOpen size="0.875rem" />}
+                        title="Manage Chat Files"
+                        onClick={onOpenFiles}
+                      />
                       {expressionAgentEnabled && spriteCharacterIds.length > 0 && (
                         <RpToolbarButton
                           icon={<Move size="0.875rem" />}
@@ -918,7 +858,11 @@ export function ChatRoleplaySurface({
                           onClick={() => useChatStore.getState().setActiveChatId(chat.connectedChatId!)}
                         />
                       )}
-                      <RpToolbarButton icon={<Settings2 size="0.875rem" />} title="Chat Settings" onClick={onOpenSettings} />
+                      <RpToolbarButton
+                        icon={<Settings2 size="0.875rem" />}
+                        title="Chat Settings"
+                        onClick={onOpenSettings}
+                      />
                     </ToolbarMenu>
                   </div>
                 )}
@@ -933,7 +877,11 @@ export function ChatRoleplaySurface({
                       />
                       <WorldInfoButton chatId={chat?.id ?? null} />
                       <AuthorNotesButton chatId={chat?.id ?? null} chatMeta={chatMeta} />
-                      <RpToolbarButton icon={<FolderOpen size="0.875rem" />} title="Manage Chat Files" onClick={onOpenFiles} />
+                      <RpToolbarButton
+                        icon={<FolderOpen size="0.875rem" />}
+                        title="Manage Chat Files"
+                        onClick={onOpenFiles}
+                      />
                       <RpToolbarButton icon={<Image size="0.875rem" />} title="Gallery" onClick={onOpenGallery} />
                       {chat?.connectedChatId && (
                         <RpToolbarButton
@@ -942,7 +890,11 @@ export function ChatRoleplaySurface({
                           onClick={() => useChatStore.getState().setActiveChatId(chat.connectedChatId!)}
                         />
                       )}
-                      <RpToolbarButton icon={<Settings2 size="0.875rem" />} title="Chat Settings" onClick={onOpenSettings} />
+                      <RpToolbarButton
+                        icon={<Settings2 size="0.875rem" />}
+                        title="Chat Settings"
+                        onClick={onOpenSettings}
+                      />
                     </ToolbarMenu>
                   </div>
                 )}
