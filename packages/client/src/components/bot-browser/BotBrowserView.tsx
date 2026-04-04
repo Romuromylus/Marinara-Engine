@@ -143,18 +143,62 @@ const STAT_ICONS = {
 // ════════════════════════════════════════════════
 
 const JANNY_TAG_MAP: Record<number, string> = {
-  1: "Male", 2: "Female", 3: "Non-binary", 4: "Celebrity", 5: "OC",
-  6: "Fictional", 7: "Real", 8: "Game", 9: "Anime", 10: "Historical",
-  11: "Royalty", 12: "Detective", 13: "Hero", 14: "Villain", 15: "Magical",
-  16: "Non-human", 17: "Monster", 18: "Monster Girl", 19: "Alien", 20: "Robot",
-  21: "Politics", 22: "Vampire", 23: "Giant", 24: "OpenAI", 25: "Elf",
-  26: "Multiple", 27: "VTuber", 28: "Dominant", 29: "Submissive", 30: "Scenario",
-  31: "Pokemon", 32: "Assistant", 34: "Non-English", 36: "Philosophy",
-  38: "RPG", 39: "Religion", 41: "Books", 42: "AnyPOV", 43: "Angst",
-  44: "Demi-Human", 45: "Enemies to Lovers", 46: "Smut", 47: "MLM",
-  48: "WLW", 49: "Action", 50: "Romance", 51: "Horror", 52: "Slice of Life",
-  53: "Fantasy", 54: "Drama", 55: "Comedy", 56: "Mystery", 57: "Sci-Fi",
-  59: "Yandere", 60: "Furry", 61: "Movies/TV",
+  1: "Male",
+  2: "Female",
+  3: "Non-binary",
+  4: "Celebrity",
+  5: "OC",
+  6: "Fictional",
+  7: "Real",
+  8: "Game",
+  9: "Anime",
+  10: "Historical",
+  11: "Royalty",
+  12: "Detective",
+  13: "Hero",
+  14: "Villain",
+  15: "Magical",
+  16: "Non-human",
+  17: "Monster",
+  18: "Monster Girl",
+  19: "Alien",
+  20: "Robot",
+  21: "Politics",
+  22: "Vampire",
+  23: "Giant",
+  24: "OpenAI",
+  25: "Elf",
+  26: "Multiple",
+  27: "VTuber",
+  28: "Dominant",
+  29: "Submissive",
+  30: "Scenario",
+  31: "Pokemon",
+  32: "Assistant",
+  34: "Non-English",
+  36: "Philosophy",
+  38: "RPG",
+  39: "Religion",
+  41: "Books",
+  42: "AnyPOV",
+  43: "Angst",
+  44: "Demi-Human",
+  45: "Enemies to Lovers",
+  46: "Smut",
+  47: "MLM",
+  48: "WLW",
+  49: "Action",
+  50: "Romance",
+  51: "Horror",
+  52: "Slice of Life",
+  53: "Fantasy",
+  54: "Drama",
+  55: "Comedy",
+  56: "Mystery",
+  57: "Sci-Fi",
+  59: "Yandere",
+  60: "Furry",
+  61: "Movies/TV",
 };
 
 function jannyTagNames(ids: number[]): string[] {
@@ -248,16 +292,26 @@ const chubProvider: ProviderConfig = {
     const hasMore = !!data?.cursor;
     const chubTotal = hasMore ? (p.page + 1) * 48 : (p.page - 1) * 48 + nodes.length;
 
-
     return {
       cards: nodes.map((n: any) => ({
-        id: n.fullPath, name: n.name || "Unnamed",
-        creator: (n.fullPath || "").split("/")[0] || "", tagline: n.tagline || "",
-        tags: n.topics || [], avatarUrl: `/api/bot-browser/chub/avatar/${n.fullPath}`,
-        stat1: n.starCount || 0, stat1Label: "Downloads", stat1Icon: "download" as const,
-        stat2: n.nChats || 0, stat2Label: "Chats", stat2Icon: "message" as const,
-        stat3: n.nTokens || 0, stat3Label: "Tokens", stat3Icon: "hash" as const,
-        nsfw: !!n.nsfw, externalUrl: `https://chub.ai/characters/${n.fullPath}`, _raw: n,
+        id: n.fullPath,
+        name: n.name || "Unnamed",
+        creator: (n.fullPath || "").split("/")[0] || "",
+        tagline: n.tagline || "",
+        tags: n.topics || [],
+        avatarUrl: `/api/bot-browser/chub/avatar/${n.fullPath}`,
+        stat1: n.starCount || 0,
+        stat1Label: "Downloads",
+        stat1Icon: "download" as const,
+        stat2: n.nChats || 0,
+        stat2Label: "Chats",
+        stat2Icon: "message" as const,
+        stat3: n.nTokens || 0,
+        stat3Label: "Tokens",
+        stat3Icon: "hash" as const,
+        nsfw: !!n.nsfw,
+        externalUrl: `https://chub.ai/characters/${n.fullPath}`,
+        _raw: n,
       })),
       totalCount: chubTotal,
     };
@@ -270,10 +324,14 @@ const chubProvider: ProviderConfig = {
     if (!node) return null;
     const def = node.definition || {};
     return {
-      description: def.personality || undefined, personality: def.tavern_personality || undefined,
-      scenario: def.scenario || undefined, firstMessage: def.first_message || undefined,
-      exampleDialogs: def.example_dialogs || undefined, alternateGreetings: def.alternate_greetings || [],
-      creatorNotes: def.description || undefined, hasLorebook: !!def.embedded_lorebook,
+      description: def.personality || undefined,
+      personality: def.tavern_personality || undefined,
+      scenario: def.scenario || undefined,
+      firstMessage: def.first_message || undefined,
+      exampleDialogs: def.example_dialogs || undefined,
+      alternateGreetings: def.alternate_greetings || [],
+      creatorNotes: def.description || undefined,
+      hasLorebook: !!def.embedded_lorebook,
     };
   },
   importCard: async () => {},
@@ -284,7 +342,10 @@ const chubProvider: ProviderConfig = {
 // ════════════════════════════════════════════════
 
 const jannyProvider: ProviderConfig = {
-  id: "janny", name: "JannyAI", icon: "🤖", siteName: "JannyAI",
+  id: "janny",
+  name: "JannyAI",
+  icon: "🤖",
+  siteName: "JannyAI",
   defaultSort: "newest",
   sortOptions: [
     { value: "newest", label: "🆕 Newest", group: "Date" },
@@ -293,19 +354,30 @@ const jannyProvider: ProviderConfig = {
     { value: "tokens_asc", label: "📊 Least Tokens", group: "Tokens" },
     { value: "relevant", label: "🔍 Relevance", group: "Search" },
   ],
-  features: [], hasSortDirection: false, hasTokenFilters: true,
+  features: [],
+  hasSortDirection: false,
+  hasTokenFilters: true,
   extraToggles: [{ key: "showLowQuality", label: "Show Low Quality", icon: "🚫" }],
-  nsfwAvailable: true, nsfwMode: "free",
+  nsfwAvailable: true,
+  nsfwMode: "free",
   getAvatarUrl: (card) => `/api/bot-browser/janny/avatar/${(card._raw as any)?.avatar || ""}`,
   getExternalUrl: (card) => {
     const raw = card._raw as any;
-    const slug = card.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const slug = card.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
     return `https://jannyai.com/characters/${raw?.id || card.id}_character-${slug}`;
   },
   search: async (p) => {
     const params = new URLSearchParams({
-      q: p.query, page: String(p.page), limit: "80", sort: p.sort,
-      nsfw: String(p.nsfw), min_tokens: p.minTokens || "29", max_tokens: p.maxTokens || "100000",
+      q: p.query,
+      page: String(p.page),
+      limit: "80",
+      sort: p.sort,
+      nsfw: String(p.nsfw),
+      min_tokens: p.minTokens || "29",
+      max_tokens: p.maxTokens || "100000",
     });
     if (p.extraToggles.showLowQuality) params.set("showLowQuality", "true");
     if (p.includeTags.length > 0) {
@@ -328,18 +400,26 @@ const jannyProvider: ProviderConfig = {
     }
     return {
       cards: hits.map((h: any) => ({
-        id: h.id || "", name: h.name || "Unnamed", creator: h.creatorUsername || "",
+        id: h.id || "",
+        name: h.name || "Unnamed",
+        creator: h.creatorUsername || "",
         tagline: (h.description || "").replace(/<[^>]*>/g, "").slice(0, 200),
         tags: jannyTagNames(h.tagIds),
         avatarUrl: h.avatar ? `/api/bot-browser/janny/avatar/${h.avatar}` : "",
-        stat1: h.totalToken || 0, stat1Label: "Tokens", stat1Icon: "hash" as const,
-        stat2: 0, stat2Label: "", stat2Icon: "star" as const,
-        stat3: 0, stat3Label: "", stat3Icon: "star" as const,
+        stat1: h.totalToken || 0,
+        stat1Label: "Tokens",
+        stat1Icon: "hash" as const,
+        stat2: 0,
+        stat2Label: "",
+        stat2Icon: "star" as const,
+        stat3: 0,
+        stat3Label: "",
+        stat3Icon: "star" as const,
         nsfw: !!h.isNsfw,
         externalUrl: `https://jannyai.com/characters/${h.id}_character-${(h.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
         _raw: h,
       })),
-      totalCount: (result?.totalHits ?? totalPages * 80),
+      totalCount: result?.totalHits ?? totalPages * 80,
     };
   },
   fetchDetail: async () => null,
@@ -351,22 +431,33 @@ const jannyProvider: ProviderConfig = {
 // ════════════════════════════════════════════════
 
 const chartavernProvider: ProviderConfig = {
-  id: "chartavern", name: "CharacterTavern", icon: "🍺", siteName: "CharacterTavern",
+  id: "chartavern",
+  name: "CharacterTavern",
+  icon: "🍺",
+  siteName: "CharacterTavern",
   defaultSort: "most_popular",
   sortOptions: [
-    { value: "most_popular", label: "🔥 Most Popular" }, { value: "trending", label: "📈 Trending" },
-    { value: "newest", label: "🆕 Newest" }, { value: "oldest", label: "🕐 Oldest" },
+    { value: "most_popular", label: "🔥 Most Popular" },
+    { value: "trending", label: "📈 Trending" },
+    { value: "newest", label: "🆕 Newest" },
+    { value: "oldest", label: "🕐 Oldest" },
     { value: "most_likes", label: "❤️ Most Liked" },
   ],
   features: [{ key: "lore", label: "Lorebook", icon: "📖" }],
-  hasSortDirection: false, hasTokenFilters: true,
+  hasSortDirection: false,
+  hasTokenFilters: true,
   extraToggles: [{ key: "isOC", label: "Original Character", icon: "⭐" }],
-  nsfwAvailable: false, nsfwMode: "login",
+  nsfwAvailable: false,
+  nsfwMode: "login",
   getAvatarUrl: (card) => `/api/bot-browser/chartavern/avatar/${card.id}`,
   getExternalUrl: (card) => `https://character-tavern.com/character/${card.id}`,
   search: async (p) => {
     const params = new URLSearchParams({
-      q: p.query, page: String(p.page), limit: "60", sort: p.sort, nsfw: String(p.nsfw),
+      q: p.query,
+      page: String(p.page),
+      limit: "60",
+      sort: p.sort,
+      nsfw: String(p.nsfw),
     });
     if (p.includeTags.length > 0) params.set("tags", p.includeTags.join(","));
     if (p.excludeTags.length > 0) params.set("excludeTags", p.excludeTags.join(","));
@@ -380,16 +471,26 @@ const chartavernProvider: ProviderConfig = {
     const hits = data?.hits || [];
     return {
       cards: hits.map((h: any) => ({
-        id: h.path || "", name: h.name || "Unnamed",
-        creator: h.author || (h.path || "").split("/")[0] || "", tagline: h.tagline || "",
+        id: h.path || "",
+        name: h.name || "Unnamed",
+        creator: h.author || (h.path || "").split("/")[0] || "",
+        tagline: h.tagline || "",
         tags: Array.isArray(h.tags) ? h.tags : [],
         avatarUrl: h.path ? `/api/bot-browser/chartavern/avatar/${h.path}` : "",
-        stat1: h.downloads || 0, stat1Label: "Downloads", stat1Icon: "download" as const,
-        stat2: h.likes || 0, stat2Label: "Likes", stat2Icon: "heart" as const,
-        stat3: h.totalTokens || 0, stat3Label: "Tokens", stat3Icon: "hash" as const,
-        nsfw: !!h.isNSFW, externalUrl: `https://character-tavern.com/character/${h.path}`, _raw: h,
+        stat1: h.downloads || 0,
+        stat1Label: "Downloads",
+        stat1Icon: "download" as const,
+        stat2: h.likes || 0,
+        stat2Label: "Likes",
+        stat2Icon: "heart" as const,
+        stat3: h.totalTokens || 0,
+        stat3Label: "Tokens",
+        stat3Icon: "hash" as const,
+        nsfw: !!h.isNSFW,
+        externalUrl: `https://character-tavern.com/character/${h.path}`,
+        _raw: h,
       })),
-      totalCount: (data?.totalHits ?? data?.totalPages ? (data.totalPages * 60) : hits.length),
+      totalCount: (data?.totalHits ?? data?.totalPages) ? data.totalPages * 60 : hits.length,
     };
   },
   fetchDetail: async (card) => {
@@ -406,7 +507,8 @@ const chartavernProvider: ProviderConfig = {
       scenario: c.definition_scenario || undefined,
       firstMessage: c.definition_first_message || undefined,
       exampleDialogs: c.definition_example_messages || undefined,
-      creatorNotes: c.description || undefined, hasLorebook: !!c.lorebookId,
+      creatorNotes: c.description || undefined,
+      hasLorebook: !!c.lorebookId,
     };
   },
   importCard: async () => {},
@@ -417,15 +519,25 @@ const chartavernProvider: ProviderConfig = {
 // ════════════════════════════════════════════════
 
 const pygmalionProvider: ProviderConfig = {
-  id: "pygmalion", name: "Pygmalion", icon: "🔥", siteName: "Pygmalion",
+  id: "pygmalion",
+  name: "Pygmalion",
+  icon: "🔥",
+  siteName: "Pygmalion",
   defaultSort: "downloads",
   sortOptions: [
-    { value: "downloads", label: "⬇️ Downloads" }, { value: "stars", label: "⭐ Stars" },
-    { value: "views", label: "👁️ Views" }, { value: "approved_at", label: "🆕 Newest" },
-    { value: "token_count", label: "📝 Tokens" }, { value: "display_name", label: "🔤 Name" },
+    { value: "downloads", label: "⬇️ Downloads" },
+    { value: "stars", label: "⭐ Stars" },
+    { value: "views", label: "👁️ Views" },
+    { value: "approved_at", label: "🆕 Newest" },
+    { value: "token_count", label: "📝 Tokens" },
+    { value: "display_name", label: "🔤 Name" },
   ],
-  features: [], hasSortDirection: true, hasTokenFilters: false, extraToggles: [],
-  nsfwAvailable: false, nsfwMode: "login",
+  features: [],
+  hasSortDirection: true,
+  hasTokenFilters: false,
+  extraToggles: [],
+  nsfwAvailable: false,
+  nsfwMode: "login",
   getAvatarUrl: (card) => {
     const raw = card._raw as any;
     const av = raw?.avatarUrl;
@@ -436,8 +548,11 @@ const pygmalionProvider: ProviderConfig = {
   getExternalUrl: (card) => `https://pygmalion.chat/character/${card.id}`,
   search: async (p) => {
     const params = new URLSearchParams({
-      q: p.query, page: String(Math.max(0, p.page - 1)), pageSize: "48",
-      orderBy: p.sort, orderDescending: String(!p.sortAsc),
+      q: p.query,
+      page: String(Math.max(0, p.page - 1)),
+      pageSize: "48",
+      orderBy: p.sort,
+      orderDescending: String(!p.sortAsc),
     });
     if (p.includeTags.length > 0) params.set("tagsInclude", p.includeTags.join(","));
     if (p.excludeTags.length > 0) params.set("tagsExclude", p.excludeTags.join(","));
@@ -458,13 +573,24 @@ const pygmalionProvider: ProviderConfig = {
             : `/api/bot-browser/pygmalion/avatar/${av}`;
         }
         return {
-          id: c.id || "", name: c.displayName || "Unnamed",
-          creator: owner.username || owner.displayName || "", tagline: c.description || "",
-          tags: Array.isArray(c.tags) ? c.tags : [], avatarUrl: avatarProxyUrl,
-          stat1: c.downloads || 0, stat1Label: "Downloads", stat1Icon: "download" as const,
-          stat2: c.stars || 0, stat2Label: "Stars", stat2Icon: "star" as const,
-          stat3: c.chatCount || 0, stat3Label: "Chats", stat3Icon: "message" as const,
-          nsfw: !!c.isSensitive, externalUrl: `https://pygmalion.chat/character/${c.id}`, _raw: c,
+          id: c.id || "",
+          name: c.displayName || "Unnamed",
+          creator: owner.username || owner.displayName || "",
+          tagline: c.description || "",
+          tags: Array.isArray(c.tags) ? c.tags : [],
+          avatarUrl: avatarProxyUrl,
+          stat1: c.downloads || 0,
+          stat1Label: "Downloads",
+          stat1Icon: "download" as const,
+          stat2: c.stars || 0,
+          stat2Label: "Stars",
+          stat2Icon: "star" as const,
+          stat3: c.chatCount || 0,
+          stat3Label: "Chats",
+          stat3Icon: "message" as const,
+          nsfw: !!c.isSensitive,
+          externalUrl: `https://pygmalion.chat/character/${c.id}`,
+          _raw: c,
         };
       }),
       totalCount: totalItems,
@@ -478,8 +604,10 @@ const pygmalionProvider: ProviderConfig = {
     if (!char) return null;
     const p = char.personality || {};
     return {
-      description: p.persona || undefined, firstMessage: p.greeting || undefined,
-      exampleDialogs: p.mesExample || undefined, creatorNotes: p.characterNotes || undefined,
+      description: p.persona || undefined,
+      firstMessage: p.greeting || undefined,
+      exampleDialogs: p.mesExample || undefined,
+      creatorNotes: p.characterNotes || undefined,
       alternateGreetings: Array.isArray(p.alternateGreetings) ? p.alternateGreetings.filter(Boolean) : [],
     };
   },
@@ -491,16 +619,28 @@ const pygmalionProvider: ProviderConfig = {
 // ════════════════════════════════════════════════
 
 const wyvernProvider: ProviderConfig = {
-  id: "wyvern", name: "Wyvern", icon: "🐉", siteName: "Wyvern",
+  id: "wyvern",
+  name: "Wyvern",
+  icon: "🐉",
+  siteName: "Wyvern",
   defaultSort: "popular",
   sortOptions: [
-    { value: "popular", label: "🔥 Popular" }, { value: "nsfw-popular", label: "🔞 Popular NSFW" },
-    { value: "recommended", label: "⭐ Recommended" }, { value: "created_at", label: "🆕 New" },
-    { value: "votes", label: "❤️ Most Likes" }, { value: "messages", label: "💬 Most Messages" },
+    { value: "popular", label: "🔥 Popular" },
+    { value: "nsfw-popular", label: "🔞 Popular NSFW" },
+    { value: "recommended", label: "⭐ Recommended" },
+    { value: "created_at", label: "🆕 New" },
+    { value: "votes", label: "❤️ Most Likes" },
+    { value: "messages", label: "💬 Most Messages" },
   ],
-  features: [{ key: "lore", label: "Lorebook", icon: "📖" }, { key: "greetings", label: "Alt Greetings", icon: "💬" }],
-  hasSortDirection: false, hasTokenFilters: true, extraToggles: [],
-  nsfwAvailable: false, nsfwMode: "wyvern",
+  features: [
+    { key: "lore", label: "Lorebook", icon: "📖" },
+    { key: "greetings", label: "Alt Greetings", icon: "💬" },
+  ],
+  hasSortDirection: false,
+  hasTokenFilters: true,
+  extraToggles: [],
+  nsfwAvailable: false,
+  nsfwMode: "wyvern",
   getAvatarUrl: (card) => {
     const raw = card._raw as any;
     const src = raw?.avatar_url || raw?.avatar;
@@ -538,13 +678,24 @@ const wyvernProvider: ProviderConfig = {
             : `/api/bot-browser/wyvern/avatar/${src}/public`;
         }
         return {
-          id: c.id || "", name: c.name || "Unnamed", creator: creatorName, tagline: c.tagline || "",
-          tags: Array.isArray(c.tags) ? c.tags : [], avatarUrl: avatarProxyUrl,
-          stat1: sr.likes || sr.total_likes || c.likes || 0, stat1Label: "Likes", stat1Icon: "heart" as const,
-          stat2: sr.messages || sr.total_messages || c.messages || 0, stat2Label: "Messages", stat2Icon: "message" as const,
-          stat3: sr.views || sr.total_views || c.views || 0, stat3Label: "Views", stat3Icon: "eye" as const,
+          id: c.id || "",
+          name: c.name || "Unnamed",
+          creator: creatorName,
+          tagline: c.tagline || "",
+          tags: Array.isArray(c.tags) ? c.tags : [],
+          avatarUrl: avatarProxyUrl,
+          stat1: sr.likes || sr.total_likes || c.likes || 0,
+          stat1Label: "Likes",
+          stat1Icon: "heart" as const,
+          stat2: sr.messages || sr.total_messages || c.messages || 0,
+          stat2Label: "Messages",
+          stat2Icon: "message" as const,
+          stat3: sr.views || sr.total_views || c.views || 0,
+          stat3Label: "Views",
+          stat3Icon: "eye" as const,
           nsfw: !!(c.rating && c.rating !== "none"),
-          externalUrl: `https://app.wyvern.chat/characters/${c.id}`, _raw: c,
+          externalUrl: `https://app.wyvern.chat/characters/${c.id}`,
+          _raw: c,
         };
       }),
       totalCount: data?.total ?? (data?.hasMore ? (p.page + 1) * 48 : results.length),
@@ -556,9 +707,12 @@ const wyvernProvider: ProviderConfig = {
     const c = await res.json();
     if (!c) return null;
     return {
-      description: c.description || undefined, personality: c.personality || undefined,
-      scenario: c.scenario || undefined, firstMessage: c.first_mes || undefined,
-      exampleDialogs: c.mes_example || undefined, creatorNotes: c.creator_notes || undefined,
+      description: c.description || undefined,
+      personality: c.personality || undefined,
+      scenario: c.scenario || undefined,
+      firstMessage: c.first_mes || undefined,
+      exampleDialogs: c.mes_example || undefined,
+      creatorNotes: c.creator_notes || undefined,
       alternateGreetings: Array.isArray(c.alternate_greetings) ? c.alternate_greetings.filter(Boolean) : [],
       hasLorebook: !!(c.lorebooks?.length > 0),
     };
@@ -570,7 +724,13 @@ const wyvernProvider: ProviderConfig = {
 // Provider Registry
 // ════════════════════════════════════════════════
 
-const ALL_PROVIDERS: ProviderConfig[] = [chubProvider, jannyProvider, chartavernProvider, pygmalionProvider, wyvernProvider];
+const ALL_PROVIDERS: ProviderConfig[] = [
+  chubProvider,
+  jannyProvider,
+  chartavernProvider,
+  pygmalionProvider,
+  wyvernProvider,
+];
 
 function getProvider(id: string): ProviderConfig {
   return ALL_PROVIDERS.find((p) => p.id === id) ?? chubProvider;
@@ -626,8 +786,18 @@ export function BotBrowserView() {
 
   // ── Check auth sessions on mount ──
   useEffect(() => {
-    fetch("/api/bot-browser/pygmalion/session").then((r) => r.json()).then((d) => { if (d?.active) setPygLoggedIn(true); }).catch(() => {});
-    fetch("/api/bot-browser/chartavern/session").then((r) => r.json()).then((d) => { if (d?.active) setCtLoggedIn(true); }).catch(() => {});
+    fetch("/api/bot-browser/pygmalion/session")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.active) setPygLoggedIn(true);
+      })
+      .catch(() => {});
+    fetch("/api/bot-browser/chartavern/session")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.active) setCtLoggedIn(true);
+      })
+      .catch(() => {});
   }, []);
 
   // ── Dynamically update nsfwAvailable based on auth ──
@@ -670,7 +840,9 @@ export function BotBrowserView() {
 
   useEffect(() => {
     const allTags = new Set<string>();
-    for (const card of results) { if (card.tags) for (const t of card.tags) allTags.add(t); }
+    for (const card of results) {
+      if (card.tags) for (const t of card.tags) allTags.add(t);
+    }
     setAvailableTags((prev) => {
       const merged = new Set([...prev, ...allTags]);
       return Array.from(merged).sort((a, b) => a.localeCompare(b));
@@ -682,8 +854,17 @@ export function BotBrowserView() {
     setError(null);
     try {
       const result = await provider.search({
-        query, page, sort, nsfw, includeTags, excludeTags, sortAsc,
-        minTokens, maxTokens, features, extraToggles,
+        query,
+        page,
+        sort,
+        nsfw,
+        includeTags,
+        excludeTags,
+        sortAsc,
+        minTokens,
+        maxTokens,
+        features,
+        extraToggles,
       });
       setResults(result.cards);
       setTotalCount(result.totalCount);
@@ -693,12 +874,27 @@ export function BotBrowserView() {
     } finally {
       setLoading(false);
     }
-  }, [provider, query, page, sort, nsfw, includeTags, excludeTags, sortAsc, minTokens, maxTokens, features, extraToggles]);
+  }, [
+    provider,
+    query,
+    page,
+    sort,
+    nsfw,
+    includeTags,
+    excludeTags,
+    sortAsc,
+    minTokens,
+    maxTokens,
+    features,
+    extraToggles,
+  ]);
 
   useEffect(() => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(doSearch, query ? 400 : 0);
-    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
   }, [doSearch]);
 
   const openDetail = async (card: BrowseCard) => {
@@ -730,7 +926,8 @@ export function BotBrowserView() {
         const file = new File([blob], "character.png", { type: "image/png" });
         const { json, imageDataUrl } = await parsePngCharacterCard(file);
         const importRes = await fetch("/api/import/st-character", {
-          method: "POST", headers: { "Content-Type": "application/json" },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...json, _avatarDataUrl: imageDataUrl, _botBrowserSource: `${sourceId}:${card.id}` }),
         });
         const data = await importRes.json();
@@ -743,10 +940,15 @@ export function BotBrowserView() {
         let cardDetail = detail;
         if (!cardDetail) cardDetail = await provider.fetchDetail(card);
         const v2: Record<string, unknown> = {
-          name: card.name, description: cardDetail?.description || "",
-          personality: cardDetail?.personality || "", scenario: cardDetail?.scenario || "",
-          first_mes: cardDetail?.firstMessage || "", mes_example: cardDetail?.exampleDialogs || "",
-          creator_notes: cardDetail?.creatorNotes || "", tags: card.tags, creator: card.creator,
+          name: card.name,
+          description: cardDetail?.description || "",
+          personality: cardDetail?.personality || "",
+          scenario: cardDetail?.scenario || "",
+          first_mes: cardDetail?.firstMessage || "",
+          mes_example: cardDetail?.exampleDialogs || "",
+          creator_notes: cardDetail?.creatorNotes || "",
+          tags: card.tags,
+          creator: card.creator,
           alternate_greetings: cardDetail?.alternateGreetings || [],
           extensions: { [`${sourceId}`]: { id: card.id } },
           _botBrowserSource: `${sourceId}:${card.id}`,
@@ -758,13 +960,20 @@ export function BotBrowserView() {
             if (avatarRes.ok) {
               const avatarBlob = await avatarRes.blob();
               const reader = new FileReader();
-              const dataUrl = await new Promise<string>((resolve) => { reader.onload = () => resolve(reader.result as string); reader.readAsDataURL(avatarBlob); });
+              const dataUrl = await new Promise<string>((resolve) => {
+                reader.onload = () => resolve(reader.result as string);
+                reader.readAsDataURL(avatarBlob);
+              });
               v2._avatarDataUrl = dataUrl;
             }
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
         const importRes = await fetch("/api/import/st-character", {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(v2),
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(v2),
         });
         const data = await importRes.json();
         if (data.success) {
@@ -780,9 +989,21 @@ export function BotBrowserView() {
     }
   };
 
-  const toggleIncludeTag = (tag: string) => { setIncludeTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])); setExcludeTags((prev) => prev.filter((t) => t !== tag)); setPage(1); };
-  const toggleExcludeTag = (tag: string) => { setExcludeTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])); setIncludeTags((prev) => prev.filter((t) => t !== tag)); setPage(1); };
-  const clearAllTags = () => { setIncludeTags([]); setExcludeTags([]); setPage(1); };
+  const toggleIncludeTag = (tag: string) => {
+    setIncludeTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
+    setExcludeTags((prev) => prev.filter((t) => t !== tag));
+    setPage(1);
+  };
+  const toggleExcludeTag = (tag: string) => {
+    setExcludeTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
+    setIncludeTags((prev) => prev.filter((t) => t !== tag));
+    setPage(1);
+  };
+  const clearAllTags = () => {
+    setIncludeTags([]);
+    setExcludeTags([]);
+    setPage(1);
+  };
 
   const filteredTags = useMemo(() => {
     if (!tagSearch.trim()) return availableTags;
@@ -792,13 +1013,25 @@ export function BotBrowserView() {
 
   const addCustomTag = () => {
     const custom = tagSearch.trim().toLowerCase();
-    if (custom.length >= 2 && !includeTags.includes(custom)) { setIncludeTags((prev) => [...prev, custom]); setTagSearch(""); setPage(1); }
+    if (custom.length >= 2 && !includeTags.includes(custom)) {
+      setIncludeTags((prev) => [...prev, custom]);
+      setTagSearch("");
+      setPage(1);
+    }
   };
 
-  const toggleFeature = (key: string) => { setFeatures((prev) => ({ ...prev, [key]: !prev[key] })); setPage(1); };
-  const toggleExtra = (key: string) => { setExtraToggles((prev) => ({ ...prev, [key]: !prev[key] })); setPage(1); };
+  const toggleFeature = (key: string) => {
+    setFeatures((prev) => ({ ...prev, [key]: !prev[key] }));
+    setPage(1);
+  };
+  const toggleExtra = (key: string) => {
+    setExtraToggles((prev) => ({ ...prev, [key]: !prev[key] }));
+    setPage(1);
+  };
 
-  const activeFeatureCount = provider.features.filter((f) => features[f.key]).length + provider.extraToggles.filter((t) => extraToggles[t.key]).length;
+  const activeFeatureCount =
+    provider.features.filter((f) => features[f.key]).length +
+    provider.extraToggles.filter((t) => extraToggles[t.key]).length;
   const hasActiveFeatures = activeFeatureCount > 0;
   const canAddCustomTag = tagSearch.trim().length >= 2 && !includeTags.includes(tagSearch.trim().toLowerCase());
 
@@ -810,7 +1043,10 @@ export function BotBrowserView() {
     for (const opt of provider.sortOptions) {
       const groupLabel = opt.group || "";
       let group = groups.find((g) => g.label === groupLabel);
-      if (!group) { group = { label: groupLabel, options: [] }; groups.push(group); }
+      if (!group) {
+        group = { label: groupLabel, options: [] };
+        groups.push(group);
+      }
       group.options.push(opt);
     }
     return groups;
@@ -832,7 +1068,8 @@ export function BotBrowserView() {
     setLoginLoading(true);
     try {
       const res = await fetch("/api/bot-browser/pygmalion/login", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
       const text = await res.text();
@@ -850,7 +1087,8 @@ export function BotBrowserView() {
       // If we got a token, store it on the server
       if (token) {
         await fetch("/api/bot-browser/pygmalion/set-token", {
-          method: "POST", headers: { "Content-Type": "application/json" },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token }),
         });
       }
@@ -879,7 +1117,8 @@ export function BotBrowserView() {
     setLoginLoading(true);
     try {
       const res = await fetch("/api/bot-browser/chartavern/set-cookie", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cookie }),
       });
       const data = await res.json();
@@ -894,7 +1133,9 @@ export function BotBrowserView() {
       setShowLoginModal(false);
       setNsfw(true);
       setPage(1);
-      toast.success(`Logged in to CharacterTavern! ${valData.hasNsfw ? "NSFW content detected." : "NSFW content enabled."}`);
+      toast.success(
+        `Logged in to CharacterTavern! ${valData.hasNsfw ? "NSFW content detected." : "NSFW content enabled."}`,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Cookie validation failed");
     } finally {
@@ -915,22 +1156,37 @@ export function BotBrowserView() {
       {/* ═══ Header ═══ */}
       <div className="relative flex h-12 flex-shrink-0 items-center gap-3 px-4">
         <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border)]/30" />
-        <button onClick={closeBotBrowser} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]">
+        <button
+          onClick={closeBotBrowser}
+          className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+        >
           <ArrowLeft size="0.875rem" /> Back
         </button>
         <h2 className="text-sm font-semibold text-[var(--foreground)]">Browser</h2>
         <div className="relative ml-2">
-          <button onClick={() => setSourceOpen((v) => !v)} className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--accent)]">
-            <span>{provider.icon}</span><span>{provider.name}</span>
+          <button
+            onClick={() => setSourceOpen((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
+          >
+            <span>{provider.icon}</span>
+            <span>{provider.name}</span>
             <ChevronDown size="0.625rem" className={cn("transition-transform", sourceOpen && "rotate-180")} />
           </button>
           {sourceOpen && (
             <div className="absolute left-0 top-full z-50 mt-1 min-w-[180px] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-xl">
               {ALL_PROVIDERS.map((p) => (
-                <button key={p.id} onClick={() => switchProvider(p.id)}
-                  className={cn("flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-xs transition-colors",
-                    p.id === sourceId ? "bg-[var(--primary)]/15 text-[var(--primary)] font-semibold" : "hover:bg-[var(--accent)]")}>
-                  <span className="text-sm">{p.icon}</span><span>{p.name}</span>
+                <button
+                  key={p.id}
+                  onClick={() => switchProvider(p.id)}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-xs transition-colors",
+                    p.id === sourceId
+                      ? "bg-[var(--primary)]/15 text-[var(--primary)] font-semibold"
+                      : "hover:bg-[var(--accent)]",
+                  )}
+                >
+                  <span className="text-sm">{p.icon}</span>
+                  <span>{p.name}</span>
                   {p.id === sourceId && <span className="ml-auto text-[0.6rem]">✓</span>}
                 </button>
               ))}
@@ -939,10 +1195,14 @@ export function BotBrowserView() {
         </div>
         {/* Auth indicator for login providers */}
         {sourceId === "pygmalion" && pygLoggedIn && (
-          <span className="ml-auto flex items-center gap-1 text-[0.65rem] text-emerald-400"><CheckCircle size="0.625rem" /> Logged in</span>
+          <span className="ml-auto flex items-center gap-1 text-[0.65rem] text-emerald-400">
+            <CheckCircle size="0.625rem" /> Logged in
+          </span>
         )}
         {sourceId === "chartavern" && ctLoggedIn && (
-          <span className="ml-auto flex items-center gap-1 text-[0.65rem] text-emerald-400"><CheckCircle size="0.625rem" /> Session active</span>
+          <span className="ml-auto flex items-center gap-1 text-[0.65rem] text-emerald-400">
+            <CheckCircle size="0.625rem" /> Session active
+          </span>
         )}
       </div>
 
@@ -951,32 +1211,84 @@ export function BotBrowserView() {
         {showTagPanel && (
           <div className="flex w-[260px] flex-shrink-0 flex-col border-r border-[var(--border)] bg-[var(--card)]/50">
             <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2">
-              <span className="flex items-center gap-1.5 text-xs font-semibold"><Tag size="0.75rem" /> Tags</span>
+              <span className="flex items-center gap-1.5 text-xs font-semibold">
+                <Tag size="0.75rem" /> Tags
+              </span>
               <div className="flex items-center gap-1">
                 {(includeTags.length > 0 || excludeTags.length > 0) && (
-                  <button onClick={clearAllTags} className="rounded px-1.5 py-0.5 text-[0.6rem] text-[var(--destructive)] hover:bg-[var(--destructive)]/10">Clear</button>
+                  <button
+                    onClick={clearAllTags}
+                    className="rounded px-1.5 py-0.5 text-[0.6rem] text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+                  >
+                    Clear
+                  </button>
                 )}
-                <button onClick={() => setShowTagPanel(false)} className="rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)]"><X size="0.75rem" /></button>
+                <button
+                  onClick={() => setShowTagPanel(false)}
+                  className="rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+                >
+                  <X size="0.75rem" />
+                </button>
               </div>
             </div>
             <div className="px-3 py-2">
-              <input type="text" value={tagSearch} onChange={(e) => setTagSearch(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomTag(); } }}
-                placeholder="Search tags..." className="w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-[var(--primary)]" />
+              <input
+                type="text"
+                value={tagSearch}
+                onChange={(e) => setTagSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addCustomTag();
+                  }
+                }}
+                placeholder="Search tags..."
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-[var(--primary)]"
+              />
             </div>
             {(includeTags.length > 0 || excludeTags.length > 0) && (
               <div className="flex flex-wrap gap-1 border-b border-[var(--border)] px-3 pb-2">
-                {includeTags.map((tag) => (<span key={`inc-${tag}`} onClick={() => toggleIncludeTag(tag)} className="cursor-pointer rounded-full bg-emerald-500/20 px-2 py-0.5 text-[0.6rem] font-medium text-emerald-400 ring-1 ring-emerald-500/30 transition-colors hover:bg-emerald-500/30">+ {tag}</span>))}
-                {excludeTags.map((tag) => (<span key={`exc-${tag}`} onClick={() => toggleExcludeTag(tag)} className="cursor-pointer rounded-full bg-red-500/20 px-2 py-0.5 text-[0.6rem] font-medium text-red-400 ring-1 ring-red-500/30 transition-colors hover:bg-red-500/30">− {tag}</span>))}
+                {includeTags.map((tag) => (
+                  <span
+                    key={`inc-${tag}`}
+                    onClick={() => toggleIncludeTag(tag)}
+                    className="cursor-pointer rounded-full bg-emerald-500/20 px-2 py-0.5 text-[0.6rem] font-medium text-emerald-400 ring-1 ring-emerald-500/30 transition-colors hover:bg-emerald-500/30"
+                  >
+                    + {tag}
+                  </span>
+                ))}
+                {excludeTags.map((tag) => (
+                  <span
+                    key={`exc-${tag}`}
+                    onClick={() => toggleExcludeTag(tag)}
+                    className="cursor-pointer rounded-full bg-red-500/20 px-2 py-0.5 text-[0.6rem] font-medium text-red-400 ring-1 ring-red-500/30 transition-colors hover:bg-red-500/30"
+                  >
+                    − {tag}
+                  </span>
+                ))}
               </div>
             )}
             <div className="flex-1 overflow-y-auto px-1 py-1">
               {canAddCustomTag && (
                 <div className="mx-1 mb-1 flex flex-col gap-1">
-                  <button onClick={addCustomTag} className="flex w-full items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-1.5 text-xs font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20">
+                  <button
+                    onClick={addCustomTag}
+                    className="flex w-full items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-1.5 text-xs font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20"
+                  >
                     + Add <strong>{tagSearch.trim().toLowerCase()}</strong> as filter
                   </button>
-                  <button onClick={() => { const custom = tagSearch.trim().toLowerCase(); if (custom.length >= 2 && !excludeTags.includes(custom)) { setExcludeTags((prev) => [...prev, custom]); setIncludeTags((prev) => prev.filter((t) => t !== custom)); setTagSearch(""); setPage(1); } }} className="flex w-full items-center gap-1.5 rounded-md bg-red-500/10 px-2 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/20">
+                  <button
+                    onClick={() => {
+                      const custom = tagSearch.trim().toLowerCase();
+                      if (custom.length >= 2 && !excludeTags.includes(custom)) {
+                        setExcludeTags((prev) => [...prev, custom]);
+                        setIncludeTags((prev) => prev.filter((t) => t !== custom));
+                        setTagSearch("");
+                        setPage(1);
+                      }
+                    }}
+                    className="flex w-full items-center gap-1.5 rounded-md bg-red-500/10 px-2 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/20"
+                  >
                     − Block <strong>{tagSearch.trim().toLowerCase()}</strong> from results
                   </button>
                 </div>
@@ -990,10 +1302,33 @@ export function BotBrowserView() {
                   const isIncluded = includeTags.includes(tag);
                   const isExcluded = excludeTags.includes(tag);
                   return (
-                    <div key={tag} className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-[var(--accent)]/50">
-                      <button onClick={() => toggleIncludeTag(tag)} className={cn("flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[0.5rem] transition-all", isIncluded ? "border-emerald-500 bg-emerald-500/20 text-emerald-400" : "border-[var(--border)] hover:border-emerald-500/50")}>{isIncluded && "✓"}</button>
+                    <div
+                      key={tag}
+                      className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-[var(--accent)]/50"
+                    >
+                      <button
+                        onClick={() => toggleIncludeTag(tag)}
+                        className={cn(
+                          "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[0.5rem] transition-all",
+                          isIncluded
+                            ? "border-emerald-500 bg-emerald-500/20 text-emerald-400"
+                            : "border-[var(--border)] hover:border-emerald-500/50",
+                        )}
+                      >
+                        {isIncluded && "✓"}
+                      </button>
                       <span className="min-w-0 flex-1 truncate">{tag}</span>
-                      <button onClick={() => toggleExcludeTag(tag)} className={cn("flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[0.5rem] transition-all", isExcluded ? "border-red-500 bg-red-500/20 text-red-400" : "border-red-500/30 text-red-400/40 hover:border-red-500/60 hover:text-red-400 hover:bg-red-500/10")}>−</button>
+                      <button
+                        onClick={() => toggleExcludeTag(tag)}
+                        className={cn(
+                          "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[0.5rem] transition-all",
+                          isExcluded
+                            ? "border-red-500 bg-red-500/20 text-red-400"
+                            : "border-red-500/30 text-red-400/40 hover:border-red-500/60 hover:text-red-400 hover:bg-red-500/10",
+                        )}
+                      >
+                        −
+                      </button>
                     </div>
                   );
                 })
@@ -1005,76 +1340,171 @@ export function BotBrowserView() {
         {/* ═══ Main area ═══ */}
         <div className="flex-1 overflow-y-auto p-4">
           {selectedCard ? (
-            <DetailView card={selectedCard} detail={detail} loading={detailLoading} importing={importing}
-              provider={provider} onBack={() => { setSelectedCard(null); setDetail(null); }} onImport={handleImport} />
+            <DetailView
+              card={selectedCard}
+              detail={detail}
+              loading={detailLoading}
+              importing={importing}
+              provider={provider}
+              onBack={() => {
+                setSelectedCard(null);
+                setDetail(null);
+              }}
+              onImport={handleImport}
+            />
           ) : (
             <div className="flex flex-col gap-4">
               {/* ═══ Toolbar ═══ */}
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative min-w-[200px] flex-1">
-                  <Search size="0.875rem" className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-                  <input type="text" value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }}
-                    placeholder="Search characters..." className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] py-2 pl-9 pr-8 text-sm text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none transition-colors focus:border-[var(--primary)]" />
-                  {query && <button onClick={() => setQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"><X size="0.75rem" /></button>}
+                  <Search
+                    size="0.875rem"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]"
+                  />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      setPage(1);
+                    }}
+                    placeholder="Search characters..."
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] py-2 pl-9 pr-8 text-sm text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none transition-colors focus:border-[var(--primary)]"
+                  />
+                  {query && (
+                    <button
+                      onClick={() => setQuery("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                    >
+                      <X size="0.75rem" />
+                    </button>
+                  )}
                 </div>
 
-                <select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}
-                  className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--foreground)] outline-none">
-                  {sortGroups.map((group) => group.label ? (
-                    <optgroup key={group.label} label={group.label}>{group.options.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</optgroup>
-                  ) : group.options.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>))}
+                <select
+                  value={sort}
+                  onChange={(e) => {
+                    setSort(e.target.value);
+                    setPage(1);
+                  }}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--foreground)] outline-none"
+                >
+                  {sortGroups.map((group) =>
+                    group.label ? (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.options.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : (
+                      group.options.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))
+                    ),
+                  )}
                 </select>
 
-                <button onClick={() => setShowTagPanel((v) => !v)}
-                  className={cn("flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs transition-colors",
-                    showTagPanel || includeTags.length > 0 || excludeTags.length > 0 ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]" : "border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)]")}>
+                <button
+                  onClick={() => setShowTagPanel((v) => !v)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs transition-colors",
+                    showTagPanel || includeTags.length > 0 || excludeTags.length > 0
+                      ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]"
+                      : "border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                  )}
+                >
                   <Tag size="0.75rem" /> Tags
-                  {(includeTags.length > 0 || excludeTags.length > 0) && (<span className="rounded-full bg-[var(--primary)]/20 px-1.5 text-[0.6rem] font-semibold">{includeTags.length + excludeTags.length}</span>)}
+                  {(includeTags.length > 0 || excludeTags.length > 0) && (
+                    <span className="rounded-full bg-[var(--primary)]/20 px-1.5 text-[0.6rem] font-semibold">
+                      {includeTags.length + excludeTags.length}
+                    </span>
+                  )}
                 </button>
 
-                {(provider.features.length > 0 || provider.hasSortDirection || provider.hasTokenFilters || provider.extraToggles.length > 0) && (
-                  <button onClick={() => setShowFiltersPanel((v) => !v)}
-                    className={cn("flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs transition-colors",
-                      showFiltersPanel || hasActiveFeatures ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]" : "border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)]")}>
+                {(provider.features.length > 0 ||
+                  provider.hasSortDirection ||
+                  provider.hasTokenFilters ||
+                  provider.extraToggles.length > 0) && (
+                  <button
+                    onClick={() => setShowFiltersPanel((v) => !v)}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs transition-colors",
+                      showFiltersPanel || hasActiveFeatures
+                        ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]"
+                        : "border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                    )}
+                  >
                     <SlidersHorizontal size="0.75rem" /> Filters
-                    {hasActiveFeatures && <span className="rounded-full bg-[var(--primary)]/20 px-1.5 text-[0.6rem] font-semibold">{activeFeatureCount}</span>}
+                    {hasActiveFeatures && (
+                      <span className="rounded-full bg-[var(--primary)]/20 px-1.5 text-[0.6rem] font-semibold">
+                        {activeFeatureCount}
+                      </span>
+                    )}
                   </button>
                 )}
 
                 {/* NSFW toggle */}
                 <label
-                  className={cn("flex select-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-xs",
-                    effectiveNsfwAvailable ? "cursor-pointer" : "cursor-pointer opacity-50")}
-                  title={effectiveNsfwAvailable ? "Toggle NSFW content" : provider.nsfwMode === "wyvern" ? 'Use the "Popular NSFW" sort option' : `Click to log in to ${provider.name} for NSFW content`}
+                  className={cn(
+                    "flex select-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-xs",
+                    effectiveNsfwAvailable ? "cursor-pointer" : "cursor-pointer opacity-50",
+                  )}
+                  title={
+                    effectiveNsfwAvailable
+                      ? "Toggle NSFW content"
+                      : provider.nsfwMode === "wyvern"
+                        ? 'Use the "Popular NSFW" sort option'
+                        : `Click to log in to ${provider.name} for NSFW content`
+                  }
                   onClick={handleNsfwClick}
                 >
-                  <input type="checkbox" checked={nsfw} disabled={!effectiveNsfwAvailable}
-                    onChange={(e) => { if (effectiveNsfwAvailable) { setNsfw(e.target.checked); setPage(1); } }}
-                    className="accent-[var(--primary)]" /> NSFW
-                  {provider.nsfwMode === "login" && !effectiveNsfwAvailable && <LogIn size="0.625rem" className="ml-0.5 opacity-70" />}
+                  <input
+                    type="checkbox"
+                    checked={nsfw}
+                    disabled={!effectiveNsfwAvailable}
+                    onChange={(e) => {
+                      if (effectiveNsfwAvailable) {
+                        setNsfw(e.target.checked);
+                        setPage(1);
+                      }
+                    }}
+                    className="accent-[var(--primary)]"
+                  />{" "}
+                  NSFW
+                  {provider.nsfwMode === "login" && !effectiveNsfwAvailable && (
+                    <LogIn size="0.625rem" className="ml-0.5 opacity-70" />
+                  )}
                 </label>
 
                 {/* Login button / auth info for providers requiring login */}
-                {provider.nsfwMode === "login" && (
-                  (sourceId === "pygmalion" && pygLoggedIn) || (sourceId === "chartavern" && ctLoggedIn) ? (
+                {provider.nsfwMode === "login" &&
+                  ((sourceId === "pygmalion" && pygLoggedIn) || (sourceId === "chartavern" && ctLoggedIn) ? (
                     <span className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[0.65rem] text-emerald-400">
                       <CheckCircle size="0.625rem" /> NSFW depends on your account settings
                     </span>
                   ) : (
-                    <button onClick={() => setShowLoginModal(true)}
-                      className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-xs transition-colors hover:bg-[var(--accent)]">
+                    <button
+                      onClick={() => setShowLoginModal(true)}
+                      className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-xs transition-colors hover:bg-[var(--accent)]"
+                    >
                       <LogIn size="0.75rem" /> Log In
                     </button>
-                  )
-                )}
+                  ))}
                 {provider.nsfwMode === "wyvern" && (
                   <span className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[0.65rem] text-amber-400">
                     Use "🔞 Popular NSFW" sort for NSFW content
                   </span>
                 )}
 
-
-                <button onClick={doSearch} className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-2 text-xs transition-colors hover:bg-[var(--accent)]" title="Refresh">
+                <button
+                  onClick={doSearch}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-2 text-xs transition-colors hover:bg-[var(--accent)]"
+                  title="Refresh"
+                >
                   <RefreshCw size="0.75rem" />
                 </button>
               </div>
@@ -1084,16 +1514,88 @@ export function BotBrowserView() {
                 <div className="flex flex-wrap gap-6 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/50 px-4 py-3">
                   {(provider.features.length > 0 || provider.extraToggles.length > 0) && (
                     <div className="flex flex-col gap-2">
-                      <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Character Must Have</span>
-                      {provider.features.map((f) => (<label key={f.key} className="flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={!!features[f.key]} onChange={() => toggleFeature(f.key)} className="accent-[var(--primary)]" /><span>{f.icon} {f.label}</span></label>))}
-                      {provider.extraToggles.map((t) => (<label key={t.key} className="flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={!!extraToggles[t.key]} onChange={() => toggleExtra(t.key)} className="accent-[var(--primary)]" /><span>{t.icon} {t.label}</span></label>))}
+                      <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                        Character Must Have
+                      </span>
+                      {provider.features.map((f) => (
+                        <label key={f.key} className="flex cursor-pointer items-center gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={!!features[f.key]}
+                            onChange={() => toggleFeature(f.key)}
+                            className="accent-[var(--primary)]"
+                          />
+                          <span>
+                            {f.icon} {f.label}
+                          </span>
+                        </label>
+                      ))}
+                      {provider.extraToggles.map((t) => (
+                        <label key={t.key} className="flex cursor-pointer items-center gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={!!extraToggles[t.key]}
+                            onChange={() => toggleExtra(t.key)}
+                            className="accent-[var(--primary)]"
+                          />
+                          <span>
+                            {t.icon} {t.label}
+                          </span>
+                        </label>
+                      ))}
                     </div>
                   )}
                   {(provider.hasSortDirection || provider.hasTokenFilters) && (
                     <div className="flex flex-col gap-2">
-                      <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Advanced Options</span>
-                      {provider.hasSortDirection && (<div className="flex items-center gap-2"><label className="w-24 text-xs text-[var(--muted-foreground)]">Sort Direction</label><select value={sortAsc ? "asc" : "desc"} onChange={(e) => { setSortAsc(e.target.value === "asc"); setPage(1); }} className="rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none"><option value="desc">Descending</option><option value="asc">Ascending</option></select></div>)}
-                      {provider.hasTokenFilters && (<><div className="flex items-center gap-2"><label className="w-24 text-xs text-[var(--muted-foreground)]">Min Tokens</label><input type="number" value={minTokens} onChange={(e) => { setMinTokens(e.target.value); setPage(1); }} placeholder="50" className="w-20 rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none focus:border-[var(--primary)]" /></div><div className="flex items-center gap-2"><label className="w-24 text-xs text-[var(--muted-foreground)]">Max Tokens</label><input type="number" value={maxTokens} onChange={(e) => { setMaxTokens(e.target.value); setPage(1); }} placeholder="100000" className="w-20 rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none focus:border-[var(--primary)]" /></div></>)}
+                      <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                        Advanced Options
+                      </span>
+                      {provider.hasSortDirection && (
+                        <div className="flex items-center gap-2">
+                          <label className="w-24 text-xs text-[var(--muted-foreground)]">Sort Direction</label>
+                          <select
+                            value={sortAsc ? "asc" : "desc"}
+                            onChange={(e) => {
+                              setSortAsc(e.target.value === "asc");
+                              setPage(1);
+                            }}
+                            className="rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none"
+                          >
+                            <option value="desc">Descending</option>
+                            <option value="asc">Ascending</option>
+                          </select>
+                        </div>
+                      )}
+                      {provider.hasTokenFilters && (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <label className="w-24 text-xs text-[var(--muted-foreground)]">Min Tokens</label>
+                            <input
+                              type="number"
+                              value={minTokens}
+                              onChange={(e) => {
+                                setMinTokens(e.target.value);
+                                setPage(1);
+                              }}
+                              placeholder="50"
+                              className="w-20 rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none focus:border-[var(--primary)]"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <label className="w-24 text-xs text-[var(--muted-foreground)]">Max Tokens</label>
+                            <input
+                              type="number"
+                              value={maxTokens}
+                              onChange={(e) => {
+                                setMaxTokens(e.target.value);
+                                setPage(1);
+                              }}
+                              placeholder="100000"
+                              className="w-20 rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none focus:border-[var(--primary)]"
+                            />
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1101,24 +1603,50 @@ export function BotBrowserView() {
 
               {/* ═══ Results ═══ */}
               {loading ? (
-                <div className="flex flex-1 items-center justify-center py-12"><Loader2 size="1.5rem" className="animate-spin text-[var(--muted-foreground)]" /></div>
+                <div className="flex flex-1 items-center justify-center py-12">
+                  <Loader2 size="1.5rem" className="animate-spin text-[var(--muted-foreground)]" />
+                </div>
               ) : error ? (
                 <div className="flex flex-1 flex-col items-center justify-center gap-3 py-12">
                   <span className="text-sm text-[var(--destructive)]">{error}</span>
-                  <button onClick={doSearch} className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)]/15 px-4 py-2 text-xs font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/25"><RefreshCw size="0.75rem" /> Refresh</button>
+                  <button
+                    onClick={doSearch}
+                    className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)]/15 px-4 py-2 text-xs font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/25"
+                  >
+                    <RefreshCw size="0.75rem" /> Refresh
+                  </button>
                 </div>
               ) : results.length === 0 ? (
-                <div className="flex flex-1 items-center justify-center py-12 text-sm text-[var(--muted-foreground)]">No characters found</div>
+                <div className="flex flex-1 items-center justify-center py-12 text-sm text-[var(--muted-foreground)]">
+                  No characters found
+                </div>
               ) : (
                 <>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                    {results.map((card) => (<CardTile key={card.id} card={card} onClick={() => openDetail(card)} />))}
+                    {results.map((card) => (
+                      <CardTile key={card.id} card={card} onClick={() => openDetail(card)} />
+                    ))}
                   </div>
                   {(totalPages > 1 || page > 1) && (
                     <div className="flex items-center justify-center gap-2 pt-2 pb-4">
-                      <button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-40">Previous</button>
-                      <span className="text-xs text-[var(--muted-foreground)]">Page {page}{totalPages > 1 && totalPages < 9000 ? ` of ${totalPages}` : ""}</span>
-                      <button disabled={page >= totalPages && totalPages > 1} onClick={() => setPage((p) => p + 1)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-40">Next</button>
+                      <button
+                        disabled={page <= 1}
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-40"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-xs text-[var(--muted-foreground)]">
+                        Page {page}
+                        {totalPages > 1 && totalPages < 9000 ? ` of ${totalPages}` : ""}
+                      </span>
+                      <button
+                        disabled={page >= totalPages && totalPages > 1}
+                        onClick={() => setPage((p) => p + 1)}
+                        className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-40"
+                      >
+                        Next
+                      </button>
                     </div>
                   )}
                 </>
@@ -1151,10 +1679,28 @@ export function BotBrowserView() {
 // Login Modal
 // ════════════════════════════════════════════════
 
-function LoginModal({ sourceId, provider, pygLoggedIn, ctLoggedIn, loginLoading, onClose, onPygLogin, onPygLogout, onCtSetCookie, onCtLogout }: {
-  sourceId: string; provider: ProviderConfig; pygLoggedIn: boolean; ctLoggedIn: boolean; loginLoading: boolean;
-  onClose: () => void; onPygLogin: (u: string, p: string) => void; onPygLogout: () => void;
-  onCtSetCookie: (c: string) => void; onCtLogout: () => void;
+function LoginModal({
+  sourceId,
+  provider,
+  pygLoggedIn,
+  ctLoggedIn,
+  loginLoading,
+  onClose,
+  onPygLogin,
+  onPygLogout,
+  onCtSetCookie,
+  onCtLogout,
+}: {
+  sourceId: string;
+  provider: ProviderConfig;
+  pygLoggedIn: boolean;
+  ctLoggedIn: boolean;
+  loginLoading: boolean;
+  onClose: () => void;
+  onPygLogin: (u: string, p: string) => void;
+  onPygLogout: () => void;
+  onCtSetCookie: (c: string) => void;
+  onCtLogout: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1166,15 +1712,36 @@ function LoginModal({ sourceId, provider, pygLoggedIn, ctLoggedIn, loginLoading,
   const isLoggedIn = isPyg ? pygLoggedIn : ctLoggedIn;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="relative w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
           <h3 className="flex items-center gap-2 text-sm font-bold text-[var(--foreground)]">
-            {isPyg ? <><KeyRound size="1rem" className="text-amber-400" /> Pygmalion Authentication</> : <><Cookie size="1rem" className="text-amber-400" /> CharacterTavern Session</>}
+            {isPyg ? (
+              <>
+                <KeyRound size="1rem" className="text-amber-400" /> Pygmalion Authentication
+              </>
+            ) : (
+              <>
+                <Cookie size="1rem" className="text-amber-400" /> CharacterTavern Session
+              </>
+            )}
           </h3>
-          <button onClick={onClose} className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"><X size="1rem" /></button>
+          <button
+            onClick={onClose}
+            className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+          >
+            <X size="1rem" />
+          </button>
         </div>
 
         <div className="flex flex-col gap-4 p-5">
@@ -1185,7 +1752,10 @@ function LoginModal({ sourceId, provider, pygLoggedIn, ctLoggedIn, loginLoading,
           </div>
           <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-[var(--foreground)]">
             <span className="mr-1.5">{isPyg ? "🔑" : "🍪"}</span>
-            <strong>Optional:</strong> {isPyg ? "Log in to enable NSFW content, follow authors, and access your Following timeline." : "Paste your session cookies to see NSFW-tagged content."}
+            <strong>Optional:</strong>{" "}
+            {isPyg
+              ? "Log in to enable NSFW content, follow authors, and access your Following timeline."
+              : "Paste your session cookies to see NSFW-tagged content."}
           </div>
 
           {/* Login form */}
@@ -1193,34 +1763,61 @@ function LoginModal({ sourceId, provider, pygLoggedIn, ctLoggedIn, loginLoading,
             <div className="flex flex-col gap-3">
               <div>
                 <label className="mb-1 block text-xs text-[var(--muted-foreground)]">Email</label>
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={isLoggedIn || loginLoading}
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={isLoggedIn || loginLoading}
                   placeholder="your-email@example.com"
-                  onKeyDown={(e) => { if (e.key === "Enter" && email && password) onPygLogin(email, password); }}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--primary)] disabled:opacity-50" />
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && email && password) onPygLogin(email, password);
+                  }}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--primary)] disabled:opacity-50"
+                />
               </div>
               <div>
                 <label className="mb-1 block text-xs text-[var(--muted-foreground)]">Password</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={isLoggedIn || loginLoading}
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={isLoggedIn || loginLoading}
                   placeholder="Your Pygmalion password"
-                  onKeyDown={(e) => { if (e.key === "Enter" && email && password) onPygLogin(email, password); }}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--primary)] disabled:opacity-50" />
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && email && password) onPygLogin(email, password);
+                  }}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--primary)] disabled:opacity-50"
+                />
               </div>
               {isLoggedIn && (
-                <div className="flex items-center gap-1.5 text-xs text-emerald-400"><CheckCircle size="0.75rem" /> Authenticated — NSFW content enabled</div>
+                <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                  <CheckCircle size="0.75rem" /> Authenticated — NSFW content enabled
+                </div>
               )}
               <div className="flex items-center gap-2">
                 {!isLoggedIn ? (
-                  <button onClick={() => onPygLogin(email, password)} disabled={loginLoading || !email || !password}
-                    className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50">
-                    {loginLoading ? <Loader2 size="0.75rem" className="animate-spin" /> : <LogIn size="0.75rem" />} Log In
+                  <button
+                    onClick={() => onPygLogin(email, password)}
+                    disabled={loginLoading || !email || !password}
+                    className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    {loginLoading ? <Loader2 size="0.75rem" className="animate-spin" /> : <LogIn size="0.75rem" />} Log
+                    In
                   </button>
                 ) : (
-                  <button onClick={onPygLogout} className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]">
+                  <button
+                    onClick={onPygLogout}
+                    className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
+                  >
                     <LogOut size="0.75rem" /> Log Out
                   </button>
                 )}
-                <a href="https://pygmalion.chat" target="_blank" rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]">
+                <a
+                  href="https://pygmalion.chat"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
+                >
                   <ExternalLink size="0.75rem" /> Website
                 </a>
               </div>
@@ -1229,35 +1826,70 @@ function LoginModal({ sourceId, provider, pygLoggedIn, ctLoggedIn, loginLoading,
             <div className="flex flex-col gap-3">
               <div>
                 <label className="mb-1 block text-xs text-[var(--muted-foreground)]">Cookie String</label>
-                <textarea value={cookie} onChange={(e) => setCookie(e.target.value)} disabled={isLoggedIn || loginLoading}
-                  placeholder="Paste your session cookie value here" rows={3}
-                  className="w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--primary)] disabled:opacity-50" />
+                <textarea
+                  value={cookie}
+                  onChange={(e) => setCookie(e.target.value)}
+                  disabled={isLoggedIn || loginLoading}
+                  placeholder="Paste your session cookie value here"
+                  rows={3}
+                  className="w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--primary)] disabled:opacity-50"
+                />
               </div>
               <details open={showHelp} onToggle={(e) => setShowHelp((e.target as HTMLDetailsElement).open)}>
-                <summary className="cursor-pointer text-xs font-medium text-blue-400 hover:underline">▸ ❓ How to get your session cookie</summary>
+                <summary className="cursor-pointer text-xs font-medium text-blue-400 hover:underline">
+                  ▸ ❓ How to get your session cookie
+                </summary>
                 <div className="mt-2 flex flex-col gap-1.5 rounded-lg bg-[var(--secondary)] p-3 text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
-                  <p>1. Go to <a href="https://character-tavern.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline">character-tavern.com</a> and log in</p>
+                  <p>
+                    1. Go to{" "}
+                    <a
+                      href="https://character-tavern.com"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 underline"
+                    >
+                      character-tavern.com
+                    </a>{" "}
+                    and log in
+                  </p>
                   <p>2. Open DevTools (F12) → Application tab → Cookies</p>
-                  <p>3. Find the <code className="rounded bg-[var(--accent)] px-1">session</code> cookie</p>
-                  <p>4. Copy its <strong>Value</strong> and paste it above</p>
+                  <p>
+                    3. Find the <code className="rounded bg-[var(--accent)] px-1">session</code> cookie
+                  </p>
+                  <p>
+                    4. Copy its <strong>Value</strong> and paste it above
+                  </p>
                 </div>
               </details>
               {isLoggedIn && (
-                <div className="flex items-center gap-1.5 text-xs text-emerald-400"><CheckCircle size="0.75rem" /> Session active — NSFW content enabled</div>
+                <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                  <CheckCircle size="0.75rem" /> Session active — NSFW content enabled
+                </div>
               )}
               <div className="flex items-center gap-2">
                 {!isLoggedIn ? (
-                  <button onClick={() => onCtSetCookie(cookie)} disabled={loginLoading || !cookie.trim()}
-                    className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50">
-                    {loginLoading ? <Loader2 size="0.75rem" className="animate-spin" /> : <Cookie size="0.75rem" />} Save & Connect
+                  <button
+                    onClick={() => onCtSetCookie(cookie)}
+                    disabled={loginLoading || !cookie.trim()}
+                    className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+                  >
+                    {loginLoading ? <Loader2 size="0.75rem" className="animate-spin" /> : <Cookie size="0.75rem" />}{" "}
+                    Save & Connect
                   </button>
                 ) : (
-                  <button onClick={onCtLogout} className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]">
+                  <button
+                    onClick={onCtLogout}
+                    className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
+                  >
                     <LogOut size="0.75rem" /> Log Out
                   </button>
                 )}
-                <a href="https://character-tavern.com" target="_blank" rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]">
+                <a
+                  href="https://character-tavern.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
+                >
                   <ExternalLink size="0.75rem" /> CharacterTavern
                 </a>
               </div>
@@ -1280,23 +1912,52 @@ function CardTile({ card, onClick }: { card: BrowseCard; onClick: () => void }) 
   const Stat3Icon = STAT_ICONS[card.stat3Icon];
 
   return (
-    <button onClick={onClick} className="group flex flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] text-left transition-all hover:border-pink-500/40 hover:shadow-lg hover:shadow-pink-500/10 active:scale-[0.98]">
+    <button
+      onClick={onClick}
+      className="group flex flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] text-left transition-all hover:border-pink-500/40 hover:shadow-lg hover:shadow-pink-500/10 active:scale-[0.98]"
+    >
       <div className="relative aspect-square w-full overflow-hidden bg-[var(--secondary)]">
         {imgError || !card.avatarUrl ? (
-          <div className="flex h-full items-center justify-center text-[var(--muted-foreground)]"><Hash size="2rem" /></div>
+          <div className="flex h-full items-center justify-center text-[var(--muted-foreground)]">
+            <Hash size="2rem" />
+          </div>
         ) : (
-          <img src={card.avatarUrl} alt={card.name} loading="lazy" className="h-full w-full object-cover transition-transform group-hover:scale-105" onError={() => setImgError(true)} />
+          <img
+            src={card.avatarUrl}
+            alt={card.name}
+            loading="lazy"
+            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+            onError={() => setImgError(true)}
+          />
         )}
-        {card.nsfw && (<span className="absolute left-1.5 top-1.5 rounded bg-red-500/80 px-1.5 py-0.5 text-[0.55rem] font-bold text-white">NSFW</span>)}
+        {card.nsfw && (
+          <span className="absolute left-1.5 top-1.5 rounded bg-red-500/80 px-1.5 py-0.5 text-[0.55rem] font-bold text-white">
+            NSFW
+          </span>
+        )}
       </div>
       <div className="flex flex-1 flex-col gap-1 p-2.5">
         <h3 className="truncate text-sm font-semibold text-[var(--foreground)]">{card.name}</h3>
         {card.creator && <p className="truncate text-xs text-[var(--muted-foreground)]">by {card.creator}</p>}
-        {card.tagline && <p className="line-clamp-2 text-xs text-[var(--muted-foreground)] opacity-70">{card.tagline}</p>}
+        {card.tagline && (
+          <p className="line-clamp-2 text-xs text-[var(--muted-foreground)] opacity-70">{card.tagline}</p>
+        )}
         <div className="mt-auto flex items-center gap-2 pt-1.5 text-[0.65rem] text-pink-400/80">
-          {card.stat1 > 0 && card.stat1Label && (<span className="flex items-center gap-0.5" title={card.stat1Label}><Stat1Icon size="0.625rem" /> {fmtNum(card.stat1)}</span>)}
-          {card.stat2 > 0 && card.stat2Label && (<span className="flex items-center gap-0.5" title={card.stat2Label}><Stat2Icon size="0.625rem" /> {fmtNum(card.stat2)}</span>)}
-          {card.stat3 > 0 && card.stat3Label && (<span className="flex items-center gap-0.5" title={card.stat3Label}><Stat3Icon size="0.625rem" /> {fmtNum(card.stat3)}</span>)}
+          {card.stat1 > 0 && card.stat1Label && (
+            <span className="flex items-center gap-0.5" title={card.stat1Label}>
+              <Stat1Icon size="0.625rem" /> {fmtNum(card.stat1)}
+            </span>
+          )}
+          {card.stat2 > 0 && card.stat2Label && (
+            <span className="flex items-center gap-0.5" title={card.stat2Label}>
+              <Stat2Icon size="0.625rem" /> {fmtNum(card.stat2)}
+            </span>
+          )}
+          {card.stat3 > 0 && card.stat3Label && (
+            <span className="flex items-center gap-0.5" title={card.stat3Label}>
+              <Stat3Icon size="0.625rem" /> {fmtNum(card.stat3)}
+            </span>
+          )}
         </div>
       </div>
     </button>
@@ -1307,53 +1968,121 @@ function CardTile({ card, onClick }: { card: BrowseCard; onClick: () => void }) 
 // Detail View
 // ════════════════════════════════════════════════
 
-function DetailView({ card, detail, loading, importing, provider, onBack, onImport }: {
-  card: BrowseCard; detail: CardDetail | null; loading: boolean; importing: boolean;
-  provider: ProviderConfig; onBack: () => void; onImport: (card: BrowseCard) => void;
+function DetailView({
+  card,
+  detail,
+  loading,
+  importing,
+  provider,
+  onBack,
+  onImport,
+}: {
+  card: BrowseCard;
+  detail: CardDetail | null;
+  loading: boolean;
+  importing: boolean;
+  provider: ProviderConfig;
+  onBack: () => void;
+  onImport: (card: BrowseCard) => void;
 }) {
   const [imgError, setImgError] = useState(false);
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2">
-        <button onClick={onBack} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+        >
           <ChevronLeft size="0.875rem" /> Back to results
         </button>
         <div className="flex-1" />
-        <a href={card.externalUrl} target="_blank" rel="noopener noreferrer"
-          className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]">
+        <a
+          href={card.externalUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+        >
           <ExternalLink size="0.75rem" /> View on {provider.siteName}
         </a>
       </div>
       {loading ? (
-        <div className="flex items-center justify-center py-16"><Loader2 size="1.5rem" className="animate-spin text-[var(--muted-foreground)]" /></div>
+        <div className="flex items-center justify-center py-16">
+          <Loader2 size="1.5rem" className="animate-spin text-[var(--muted-foreground)]" />
+        </div>
       ) : (
         <div className="flex gap-5 max-md:flex-col">
           <div className="flex w-56 shrink-0 flex-col gap-3 max-md:w-full max-md:flex-row max-md:items-start">
             <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--secondary)] max-md:w-32">
               {imgError || !card.avatarUrl ? (
-                <div className="flex h-full items-center justify-center text-[var(--muted-foreground)]"><Hash size="2.5rem" /></div>
-              ) : (<img src={card.avatarUrl} alt={card.name} className="h-full w-full object-cover" onError={() => setImgError(true)} />)}
+                <div className="flex h-full items-center justify-center text-[var(--muted-foreground)]">
+                  <Hash size="2.5rem" />
+                </div>
+              ) : (
+                <img
+                  src={card.avatarUrl}
+                  alt={card.name}
+                  className="h-full w-full object-cover"
+                  onError={() => setImgError(true)}
+                />
+              )}
             </div>
             <div className="flex flex-col gap-2 max-md:flex-1">
-              <button onClick={() => onImport(card)} disabled={importing}
-                className="flex items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2.5 text-sm font-medium text-[var(--primary-foreground)] transition-all hover:opacity-90 active:scale-95 disabled:opacity-50">
+              <button
+                onClick={() => onImport(card)}
+                disabled={importing}
+                className="flex items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2.5 text-sm font-medium text-[var(--primary-foreground)] transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+              >
                 {importing ? <Loader2 size="0.875rem" className="animate-spin" /> : <Download size="0.875rem" />}
                 {importing ? "Importing..." : "Import"}
               </button>
               <div className="flex flex-col gap-1 rounded-lg bg-[var(--secondary)] p-2.5 text-xs text-pink-400/80">
-                {card.stat1 > 0 && card.stat1Label && (<span className="flex items-center gap-1.5">{(() => { const I = STAT_ICONS[card.stat1Icon]; return <I size="0.75rem" />; })()} {fmtNum(card.stat1)} {card.stat1Label.toLowerCase()}</span>)}
-                {card.stat2 > 0 && card.stat2Label && (<span className="flex items-center gap-1.5">{(() => { const I = STAT_ICONS[card.stat2Icon]; return <I size="0.75rem" />; })()} {fmtNum(card.stat2)} {card.stat2Label.toLowerCase()}</span>)}
-                {card.stat3 > 0 && card.stat3Label && (<span className="flex items-center gap-1.5">{(() => { const I = STAT_ICONS[card.stat3Icon]; return <I size="0.75rem" />; })()} {fmtNum(card.stat3)} {card.stat3Label.toLowerCase()}</span>)}
+                {card.stat1 > 0 && card.stat1Label && (
+                  <span className="flex items-center gap-1.5">
+                    {(() => {
+                      const I = STAT_ICONS[card.stat1Icon];
+                      return <I size="0.75rem" />;
+                    })()}{" "}
+                    {fmtNum(card.stat1)} {card.stat1Label.toLowerCase()}
+                  </span>
+                )}
+                {card.stat2 > 0 && card.stat2Label && (
+                  <span className="flex items-center gap-1.5">
+                    {(() => {
+                      const I = STAT_ICONS[card.stat2Icon];
+                      return <I size="0.75rem" />;
+                    })()}{" "}
+                    {fmtNum(card.stat2)} {card.stat2Label.toLowerCase()}
+                  </span>
+                )}
+                {card.stat3 > 0 && card.stat3Label && (
+                  <span className="flex items-center gap-1.5">
+                    {(() => {
+                      const I = STAT_ICONS[card.stat3Icon];
+                      return <I size="0.75rem" />;
+                    })()}{" "}
+                    {fmtNum(card.stat3)} {card.stat3Label.toLowerCase()}
+                  </span>
+                )}
               </div>
             </div>
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-3">
-            <div><h3 className="text-lg font-bold text-[var(--foreground)]">{card.name}</h3>{card.creator && <p className="text-xs text-[var(--muted-foreground)]">by {card.creator}</p>}</div>
+            <div>
+              <h3 className="text-lg font-bold text-[var(--foreground)]">{card.name}</h3>
+              {card.creator && <p className="text-xs text-[var(--muted-foreground)]">by {card.creator}</p>}
+            </div>
             {card.tagline && <p className="text-sm text-[var(--foreground)]/80">{card.tagline}</p>}
             {card.tags?.length > 0 && (
               <div className="flex flex-wrap gap-1">
-                {card.tags.slice(0, 20).map((tag) => (<span key={tag} className="rounded-full bg-[var(--secondary)] px-2 py-0.5 text-[0.65rem] text-[var(--muted-foreground)]">{tag}</span>))}
+                {card.tags.slice(0, 20).map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded-full bg-[var(--secondary)] px-2 py-0.5 text-[0.65rem] text-[var(--muted-foreground)]"
+                  >
+                    {tag}
+                  </span>
+                ))}
               </div>
             )}
             {detail ? (
@@ -1365,19 +2094,36 @@ function DetailView({ card, detail, loading, importing, provider, onBack, onImpo
                 {detail.firstMessage && <DefSection title="First Message" content={detail.firstMessage} />}
                 {detail.alternateGreetings && detail.alternateGreetings.length > 0 && (
                   <div>
-                    <h4 className="mb-1 text-xs font-semibold text-[var(--foreground)]">Alternate Greetings ({detail.alternateGreetings.length})</h4>
+                    <h4 className="mb-1 text-xs font-semibold text-[var(--foreground)]">
+                      Alternate Greetings ({detail.alternateGreetings.length})
+                    </h4>
                     <div className="flex flex-col gap-1.5">
-                      {detail.alternateGreetings.map((g, i) => (<div key={i} className="max-h-24 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)] p-2.5 text-xs text-[var(--muted-foreground)]">{g}</div>))}
+                      {detail.alternateGreetings.map((g, i) => (
+                        <div
+                          key={i}
+                          className="max-h-24 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)] p-2.5 text-xs text-[var(--muted-foreground)]"
+                        >
+                          {g}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
                 {detail.exampleDialogs && <DefSection title="Example Dialogues" content={detail.exampleDialogs} />}
-                {detail.hasLorebook && (<div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-400"><CheckCircle size="0.75rem" /> Has embedded lorebook</div>)}
-                {detail.extra?.map((section, i) => (<DefSection key={i} title={section.title} content={section.content} />))}
+                {detail.hasLorebook && (
+                  <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+                    <CheckCircle size="0.75rem" /> Has embedded lorebook
+                  </div>
+                )}
+                {detail.extra?.map((section, i) => (
+                  <DefSection key={i} title={section.title} content={section.content} />
+                ))}
               </div>
             ) : (
               <div className="py-4 text-xs italic text-[var(--muted-foreground)]">
-                {loading ? "Loading character details..." : "No detailed definition available. You can still import this character with basic info."}
+                {loading
+                  ? "Loading character details..."
+                  : "No detailed definition available. You can still import this character with basic info."}
               </div>
             )}
           </div>
@@ -1395,7 +2141,9 @@ function DefSection({ title, content }: { title: string; content: string }) {
   return (
     <div>
       <h4 className="mb-1 text-xs font-semibold text-[var(--foreground)]">{title}</h4>
-      <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)] p-2.5 text-xs leading-relaxed text-[var(--muted-foreground)]">{content}</div>
+      <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)] p-2.5 text-xs leading-relaxed text-[var(--muted-foreground)]">
+        {content}
+      </div>
     </div>
   );
 }

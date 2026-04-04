@@ -7,22 +7,32 @@ import type { CreateLorebookEntryInput, LorebookCategory } from "@marinara-engin
 
 interface STWorldInfoEntry {
   uid?: number;
+  // ST World Info format
   key?: string[];
   keysecondary?: string[];
   comment?: string;
+  disable?: boolean;
+  order?: number;
+  // V2 Character Book format (alternative field names)
+  keys?: string[];
+  secondary_keys?: string[];
+  name?: string;
+  enabled?: boolean;
+  insertion_order?: number;
+  case_sensitive?: boolean;
+  match_whole_words?: boolean;
+  // Common fields (same in both formats)
   content?: string;
   constant?: boolean;
   selective?: boolean;
   selectiveLogic?: number;
-  order?: number;
-  position?: number;
-  disable?: boolean;
+  position?: number | string;
   depth?: number;
   probability?: number | null;
   scanDepth?: number | null;
   matchWholeWords?: boolean | null;
   caseSensitive?: boolean | null;
-  role?: number;
+  role?: number | string;
   group?: string;
   groupWeight?: number | null;
   sticky?: number | null;
@@ -116,7 +126,10 @@ function detectCategory(entries: STWorldInfoEntry[], name?: string): LorebookCat
   };
 
   // Build a single text blob for analysis
-  const allText = [name ?? "", ...entries.map((e) => [e.comment ?? "", e.content ?? "", ...(e.key ?? [])].join(" "))]
+  const allText = [
+    name ?? "",
+    ...entries.map((e) => [e.comment ?? e.name ?? "", e.content ?? "", ...(e.key ?? e.keys ?? [])].join(" ")),
+  ]
     .join(" ")
     .toLowerCase();
 
@@ -146,7 +159,9 @@ function detectCategory(entries: STWorldInfoEntry[], name?: string): LorebookCat
  * Auto-detect a tag for an individual entry based on its content/keys.
  */
 function detectEntryTag(entry: STWorldInfoEntry): string {
-  const text = [entry.comment ?? "", entry.content ?? "", ...(entry.key ?? [])].join(" ").toLowerCase();
+  const text = [entry.comment ?? entry.name ?? "", entry.content ?? "", ...(entry.key ?? entry.keys ?? [])]
+    .join(" ")
+    .toLowerCase();
   const tagSignals: Record<string, string[]> = {
     location: [
       "city",
@@ -235,25 +250,55 @@ export async function importSTLorebook(
       2: "assistant",
     };
 
+    // Resolve fields that differ between ST World Info format and V2 Character Book format
+    const rawKeys = entry.key ?? entry.keys;
+    const resolvedKeys = Array.isArray(rawKeys) ? rawKeys.map(String) : typeof rawKeys === "string" ? [rawKeys] : [];
+    const rawSecondary = entry.keysecondary ?? entry.secondary_keys;
+    const resolvedSecondaryKeys = Array.isArray(rawSecondary)
+      ? rawSecondary.map(String)
+      : typeof rawSecondary === "string"
+        ? [rawSecondary]
+        : [];
+    const resolvedName = entry.comment ?? entry.name ?? `Entry ${imported + 1}`;
+    // ST uses `disable` (inverted), V2 uses `enabled`
+    const resolvedEnabled = entry.disable != null ? !entry.disable : (entry.enabled ?? true);
+    const resolvedOrder = entry.order ?? entry.insertion_order ?? 100;
+    // V2 position can be string ("before_char"/"after_char") — map to number
+    const resolvedPosition =
+      typeof entry.position === "string"
+        ? entry.position === "after_char"
+          ? 1
+          : 0
+        : (entry.position ?? 0) === 1
+          ? 1
+          : 0;
+    // Role can be a number (ST) or string (V2)
+    const resolvedRole =
+      typeof entry.role === "string"
+        ? (entry.role as "system" | "user" | "assistant")
+        : (roleMap[entry.role ?? 0] ?? "system");
+    const resolvedCaseSensitive = entry.caseSensitive ?? entry.case_sensitive ?? false;
+    const resolvedMatchWholeWords = entry.matchWholeWords ?? entry.match_whole_words ?? false;
+
     const input: CreateLorebookEntryInput = {
       lorebookId: lorebookId,
-      name: entry.comment ?? `Entry ${imported + 1}`,
+      name: resolvedName,
       content: entry.content ?? "",
-      keys: entry.key ?? [],
-      secondaryKeys: entry.keysecondary ?? [],
-      enabled: !(entry.disable ?? false),
+      keys: resolvedKeys,
+      secondaryKeys: resolvedSecondaryKeys,
+      enabled: resolvedEnabled,
       constant: entry.constant ?? false,
       selective: entry.selective ?? false,
       selectiveLogic: logicMap[entry.selectiveLogic ?? 0] ?? "and",
       probability: entry.probability ?? null,
       scanDepth: entry.scanDepth ?? null,
-      matchWholeWords: entry.matchWholeWords ?? false,
-      caseSensitive: entry.caseSensitive ?? false,
+      matchWholeWords: resolvedMatchWholeWords,
+      caseSensitive: resolvedCaseSensitive,
       useRegex: false,
-      position: entry.position ?? 0,
+      position: resolvedPosition,
       depth: entry.depth ?? 4,
-      order: entry.order ?? 100,
-      role: roleMap[entry.role ?? 0] ?? "system",
+      order: resolvedOrder,
+      role: resolvedRole,
       sticky: entry.sticky ?? null,
       cooldown: entry.cooldown ?? null,
       delay: entry.delay ?? null,

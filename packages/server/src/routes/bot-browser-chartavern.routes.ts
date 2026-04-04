@@ -208,10 +208,10 @@ export async function botBrowserChartavernRoutes(app: FastifyInstance) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
     try {
-      const res = await fetch(
-        `${CT_API_BASE}/character/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`,
-        { headers: ctHeaders(), signal: controller.signal },
-      );
+      const res = await fetch(`${CT_API_BASE}/character/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, {
+        headers: ctHeaders(),
+        signal: controller.signal,
+      });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         throw new Error(`Upstream ${res.status}: ${text.slice(0, 300)}`);
@@ -260,10 +260,9 @@ export async function botBrowserChartavernRoutes(app: FastifyInstance) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
-      const res = await fetch(
-        `${CT_CARDS_CDN}/cdn-cgi/image/format=auto,width=320,quality=85/${encodeURI(path)}.png`,
-        { signal: controller.signal },
-      );
+      const res = await fetch(`${CT_CARDS_CDN}/cdn-cgi/image/format=auto,width=320,quality=85/${encodeURI(path)}.png`, {
+        signal: controller.signal,
+      });
       if (!res.ok) {
         const res2 = await fetch(`${CT_CARDS_CDN}/${encodeURI(path)}.png`, {
           signal: controller.signal,

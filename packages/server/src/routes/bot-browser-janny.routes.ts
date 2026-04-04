@@ -68,7 +68,10 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
     if (showLowQuality !== "true") filters.push("isLowQuality = false");
 
     if (tagIds) {
-      const ids = tagIds.split(",").map((id) => id.trim()).filter(Boolean);
+      const ids = tagIds
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
       if (ids.length > 0) {
         const tagClauses = ids.map((id) => `tagIds = ${id}`);
         filters.push(tagClauses.join(" AND "));
@@ -83,7 +86,6 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
       relevant: [],
     };
     const sortArr: string[] = sortMap[sort] || sortMap.newest || [];
-
 
     const body: Record<string, unknown> = {
       queries: [

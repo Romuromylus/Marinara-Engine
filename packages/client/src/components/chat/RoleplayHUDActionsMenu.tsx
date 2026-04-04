@@ -62,7 +62,10 @@ export function RoleplayHUDActionsMenu({
           </div>
           <div className="flex flex-col gap-1 p-2">
             {thoughtBubbles.map((bubble, index) => (
-              <div key={`${bubble.agentId}-${bubble.timestamp}`} className="relative rounded-lg bg-white/5 p-2 text-[0.625rem]">
+              <div
+                key={`${bubble.agentId}-${bubble.timestamp}`}
+                className="relative rounded-lg bg-white/5 p-2 text-[0.625rem]"
+              >
                 <button
                   onClick={() => dismissThoughtBubble(index)}
                   className="absolute right-1.5 top-1.5 text-white/20 hover:text-white/60 transition-colors"

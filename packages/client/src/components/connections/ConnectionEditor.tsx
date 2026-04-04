@@ -110,10 +110,35 @@ export function ConnectionEditor() {
       setDropdownRect(null);
       return;
     }
-    const rect = modelTriggerRef.current.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
-    const maxH = Math.min(320, spaceBelow);
-    setDropdownRect({ top: rect.bottom + 4, left: rect.left, width: rect.width, maxH });
+
+    const update = () => {
+      if (!modelTriggerRef.current) return;
+      const rect = modelTriggerRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom - 8;
+      const spaceAbove = rect.top - 8;
+      // Flip above trigger if there's more space above
+      const openAbove = spaceBelow < 120 && spaceAbove > spaceBelow;
+      const maxH = Math.min(320, openAbove ? spaceAbove : spaceBelow);
+      setDropdownRect({
+        top: openAbove ? rect.top - maxH - 4 : rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+        maxH,
+      });
+    };
+
+    update();
+
+    // Recalculate on scroll/resize so the dropdown tracks the trigger
+    const scrollParent =
+      modelTriggerRef.current.closest(".overflow-y-auto, .overflow-auto, .overflow-y-scroll, .overflow-scroll") ??
+      window;
+    scrollParent.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update, { passive: true });
+    return () => {
+      scrollParent.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
   }, [showModelDropdown]);
 
   // Remote models fetched from provider API

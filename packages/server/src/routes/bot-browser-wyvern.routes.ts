@@ -34,15 +34,7 @@ export async function botBrowserWyvernRoutes(app: FastifyInstance) {
       rating?: string;
     };
   }>("/wyvern/search", async (req) => {
-    const {
-      q = "",
-      page = "1",
-      limit = "48",
-      sort = "popular",
-      order = "DESC",
-      tags,
-      rating,
-    } = req.query;
+    const { q = "", page = "1", limit = "48", sort = "popular", order = "DESC", tags, rating } = req.query;
 
     const params = new URLSearchParams();
     params.set("limit", limit);

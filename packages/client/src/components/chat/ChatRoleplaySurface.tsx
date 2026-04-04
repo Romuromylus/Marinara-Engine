@@ -394,9 +394,7 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
       {open &&
         (isMobile ? (
           createPortal(
-            <div
-              className="fixed inset-0 z-[9999] flex items-center justify-center p-4 max-md:pt-[max(1rem,env(safe-area-inset-top))]"
-            >
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 max-md:pt-[max(1rem,env(safe-area-inset-top))]">
               <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
               <div
                 className="relative max-h-[calc(100dvh-4rem)] w-full max-w-sm overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-2xl shadow-black/40 animate-message-in"
@@ -482,9 +480,7 @@ function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMe
       {open &&
         (isMobile ? (
           createPortal(
-            <div
-              className="fixed inset-0 z-[9999] flex items-center justify-center p-4 max-md:pt-[max(1rem,env(safe-area-inset-top))]"
-            >
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 max-md:pt-[max(1rem,env(safe-area-inset-top))]">
               <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
               <div
                 className="relative max-h-[calc(100dvh-4rem)] w-full max-w-sm overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-2xl shadow-black/40 animate-message-in"

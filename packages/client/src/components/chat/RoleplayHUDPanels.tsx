@@ -18,7 +18,13 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
-import type { CharacterStat, CustomTrackerField, InventoryItem, PresentCharacter, QuestProgress } from "@marinara-engine/shared";
+import type {
+  CharacterStat,
+  CustomTrackerField,
+  InventoryItem,
+  PresentCharacter,
+  QuestProgress,
+} from "@marinara-engine/shared";
 
 interface CombinedPlayerPanelProps {
   showPersona: boolean;
@@ -142,7 +148,9 @@ export function CombinedPlayerPanel({
               </span>
             </div>
             <div className="space-y-2">
-              {personaStats.length === 0 && <div className="text-[0.625rem] text-white/30 text-center py-1">No stats tracked</div>}
+              {personaStats.length === 0 && (
+                <div className="text-[0.625rem] text-white/30 text-center py-1">No stats tracked</div>
+              )}
               {personaStats.map((bar, idx) => (
                 <StatBarEditable
                   key={bar.name}
@@ -196,7 +204,11 @@ export function CombinedPlayerPanel({
                     </button>
                   </div>
                   <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pl-1">
-                    <LabeledEdit label="Mood" value={char.mood} onSave={(value) => updateCharacter(idx, { ...char, mood: value })} />
+                    <LabeledEdit
+                      label="Mood"
+                      value={char.mood}
+                      onSave={(value) => updateCharacter(idx, { ...char, mood: value })}
+                    />
                     <LabeledEdit
                       label="Look"
                       value={char.appearance ?? ""}
@@ -253,7 +265,9 @@ export function CombinedPlayerPanel({
               </button>
             </div>
             <div className="space-y-1">
-              {inventory.length === 0 && <div className="text-[0.625rem] text-white/30 text-center py-1">Inventory empty</div>}
+              {inventory.length === 0 && (
+                <div className="text-[0.625rem] text-white/30 text-center py-1">Inventory empty</div>
+              )}
               {inventory.map((item, idx) => (
                 <div key={idx} className="flex items-center gap-1.5 rounded-lg bg-white/5 px-2 py-1.5">
                   <Package size="0.625rem" className="shrink-0 text-amber-400/60" />
@@ -297,7 +311,9 @@ export function CombinedPlayerPanel({
               </button>
             </div>
             <div className="space-y-2">
-              {quests.length === 0 && <div className="text-[0.625rem] text-white/30 text-center py-1">No active quests</div>}
+              {quests.length === 0 && (
+                <div className="text-[0.625rem] text-white/30 text-center py-1">No active quests</div>
+              )}
               {quests.map((quest, idx) => (
                 <QuestCardEditable
                   key={quest.questEntryId || idx}
@@ -439,7 +455,9 @@ export function CharactersPanel({ characters, onUpdate }: CharactersPanelProps) 
         </button>
       </div>
       <div className="p-2 space-y-2">
-        {characters.length === 0 && <div className="text-[0.625rem] text-white/30 text-center py-2">No characters in scene</div>}
+        {characters.length === 0 && (
+          <div className="text-[0.625rem] text-white/30 text-center py-2">No characters in scene</div>
+        )}
         {characters.map((char, idx) => (
           <div key={char.characterId ?? idx} className="rounded-lg bg-white/5 p-2 space-y-1">
             <div className="flex items-center gap-1.5">
@@ -463,7 +481,11 @@ export function CharactersPanel({ characters, onUpdate }: CharactersPanelProps) 
               </button>
             </div>
             <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pl-1">
-              <LabeledEdit label="Mood" value={char.mood} onSave={(value) => updateCharacter(idx, { ...char, mood: value })} />
+              <LabeledEdit
+                label="Mood"
+                value={char.mood}
+                onSave={(value) => updateCharacter(idx, { ...char, mood: value })}
+              />
               <LabeledEdit
                 label="Look"
                 value={char.appearance ?? ""}
@@ -984,7 +1006,11 @@ function QuestCardEditable({
           className={cn("flex-1 !font-medium", quest.completed && "line-through opacity-50")}
           placeholder="Quest name"
         />
-        {total > 0 && <span className="text-[0.5625rem] text-white/30">{completed}/{total}</span>}
+        {total > 0 && (
+          <span className="text-[0.5625rem] text-white/30">
+            {completed}/{total}
+          </span>
+        )}
         <button
           onClick={onRemove}
           className="text-white/20 hover:text-red-400 transition-colors shrink-0"

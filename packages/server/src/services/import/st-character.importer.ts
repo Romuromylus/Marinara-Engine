@@ -232,7 +232,71 @@ function normalizeV2(raw: Record<string, unknown>): CharacterData {
       backstory: String((raw.extensions as Record<string, unknown>)?.backstory ?? ""),
       appearance: String((raw.extensions as Record<string, unknown>)?.appearance ?? ""),
     },
-    character_book: (raw.character_book as CharacterData["character_book"]) ?? null,
+    character_book: normalizeCharacterBook(raw.character_book),
+  };
+}
+
+/** Coerce an unknown value into a string array, handling single-string and missing cases. */
+function normalizeStringArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String);
+  if (typeof raw === "string") return [raw];
+  return [];
+}
+
+/**
+ * Normalize a character_book from any format (ST World Info or V2 spec) into
+ * the V2 CharacterBook shape with entries as an array of CharacterBookEntry objects.
+ */
+function normalizeCharacterBook(raw: unknown): CharacterData["character_book"] {
+  if (!raw || typeof raw !== "object") return null;
+  const book = raw as Record<string, unknown>;
+
+  // entries can be an object { "0": {...}, "1": {...} } (ST) or an array [{...}, {...}] (V2)
+  const rawEntries = book.entries;
+  let entryList: Record<string, unknown>[];
+  if (Array.isArray(rawEntries)) {
+    entryList = rawEntries;
+  } else if (rawEntries && typeof rawEntries === "object") {
+    entryList = Object.values(rawEntries);
+  } else {
+    entryList = [];
+  }
+
+  const entries = entryList.map((e, i) => {
+    const posRaw = e.position;
+    let position: "before_char" | "after_char" = "before_char";
+    if (typeof posRaw === "string") {
+      position = posRaw === "after_char" ? "after_char" : "before_char";
+    } else if (typeof posRaw === "number") {
+      position = posRaw === 1 ? "after_char" : "before_char";
+    }
+
+    return {
+      keys: normalizeStringArray(e.key ?? e.keys),
+      secondary_keys: normalizeStringArray(e.keysecondary ?? e.secondary_keys),
+      content: String(e.content ?? ""),
+      extensions: (e.extensions ?? {}) as Record<string, unknown>,
+      enabled: e.disable != null ? !e.disable : e.enabled != null ? Boolean(e.enabled) : true,
+      insertion_order: (e.order ?? e.insertion_order ?? 100) as number,
+      case_sensitive: Boolean(e.caseSensitive ?? e.case_sensitive ?? false),
+      name: String(e.comment ?? e.name ?? `Entry ${i + 1}`),
+      priority: (e.priority ?? 10) as number,
+      id: (e.uid ?? e.id ?? i) as number,
+      comment: String(e.comment ?? e.name ?? ""),
+      selective: Boolean(e.selective ?? false),
+      constant: Boolean(e.constant ?? false),
+      position,
+    };
+  });
+
+  return {
+    name: String(book.name ?? ""),
+    description: String(book.description ?? ""),
+    scan_depth: Number(book.scan_depth ?? book.scanDepth ?? 2),
+    token_budget: Number(book.token_budget ?? book.tokenBudget ?? 2048),
+    recursive_scanning: Boolean(book.recursive_scanning ?? book.recursiveScanning ?? false),
+    extensions: (book.extensions ?? {}) as Record<string, unknown>,
+    entries,
   };
 }
 

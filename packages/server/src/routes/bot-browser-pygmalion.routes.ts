@@ -20,7 +20,12 @@ export async function botBrowserPygmalionRoutes(app: FastifyInstance) {
     if (!username || !password) {
       return reply.status(400).send({ error: "username and password are required" });
     }
-    if (typeof username !== "string" || typeof password !== "string" || username.length > 256 || password.length > 256) {
+    if (
+      typeof username !== "string" ||
+      typeof password !== "string" ||
+      username.length > 256 ||
+      password.length > 256
+    ) {
       return reply.status(400).send({ error: "Invalid credentials format" });
     }
 
@@ -122,10 +127,16 @@ export async function botBrowserPygmalionRoutes(app: FastifyInstance) {
     };
 
     if (tagsInclude) {
-      message.tagsNamesInclude = tagsInclude.split(",").map((t) => t.trim()).filter(Boolean);
+      message.tagsNamesInclude = tagsInclude
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
     }
     if (tagsExclude) {
-      message.tagsNamesExclude = tagsExclude.split(",").map((t) => t.trim()).filter(Boolean);
+      message.tagsNamesExclude = tagsExclude
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
     }
 
     // Authenticated search with NSFW

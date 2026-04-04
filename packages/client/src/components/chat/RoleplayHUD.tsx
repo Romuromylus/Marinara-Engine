@@ -64,9 +64,7 @@ const CharactersPanel = lazy(async () =>
 const InventoryPanel = lazy(async () =>
   import("./RoleplayHUDPanels").then((module) => ({ default: module.InventoryPanel })),
 );
-const QuestsPanel = lazy(async () =>
-  import("./RoleplayHUDPanels").then((module) => ({ default: module.QuestsPanel })),
-);
+const QuestsPanel = lazy(async () => import("./RoleplayHUDPanels").then((module) => ({ default: module.QuestsPanel })));
 const CustomTrackerPanel = lazy(async () =>
   import("./RoleplayHUDPanels").then((module) => ({ default: module.CustomTrackerPanel })),
 );

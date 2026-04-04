@@ -45,6 +45,32 @@ export class OpenAIProvider extends BaseLLMProvider {
     return { text, thinking };
   }
 
+  /**
+   * Extract reasoning/thinking from an OpenAI-compatible message or delta object.
+   * Handles multiple provider formats:
+   *   - `reasoning_content` (DeepSeek native)
+   *   - `reasoning` (OpenRouter / NanoGPT)
+   *   - `reasoning_details` array (OpenRouter newer format)
+   */
+  private static extractReasoning(obj: Record<string, unknown> | undefined | null): string {
+    if (!obj) return "";
+    // Plain string fields
+    if (typeof obj.reasoning_content === "string" && obj.reasoning_content) return obj.reasoning_content;
+    if (typeof obj.reasoning === "string" && obj.reasoning) return obj.reasoning;
+    // reasoning_details array: [{type:"reasoning.text", text:"..."}, {type:"reasoning.summary", summary:"..."}]
+    if (Array.isArray(obj.reasoning_details)) {
+      let text = "";
+      for (const item of obj.reasoning_details) {
+        if (typeof item !== "object" || item === null) continue;
+        const d = item as Record<string, unknown>;
+        if (d.type === "reasoning.text" && typeof d.text === "string") text += d.text;
+        else if (d.type === "reasoning.summary" && typeof d.summary === "string") text += d.summary;
+      }
+      if (text) return text;
+    }
+    return "";
+  }
+
   /** Build standard request headers, adding OpenRouter app tracking when applicable. */
   private buildHeaders(): Record<string, string> {
     const h: Record<string, string> = {
@@ -168,17 +194,18 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     if (!options.stream) {
       const json = (await response.json()) as {
-        choices: Array<{ message: { content: string | unknown[]; reasoning_content?: string } }>;
+        choices: Array<{ message: Record<string, unknown> & { content: string | unknown[] } }>;
         usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
       };
       const msg = json.choices[0]?.message;
-      if (msg?.reasoning_content && options.onThinking) {
-        options.onThinking(msg.reasoning_content);
+      const reasoning = OpenAIProvider.extractReasoning(msg);
+      if (reasoning && options.onThinking) {
+        options.onThinking(reasoning);
       }
       // Handle OpenRouter content block arrays (Anthropic-style)
       const blocks = OpenAIProvider.extractContentBlocks(msg?.content);
       if (blocks) {
-        if (blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
+        if (!reasoning && blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
         yield blocks.text;
       } else {
         yield (msg?.content as string) ?? "";
@@ -232,7 +259,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 
           try {
             const parsed = JSON.parse(data) as {
-              choices: Array<{ delta: { content?: string | unknown[]; reasoning_content?: string } }>;
+              choices: Array<{ delta: Record<string, unknown> & { content?: string | unknown[] } }>;
               usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
             };
             // Capture usage from the final chunk (OpenAI sends it with stream_options)
@@ -244,13 +271,14 @@ export class OpenAIProvider extends BaseLLMProvider {
               };
             }
             const delta = parsed.choices[0]?.delta;
-            if (delta?.reasoning_content && options.onThinking) {
-              options.onThinking(delta.reasoning_content);
+            const reasoning = OpenAIProvider.extractReasoning(delta);
+            if (reasoning && options.onThinking) {
+              options.onThinking(reasoning);
             }
             // Handle OpenRouter content block arrays (Anthropic-style)
             const blocks = OpenAIProvider.extractContentBlocks(delta?.content);
             if (blocks) {
-              if (blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
+              if (!reasoning && blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
               if (blocks.text) yield blocks.text;
             } else if (delta?.content) {
               yield delta.content as string;
@@ -329,10 +357,9 @@ export class OpenAIProvider extends BaseLLMProvider {
       // Non-streaming path (no onToken callback)
       const json = (await response.json()) as {
         choices: Array<{
-          message: {
+          message: Record<string, unknown> & {
             content: string | unknown[] | null;
             tool_calls?: LLMToolCall[];
-            reasoning_content?: string;
           };
           finish_reason: string;
         }>;
@@ -340,14 +367,15 @@ export class OpenAIProvider extends BaseLLMProvider {
       };
 
       const choice = json.choices[0];
-      if ((choice?.message as any)?.reasoning_content && options.onThinking) {
-        options.onThinking((choice?.message as any).reasoning_content);
+      const reasoning = OpenAIProvider.extractReasoning(choice?.message);
+      if (reasoning && options.onThinking) {
+        options.onThinking(reasoning);
       }
       // Handle OpenRouter content block arrays (Anthropic-style)
       let resolvedContent: string | null = null;
       const blocks = OpenAIProvider.extractContentBlocks(choice?.message?.content);
       if (blocks) {
-        if (blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
+        if (!reasoning && blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
         resolvedContent = blocks.text || null;
       } else {
         resolvedContent = (choice?.message?.content as string) ?? null;
@@ -400,9 +428,8 @@ export class OpenAIProvider extends BaseLLMProvider {
         try {
           const parsed = JSON.parse(data) as {
             choices: Array<{
-              delta: {
+              delta: Record<string, unknown> & {
                 content?: string | unknown[];
-                reasoning_content?: string;
                 tool_calls?: Array<{
                   index: number;
                   id?: string;
@@ -433,14 +460,15 @@ export class OpenAIProvider extends BaseLLMProvider {
           const delta = choice.delta;
 
           // Stream reasoning/thinking
-          if (delta?.reasoning_content && options.onThinking) {
-            options.onThinking(delta.reasoning_content);
+          const reasoning = OpenAIProvider.extractReasoning(delta);
+          if (reasoning && options.onThinking) {
+            options.onThinking(reasoning);
           }
 
           // Handle OpenRouter content block arrays (Anthropic-style)
           const blocks = OpenAIProvider.extractContentBlocks(delta?.content);
           if (blocks) {
-            if (blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
+            if (!reasoning && blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
             if (blocks.text) {
               content += blocks.text;
               options.onToken!(blocks.text);
