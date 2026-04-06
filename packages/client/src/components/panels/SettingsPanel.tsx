@@ -1741,11 +1741,9 @@ function AdvancedSettings() {
     },
   });
 
-  const currentBuildLabel = (() => {
-    const version = health.data?.version ?? updateCheck.data?.currentVersion ?? APP_VERSION;
-    const commit = health.data?.commit ?? updateCheck.data?.currentCommit ?? null;
-    return commit ? `v${version}+${commit}` : `v${version}`;
-  })();
+  const currentReleaseLabel = `v${health.data?.version ?? updateCheck.data?.currentVersion ?? APP_VERSION}`;
+  const currentCommit = health.data?.commit ?? updateCheck.data?.currentCommit ?? null;
+  const currentBuildLabel = currentCommit ? `Build: ${currentCommit}` : "Build: unavailable";
 
   return (
     <div className="flex flex-col gap-3">
@@ -1757,7 +1755,7 @@ function AdvancedSettings() {
           <RefreshCw size="0.75rem" className="text-[var(--muted-foreground)]" />
           <span className="text-xs font-medium">Updates</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => updateCheck.refetch()}
             disabled={updateCheck.isFetching}
@@ -1775,13 +1773,19 @@ function AdvancedSettings() {
               </>
             )}
           </button>
-          <span className="text-[0.6875rem] text-[var(--muted-foreground)]">Running: {currentBuildLabel}</span>
+          <div className="flex flex-col text-[0.6875rem] text-[var(--muted-foreground)]">
+            <span>Release: {currentReleaseLabel}</span>
+            <span>{currentBuildLabel}</span>
+          </div>
         </div>
 
         {updateCheck.data && !updateCheck.data.updateAvailable && (
           <div className="flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-2.5 py-2 ring-1 ring-[var(--border)]">
             <Check size="0.8125rem" className="text-green-500 shrink-0" />
-            <span className="text-xs">You're on the latest version ({currentBuildLabel})</span>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs">You're on the latest release ({currentReleaseLabel})</span>
+              <span className="text-[0.6875rem] text-[var(--muted-foreground)]">{currentBuildLabel}</span>
+            </div>
           </div>
         )}
 
