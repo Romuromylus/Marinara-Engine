@@ -78,6 +78,23 @@ import {
 } from "./generate/generate-route-utils.js";
 import { registerRetryAgentsRoute } from "./generate/retry-agents-route.js";
 import { sendSseEvent, startSseReply, trySendSseEvent } from "./generate/sse.js";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+
+/** Read a character's avatar from disk as base64, or return undefined if unavailable. */
+function readAvatarBase64(avatarPath: string | null | undefined): string | undefined {
+  if (!avatarPath) return undefined;
+  // avatarPath is like /api/avatars/file/<filename> — extract just the filename
+  const filename = avatarPath.split("/").pop();
+  if (!filename || filename.includes("..") || filename.includes("/") || filename.includes("\\")) return undefined;
+  const diskPath = join(DATA_DIR, "avatars", filename);
+  try {
+    if (!existsSync(diskPath)) return undefined;
+    return readFileSync(diskPath).toString("base64");
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Format agent injection results into a wrapped block for prompt injection.
@@ -2383,6 +2400,23 @@ export async function generateRoutes(app: FastifyInstance) {
         }
       }
 
+      // If the secret-plot-driver agent is enabled, load its previous state from agent memory
+      const secretPlotAgent = resolvedAgents.find((a) => a.type === "secret-plot-driver");
+      if (secretPlotAgent) {
+        try {
+          const mem = await agentsStore.getMemory(secretPlotAgent.id, input.chatId);
+          const state: Record<string, unknown> = {};
+          if (mem.overarchingArc) state.overarchingArc = mem.overarchingArc;
+          if (mem.sceneDirections) state.sceneDirections = mem.sceneDirections;
+          if (mem.pacing) state.pacing = mem.pacing;
+          if (Object.keys(state).length > 0) {
+            agentContext.memory._secretPlotState = state;
+          }
+        } catch {
+          /* non-critical */
+        }
+      }
+
       // If the knowledge-retrieval agent is enabled, load lorebook + file source material
       const knowledgeRetrievalAgent = resolvedAgents.find((a) => a.type === "knowledge-retrieval");
       if (knowledgeRetrievalAgent) {
@@ -2754,6 +2788,55 @@ export async function generateRoutes(app: FastifyInstance) {
         const [preGenResult, krResult] = await Promise.all([preGenPromise, krPromise]);
         contextInjections = preGenResult;
 
+        // ── Failure gate: only block generation if a critical pre-gen agent failed ──
+        // The secret-plot-driver shapes narrative direction — generating without
+        // it would produce incoherent output. Other agents are enhancement-only.
+        const preGenResults = pipeline.results.filter((r) => r.agentType !== "knowledge-retrieval");
+        const criticalFailed = preGenResults.filter((r) => !r.success && r.type === "secret_plot");
+        const nonCriticalFailed = preGenResults.filter((r) => !r.success && r.type !== "secret_plot");
+        if (criticalFailed.length > 0) {
+          const failedNames = criticalFailed.map((r) => r.agentType).join(", ");
+          const firstError = criticalFailed[0]!.error ?? "unknown error";
+          console.error(`[pre-gen] FATAL: critical agent(s) failed (${failedNames}) — aborting generation`);
+          sendSseEvent(reply, {
+            type: "error",
+            data: `Critical pre-generation agent failed (${failedNames}): ${firstError}. Please try again.`,
+          });
+          return;
+        }
+        if (nonCriticalFailed.length > 0) {
+          const failedNames = nonCriticalFailed.map((r) => r.agentType).join(", ");
+          console.warn(`[pre-gen] Non-critical agent(s) failed (${failedNames}) — continuing generation`);
+        }
+
+        // ── Secret Plot Driver: persist fresh state + build injection ──
+        const plotResult = preGenResults.find((r) => r.type === "secret_plot");
+        if (plotResult?.success && plotResult.data && typeof plotResult.data === "object") {
+          const plotData = plotResult.data as Record<string, unknown>;
+          const agentConfigId = secretPlotAgent?.id ?? plotResult.agentId;
+
+          // Persist to agent memory so swipes/regens read from it
+          try {
+            if (plotData.overarchingArc) {
+              await agentsStore.setMemory(agentConfigId, input.chatId, "overarchingArc", plotData.overarchingArc);
+            }
+            if (plotData.sceneDirections) {
+              const directions = (plotData.sceneDirections as Array<{ direction: string; fulfilled: boolean }>).filter(
+                (d) => !d.fulfilled,
+              );
+              await agentsStore.setMemory(agentConfigId, input.chatId, "sceneDirections", directions);
+            }
+            if (plotData.pacing) {
+              await agentsStore.setMemory(agentConfigId, input.chatId, "pacing", plotData.pacing);
+            }
+            console.log(
+              `[secret-plot-driver] Persisted pre-gen state — arc: ${plotData.overarchingArc ? "updated" : "unchanged"}, directions: ${Array.isArray(plotData.sceneDirections) ? (plotData.sceneDirections as any[]).filter((d: any) => !d.fulfilled).length : 0} active, pacing: ${plotData.pacing ?? "unknown"}`,
+            );
+          } catch (persistErr) {
+            console.error("[secret-plot-driver] Failed to persist state:", persistErr);
+          }
+        }
+
         // Inject pre-gen agent context at depth 0 (very bottom of prompt)
         if (contextInjections.length > 0) {
           const wrapped = formatAgentInjections(contextInjections, wrapFormat);
@@ -2818,13 +2901,177 @@ export async function generateRoutes(app: FastifyInstance) {
           );
           if (hasContextInjectionAgents) {
             reply.raw.write(`data: ${JSON.stringify({ type: "agent_start", data: { phase: "pre_generation" } })}\n\n`);
-            contextInjections = await pipeline.preGenerate((agentType) => !EXCLUDED_FROM_PIPELINE.has(agentType));
+            // On regens, exclude secret-plot-driver — it only triggers on new user messages
+            contextInjections = await pipeline.preGenerate(
+              (agentType) => !EXCLUDED_FROM_PIPELINE.has(agentType) && agentType !== "secret-plot-driver",
+            );
+
+            // Failure gate — same as the new-message path
+            const regenPreGenResults = pipeline.results.filter(
+              (r) => r.agentType !== "knowledge-retrieval" && r.agentType !== "secret-plot-driver",
+            );
+            const failedRegen = regenPreGenResults.filter((r) => !r.success);
+            if (failedRegen.length > 0) {
+              const failedNames = failedRegen.map((r) => r.agentType).join(", ");
+              const firstError = failedRegen[0]!.error ?? "unknown error";
+              console.error(
+                `[pre-gen] FATAL: ${failedRegen.length} agent(s) failed on regen (${failedNames}) — aborting generation`,
+              );
+              sendSseEvent(reply, {
+                type: "error",
+                data: `Pre-generation agent${failedRegen.length > 1 ? "s" : ""} failed (${failedNames}): ${firstError}. Please try again.`,
+              });
+              return;
+            }
           }
         }
 
         if (contextInjections.length > 0) {
           const wrapped = formatAgentInjections(contextInjections, wrapFormat);
           finalMessages = injectAtDepth(finalMessages, [{ content: wrapped, role: "system", depth: 0 }]);
+        }
+      }
+
+      // ────────────────────────────────────────
+      // Secret Plot Driver: inject arc + directions at correct prompt positions
+      // Arc → after persona section (before first user/assistant message)
+      // Directions → inside the <context> tracker block
+      // ────────────────────────────────────────
+      if (secretPlotAgent) {
+        try {
+          const plotMem = await agentsStore.getMemory(secretPlotAgent.id, input.chatId);
+          const arcRaw = plotMem.overarchingArc as Record<string, unknown> | string | undefined;
+          const sceneDirections = plotMem.sceneDirections as
+            | Array<{ direction: string; fulfilled?: boolean }>
+            | undefined;
+
+          // Inject overarching arc into the prompt
+          if (arcRaw) {
+            // The arc is stored as an object {description, protagonistArc, completed}
+            const arcLines: string[] = [];
+            if (typeof arcRaw === "object" && arcRaw !== null) {
+              if (arcRaw.description) arcLines.push(String(arcRaw.description));
+              if (arcRaw.protagonistArc) arcLines.push(`Protagonist arc: ${arcRaw.protagonistArc}`);
+            } else {
+              arcLines.push(String(arcRaw));
+            }
+            if (arcLines.length > 0) {
+              const arcBlock = wrapContent(arcLines.join("\n"), "overarching_arc", wrapFormat);
+
+              // Strategy: try to inject inside an existing <lore> section (after </persona>),
+              // then fall back to appending to the last system message before the chat.
+              let injected = false;
+
+              if (wrapFormat === "xml") {
+                // Look for a system message containing <lore>…</lore>
+                for (let i = 0; i < finalMessages.length; i++) {
+                  const msg = finalMessages[i]!;
+                  if (msg.role !== "system") continue;
+                  if (!msg.content.includes("<lore>")) continue;
+
+                  // Prefer inserting after </persona> inside <lore>
+                  // Detect indentation from the </persona> line
+                  const personaMatch = msg.content.match(/^([ \t]*)<\/persona>/m);
+                  const indent = personaMatch?.[1] ?? "    ";
+                  const indentedArc = arcBlock.replace(/\n/g, "\n" + indent);
+                  if (msg.content.includes("</persona>")) {
+                    finalMessages[i] = {
+                      ...msg,
+                      content: msg.content.replace("</persona>", `</persona>\n${indent}${indentedArc}`),
+                    };
+                  } else {
+                    // No persona block — insert before </lore>
+                    const loreMatch = msg.content.match(/^([ \t]*)<\/lore>/m);
+                    const loreIndent = loreMatch?.[1] ?? "";
+                    const innerIndent = loreIndent + "    ";
+                    const indentedArcLore = arcBlock.replace(/\n/g, "\n" + innerIndent);
+                    finalMessages[i] = {
+                      ...msg,
+                      content: msg.content.replace("</lore>", `${innerIndent}${indentedArcLore}\n${loreIndent}</lore>`),
+                    };
+                  }
+                  injected = true;
+                  break;
+                }
+              } else if (wrapFormat === "markdown") {
+                // Look for a system message containing a # Lore heading
+                for (let i = 0; i < finalMessages.length; i++) {
+                  const msg = finalMessages[i]!;
+                  if (msg.role !== "system") continue;
+                  if (!msg.content.includes("# Lore")) continue;
+                  finalMessages[i] = { ...msg, content: msg.content + "\n" + arcBlock };
+                  injected = true;
+                  break;
+                }
+              }
+
+              // Fallback: append to the last system message before the chat
+              if (!injected) {
+                const firstChatIdx = finalMessages.findIndex((m) => m.role === "user" || m.role === "assistant");
+                const searchEnd = firstChatIdx >= 0 ? firstChatIdx : finalMessages.length;
+                let lastSysIdx = -1;
+                for (let i = searchEnd - 1; i >= 0; i--) {
+                  if (finalMessages[i]!.role === "system") {
+                    lastSysIdx = i;
+                    break;
+                  }
+                }
+                if (lastSysIdx >= 0) {
+                  const sysMsg = finalMessages[lastSysIdx]!;
+                  finalMessages[lastSysIdx] = { ...sysMsg, content: sysMsg.content + "\n" + arcBlock };
+                } else {
+                  const insertAt = firstChatIdx >= 0 ? firstChatIdx : finalMessages.length;
+                  finalMessages.splice(insertAt, 0, { role: "system", content: arcBlock });
+                }
+              }
+            }
+          }
+
+          // Inject scene directions into the tracker block
+          const activeDirections = sceneDirections?.filter((d) => !d.fulfilled);
+          if (activeDirections && activeDirections.length > 0) {
+            const dirLines = activeDirections.map((d) => `- ${d.direction}`).join("\n");
+            const dirBlock = wrapContent(dirLines, "scene_directions", wrapFormat);
+
+            if (wrapFormat === "xml") {
+              const ctxIdx = finalMessages.findIndex((m) => m.role === "system" && m.content.includes("<context>"));
+              if (ctxIdx >= 0) {
+                const ctxMsg = finalMessages[ctxIdx]!;
+                finalMessages[ctxIdx] = {
+                  ...ctxMsg,
+                  content: ctxMsg.content.replace("</context>", `    ${dirBlock.replace(/\n/g, "\n    ")}\n</context>`),
+                };
+              } else {
+                const contextBlock = `<context>\n    ${dirBlock.replace(/\n/g, "\n    ")}\n</context>`;
+                const lastUserIdx = findLastIndex(finalMessages, "user");
+                finalMessages.splice(lastUserIdx >= 0 ? lastUserIdx : finalMessages.length, 0, {
+                  role: "system",
+                  content: contextBlock,
+                });
+              }
+            } else if (wrapFormat === "markdown") {
+              const ctxIdx = finalMessages.findIndex((m) => m.role === "system" && m.content.includes("# Context"));
+              if (ctxIdx >= 0) {
+                const ctxMsg = finalMessages[ctxIdx]!;
+                finalMessages[ctxIdx] = { ...ctxMsg, content: ctxMsg.content + "\n" + dirBlock };
+              } else {
+                const contextBlock = `# Context\n${dirBlock}`;
+                const lastUserIdx = findLastIndex(finalMessages, "user");
+                finalMessages.splice(lastUserIdx >= 0 ? lastUserIdx : finalMessages.length, 0, {
+                  role: "system",
+                  content: contextBlock,
+                });
+              }
+            } else {
+              const lastUserIdx = findLastIndex(finalMessages, "user");
+              finalMessages.splice(lastUserIdx >= 0 ? lastUserIdx : finalMessages.length, 0, {
+                role: "system",
+                content: dirBlock,
+              });
+            }
+          }
+        } catch (plotInjectErr) {
+          console.error("[secret-plot-driver] Failed to inject arc/directions:", plotInjectErr);
         }
       }
 
@@ -2910,9 +3157,7 @@ export async function generateRoutes(app: FastifyInstance) {
       // independently via agent-executor — do NOT enable tools on the main
       // generation just because agents are active.
       const inputBody = req.body as Record<string, unknown>;
-      const enableTools =
-        inputBody.enableTools === true ||
-        chatMeta.enableTools === true;
+      const enableTools = inputBody.enableTools === true || chatMeta.enableTools === true;
 
       // Build OpenAI-compatible tool definitions from built-in + custom tools
       let toolDefs: LLMToolDefinition[] | undefined;
@@ -3087,569 +3332,569 @@ export async function generateRoutes(app: FastifyInstance) {
         }, 15_000);
 
         try {
-        // Emit debug prompt if requested (only for first character to avoid spam)
-        if (input.debugMode && targetCharId === respondingCharIds[0]) {
-          const debugPayload = {
-            messages: messagesForGen,
-            parameters: {
+          // Emit debug prompt if requested (only for first character to avoid spam)
+          if (input.debugMode && targetCharId === respondingCharIds[0]) {
+            const debugPayload = {
+              messages: messagesForGen,
+              parameters: {
+                model: conn.model,
+                provider: conn.provider,
+                temperature,
+                maxTokens,
+                topP,
+                topK: topK || undefined,
+                frequencyPenalty: frequencyPenalty || undefined,
+                presencePenalty: presencePenalty || undefined,
+                showThoughts,
+                reasoningEffort: resolvedEffort ?? undefined,
+                enableCaching: conn.enableCaching === "true",
+                enableTools,
+                agentCount: resolvedAgents.length,
+              },
+            };
+            reply.raw.write(`data: ${JSON.stringify({ type: "debug_prompt", data: debugPayload })}\n\n`);
+
+            // Compute effective values that will actually be sent in the request body.
+            // Some providers suppress temperature/topP for certain model+effort combos.
+            const effModel = conn.model.toLowerCase();
+            const tempSuppressed =
+              (conn.provider === "openai" || conn.provider === "openrouter") &&
+              (/^(o1|o3|o4)/.test(effModel) || (effModel.startsWith("gpt-5") && !!resolvedEffort));
+            const effTemp = tempSuppressed ? "N/A" : temperature;
+            const effTopP = tempSuppressed ? "N/A" : topP;
+
+            console.log("\n[Debug] Prompt sent to model (%d messages):", messagesForGen.length);
+            console.log(
+              "  Model: %s (%s)  Temp: %s  MaxTokens: %s  TopP: %s  TopK: %s  Thinking: %s  Effort: %s  Verbosity: %s  Stream: %s",
+              conn.model,
+              conn.provider,
+              effTemp,
+              maxTokens,
+              effTopP,
+              topK || "default",
+              showThoughts,
+              resolvedEffort ?? "none",
+              verbosity ?? "default",
+              input.streaming,
+            );
+            for (const m of messagesForGen) {
+              console.log("  [%s] %s", m.role.toUpperCase(), m.content);
+            }
+          }
+
+          if (enableTools && provider.chatComplete) {
+            const MAX_TOOL_ROUNDS = 5;
+            let loopMessages: ChatMessage[] = messagesForGen.map((m) => ({
+              role: m.role as "system" | "user" | "assistant",
+              content: m.content,
+              ...(m.images?.length ? { images: m.images } : {}),
+              ...((m as any).providerMetadata ? { providerMetadata: (m as any).providerMetadata } : {}),
+            }));
+
+            // Extract Spotify credentials from the Spotify agent settings (if configured)
+            const spotifyAgent = resolvedAgents.find((a) => a.type === "spotify");
+            const spotifySettings = spotifyAgent?.settings
+              ? typeof spotifyAgent.settings === "string"
+                ? JSON.parse(spotifyAgent.settings)
+                : spotifyAgent.settings
+              : {};
+            let spotifyAccessToken = (spotifySettings.spotifyAccessToken as string) || null;
+
+            // Auto-refresh if token is expired and we have a refresh token
+            const spotifyExpiresAt = (spotifySettings.spotifyExpiresAt as number) ?? 0;
+            const spotifyRefreshToken = (spotifySettings.spotifyRefreshToken as string) || null;
+            const spotifyClientId = (spotifySettings.spotifyClientId as string) || null;
+            if (
+              spotifyAccessToken &&
+              spotifyRefreshToken &&
+              spotifyClientId &&
+              spotifyExpiresAt > 0 &&
+              Date.now() > spotifyExpiresAt - 60_000 // Refresh 1 min before expiry
+            ) {
+              try {
+                const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                  body: new URLSearchParams({
+                    grant_type: "refresh_token",
+                    refresh_token: spotifyRefreshToken,
+                    client_id: spotifyClientId,
+                  }),
+                  signal: AbortSignal.timeout(10_000),
+                });
+                if (tokenRes.ok) {
+                  const tokens = (await tokenRes.json()) as {
+                    access_token: string;
+                    refresh_token?: string;
+                    expires_in: number;
+                  };
+                  spotifyAccessToken = tokens.access_token;
+                  // Persist refreshed tokens in background (don't await)
+                  agentsStore
+                    .update(spotifyAgent!.id, {
+                      settings: {
+                        ...spotifySettings,
+                        spotifyAccessToken: tokens.access_token,
+                        spotifyRefreshToken: tokens.refresh_token ?? spotifyRefreshToken,
+                        spotifyExpiresAt: Date.now() + tokens.expires_in * 1000,
+                      },
+                    })
+                    .catch(() => {});
+                }
+              } catch {
+                // Use the existing token as fallback
+              }
+            }
+
+            const spotifyCreds = spotifyAccessToken ? { accessToken: spotifyAccessToken } : undefined;
+
+            // Attach tool context to the Spotify agent for function calling
+            if (spotifyCreds && spotifyAgent) {
+              const resolvedSpotify = resolvedAgents.find((a) => a.type === "spotify");
+              if (resolvedSpotify) {
+                const spotifyToolNames = DEFAULT_AGENT_TOOLS["spotify"] ?? [];
+                const spotifyToolDefs = BUILT_IN_TOOLS.filter((t) => spotifyToolNames.includes(t.name)).map((t) => ({
+                  type: "function" as const,
+                  function: {
+                    name: t.name,
+                    description: t.description,
+                    parameters: t.parameters as unknown as Record<string, unknown>,
+                  },
+                }));
+                resolvedSpotify.toolContext = {
+                  tools: spotifyToolDefs,
+                  executeToolCall: async (call) => {
+                    const results = await executeToolCalls([call], { spotify: spotifyCreds });
+                    return results[0]?.result ?? "Tool execution failed";
+                  },
+                };
+              }
+            }
+
+            // Stream tokens in real-time via onToken callback.
+            // Some providers (e.g. Gemini with thinking) return the entire response
+            // in one chunk. Break large chunks into small pieces so the client sees
+            // progressive streaming instead of the whole message appearing at once.
+            const STREAM_CHUNK = 6;
+            const onToken = (chunk: string) => {
+              // If the request has been aborted, skip emitting any further tokens.
+              if (abortController.signal.aborted) {
+                return;
+              }
+              fullResponse += chunk;
+              if (chunk.length <= STREAM_CHUNK) {
+                reply.raw.write(`data: ${JSON.stringify({ type: "token", data: chunk })}\n\n`);
+              } else {
+                for (let i = 0; i < chunk.length; i += STREAM_CHUNK) {
+                  reply.raw.write(
+                    `data: ${JSON.stringify({ type: "token", data: chunk.slice(i, i + STREAM_CHUNK) })}\n\n`,
+                  );
+                }
+              }
+            };
+
+            for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+              // Treat abort as a silent cancellation: stop the pipeline immediately.
+              if (abortController.signal.aborted) {
+                return null;
+              }
+
+              let result;
+              try {
+                result = await provider.chatComplete(loopMessages, {
+                  model: conn.model,
+                  temperature,
+                  maxTokens,
+                  topP,
+                  topK: topK || undefined,
+                  frequencyPenalty: frequencyPenalty || undefined,
+                  presencePenalty: presencePenalty || undefined,
+                  tools: toolDefs,
+                  enableCaching: conn.enableCaching === "true",
+                  enableThinking,
+                  reasoningEffort: resolvedEffort ?? undefined,
+                  verbosity: verbosity ?? undefined,
+                  onThinking,
+                  onToken: input.streaming ? onToken : undefined,
+                  signal: abortController.signal,
+                  encryptedReasoningItems: encryptedReasoningCache.get(input.chatId),
+                  onEncryptedReasoning: (items) => encryptedReasoningCache.set(input.chatId, items),
+                });
+              } catch (err: any) {
+                // If the error was caused by an abort, cancel silently and skip post-processing.
+                if (abortController.signal.aborted || (err && err.name === "AbortError")) {
+                  return null;
+                }
+                throw err;
+              }
+
+              // If abort was triggered during chat completion, exit before using the result.
+              if (abortController.signal.aborted) {
+                return null;
+              }
+
+              // If provider doesn't support onToken (fell back to non-streaming),
+              // write the content conventionally
+              if (result.content && !fullResponse.endsWith(result.content)) {
+                writeContentChunked(result.content);
+              }
+
+              // Accumulate usage across tool rounds
+              if (result.usage) {
+                if (!usage) {
+                  usage = { ...result.usage };
+                } else {
+                  usage.promptTokens += result.usage.promptTokens;
+                  usage.completionTokens += result.usage.completionTokens;
+                  usage.totalTokens += result.usage.totalTokens;
+                }
+              }
+              finishReason = result.finishReason;
+
+              if (!result.toolCalls.length) break;
+
+              loopMessages.push({
+                role: "assistant",
+                content: result.content ?? "",
+                tool_calls: result.toolCalls,
+              });
+
+              const toolResults = await executeToolCalls(result.toolCalls, {
+                customTools: customToolDefs,
+                spotify: spotifyCreds,
+                searchLorebook: async (query: string, category?: string | null) => {
+                  const entries = await lorebooksStore.listActiveEntries({
+                    chatId: input.chatId,
+                    characterIds,
+                    activeLorebookIds: chatActiveLorebookIds,
+                  });
+                  const q = query.toLowerCase();
+                  return entries
+                    .filter((e: any) => {
+                      const nameMatch = e.name?.toLowerCase().includes(q);
+                      const contentMatch = e.content?.toLowerCase().includes(q);
+                      const keyMatch = (e.keys as string[])?.some((k: string) => k.toLowerCase().includes(q));
+                      const catMatch = !category || e.tag === category;
+                      return catMatch && (nameMatch || contentMatch || keyMatch);
+                    })
+                    .slice(0, 20)
+                    .map((e: any) => ({ name: e.name, content: e.content, tag: e.tag, keys: e.keys as string[] }));
+                },
+              });
+
+              for (const tr of toolResults) {
+                reply.raw.write(
+                  `data: ${JSON.stringify({
+                    type: "tool_result",
+                    data: { name: tr.name, result: tr.result, success: tr.success },
+                  })}\n\n`,
+                );
+
+                // Persist update_game_state tool calls to the game state DB
+                if (tr.name === "update_game_state" && tr.success) {
+                  try {
+                    const parsed = JSON.parse(tr.result);
+                    if (parsed.applied && parsed.update) {
+                      const latest = await gameStateStore.getLatest(input.chatId);
+                      if (latest) {
+                        const u = parsed.update;
+                        const updates: Record<string, unknown> = {};
+                        if (u.type === "location_change") updates.location = u.value;
+                        if (u.type === "time_advance") updates.time = u.value;
+                        if (Object.keys(updates).length > 0) {
+                          await gameStateStore.updateLatest(input.chatId, updates);
+                        }
+                        // Send game_state_patch so HUD updates live
+                        reply.raw.write(`data: ${JSON.stringify({ type: "game_state_patch", data: updates })}\n\n`);
+                      }
+                    }
+                  } catch {
+                    // Non-critical
+                  }
+                }
+              }
+
+              for (const tr of toolResults) {
+                loopMessages.push({
+                  role: "tool",
+                  content: tr.result,
+                  tool_call_id: tr.toolCallId,
+                });
+              }
+
+              if (round === MAX_TOOL_ROUNDS - 1) {
+                // Reset per-character accumulator for final round content
+                const prevLen = fullResponse.length;
+                const finalResult = await provider.chatComplete(loopMessages, {
+                  model: conn.model,
+                  temperature,
+                  maxTokens,
+                  topP,
+                  topK: topK || undefined,
+                  frequencyPenalty: frequencyPenalty || undefined,
+                  presencePenalty: presencePenalty || undefined,
+                  enableCaching: conn.enableCaching === "true",
+                  enableThinking,
+                  reasoningEffort: resolvedEffort ?? undefined,
+                  verbosity: verbosity ?? undefined,
+                  onThinking,
+                  onToken: input.streaming ? onToken : undefined,
+                  signal: abortController.signal,
+                  encryptedReasoningItems: encryptedReasoningCache.get(input.chatId),
+                  onEncryptedReasoning: (items) => encryptedReasoningCache.set(input.chatId, items),
+                });
+                if (finalResult.content && fullResponse.length === prevLen) {
+                  writeContentChunked(finalResult.content);
+                }
+                if (finalResult.usage) {
+                  if (!usage) {
+                    usage = { ...finalResult.usage };
+                  } else {
+                    usage.promptTokens += finalResult.usage.promptTokens;
+                    usage.completionTokens += finalResult.usage.completionTokens;
+                    usage.totalTokens += finalResult.usage.totalTokens;
+                  }
+                }
+                finishReason = finalResult.finishReason;
+              }
+            }
+          } else {
+            const gen = provider.chat(messagesForGen, {
               model: conn.model,
-              provider: conn.provider,
               temperature,
               maxTokens,
               topP,
               topK: topK || undefined,
               frequencyPenalty: frequencyPenalty || undefined,
               presencePenalty: presencePenalty || undefined,
-              showThoughts,
-              reasoningEffort: resolvedEffort ?? undefined,
+              stream: input.streaming,
               enableCaching: conn.enableCaching === "true",
-              enableTools,
-              agentCount: resolvedAgents.length,
-            },
-          };
-          reply.raw.write(`data: ${JSON.stringify({ type: "debug_prompt", data: debugPayload })}\n\n`);
-
-          // Compute effective values that will actually be sent in the request body.
-          // Some providers suppress temperature/topP for certain model+effort combos.
-          const effModel = conn.model.toLowerCase();
-          const tempSuppressed =
-            (conn.provider === "openai" || conn.provider === "openrouter") &&
-            (/^(o1|o3|o4)/.test(effModel) ||
-              (effModel.startsWith("gpt-5") && !!resolvedEffort));
-          const effTemp = tempSuppressed ? "N/A" : temperature;
-          const effTopP = tempSuppressed ? "N/A" : topP;
-
-          console.log("\n[Debug] Prompt sent to model (%d messages):", messagesForGen.length);
-          console.log(
-            "  Model: %s (%s)  Temp: %s  MaxTokens: %s  TopP: %s  TopK: %s  Thinking: %s  Effort: %s  Verbosity: %s  Stream: %s",
-            conn.model,
-            conn.provider,
-            effTemp,
-            maxTokens,
-            effTopP,
-            topK || "default",
-            showThoughts,
-            resolvedEffort ?? "none",
-            verbosity ?? "default",
-            input.streaming,
-          );
-          for (const m of messagesForGen) {
-            console.log("  [%s] %s", m.role.toUpperCase(), m.content);
-          }
-        }
-
-        if (enableTools && provider.chatComplete) {
-          const MAX_TOOL_ROUNDS = 5;
-          let loopMessages: ChatMessage[] = messagesForGen.map((m) => ({
-            role: m.role as "system" | "user" | "assistant",
-            content: m.content,
-            ...(m.images?.length ? { images: m.images } : {}),
-            ...((m as any).providerMetadata ? { providerMetadata: (m as any).providerMetadata } : {}),
-          }));
-
-          // Extract Spotify credentials from the Spotify agent settings (if configured)
-          const spotifyAgent = resolvedAgents.find((a) => a.type === "spotify");
-          const spotifySettings = spotifyAgent?.settings
-            ? typeof spotifyAgent.settings === "string"
-              ? JSON.parse(spotifyAgent.settings)
-              : spotifyAgent.settings
-            : {};
-          let spotifyAccessToken = (spotifySettings.spotifyAccessToken as string) || null;
-
-          // Auto-refresh if token is expired and we have a refresh token
-          const spotifyExpiresAt = (spotifySettings.spotifyExpiresAt as number) ?? 0;
-          const spotifyRefreshToken = (spotifySettings.spotifyRefreshToken as string) || null;
-          const spotifyClientId = (spotifySettings.spotifyClientId as string) || null;
-          if (
-            spotifyAccessToken &&
-            spotifyRefreshToken &&
-            spotifyClientId &&
-            spotifyExpiresAt > 0 &&
-            Date.now() > spotifyExpiresAt - 60_000 // Refresh 1 min before expiry
-          ) {
-            try {
-              const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: new URLSearchParams({
-                  grant_type: "refresh_token",
-                  refresh_token: spotifyRefreshToken,
-                  client_id: spotifyClientId,
-                }),
-                signal: AbortSignal.timeout(10_000),
-              });
-              if (tokenRes.ok) {
-                const tokens = (await tokenRes.json()) as {
-                  access_token: string;
-                  refresh_token?: string;
-                  expires_in: number;
-                };
-                spotifyAccessToken = tokens.access_token;
-                // Persist refreshed tokens in background (don't await)
-                agentsStore
-                  .update(spotifyAgent!.id, {
-                    settings: {
-                      ...spotifySettings,
-                      spotifyAccessToken: tokens.access_token,
-                      spotifyRefreshToken: tokens.refresh_token ?? spotifyRefreshToken,
-                      spotifyExpiresAt: Date.now() + tokens.expires_in * 1000,
-                    },
-                  })
-                  .catch(() => {});
-              }
-            } catch {
-              // Use the existing token as fallback
-            }
-          }
-
-          const spotifyCreds = spotifyAccessToken ? { accessToken: spotifyAccessToken } : undefined;
-
-          // Attach tool context to the Spotify agent for function calling
-          if (spotifyCreds && spotifyAgent) {
-            const resolvedSpotify = resolvedAgents.find((a) => a.type === "spotify");
-            if (resolvedSpotify) {
-              const spotifyToolNames = DEFAULT_AGENT_TOOLS["spotify"] ?? [];
-              const spotifyToolDefs = BUILT_IN_TOOLS.filter((t) => spotifyToolNames.includes(t.name)).map((t) => ({
-                type: "function" as const,
-                function: {
-                  name: t.name,
-                  description: t.description,
-                  parameters: t.parameters as unknown as Record<string, unknown>,
-                },
-              }));
-              resolvedSpotify.toolContext = {
-                tools: spotifyToolDefs,
-                executeToolCall: async (call) => {
-                  const results = await executeToolCalls([call], { spotify: spotifyCreds });
-                  return results[0]?.result ?? "Tool execution failed";
-                },
-              };
-            }
-          }
-
-          // Stream tokens in real-time via onToken callback.
-          // Some providers (e.g. Gemini with thinking) return the entire response
-          // in one chunk. Break large chunks into small pieces so the client sees
-          // progressive streaming instead of the whole message appearing at once.
-          const STREAM_CHUNK = 6;
-          const onToken = (chunk: string) => {
-            // If the request has been aborted, skip emitting any further tokens.
-            if (abortController.signal.aborted) {
-              return;
-            }
-            fullResponse += chunk;
-            if (chunk.length <= STREAM_CHUNK) {
-              reply.raw.write(`data: ${JSON.stringify({ type: "token", data: chunk })}\n\n`);
-            } else {
-              for (let i = 0; i < chunk.length; i += STREAM_CHUNK) {
-                reply.raw.write(
-                  `data: ${JSON.stringify({ type: "token", data: chunk.slice(i, i + STREAM_CHUNK) })}\n\n`,
-                );
-              }
-            }
-          };
-
-          for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-            // Treat abort as a silent cancellation: stop the pipeline immediately.
-            if (abortController.signal.aborted) {
-              return null;
-            }
-
-            let result;
-            try {
-              result = await provider.chatComplete(loopMessages, {
-                model: conn.model,
-                temperature,
-                maxTokens,
-                topP,
-                topK: topK || undefined,
-                frequencyPenalty: frequencyPenalty || undefined,
-                presencePenalty: presencePenalty || undefined,
-                tools: toolDefs,
-                enableCaching: conn.enableCaching === "true",
-                enableThinking,
-                reasoningEffort: resolvedEffort ?? undefined,
-                verbosity: verbosity ?? undefined,
-                onThinking,
-                onToken: input.streaming ? onToken : undefined,
-                signal: abortController.signal,
-                encryptedReasoningItems: encryptedReasoningCache.get(input.chatId),
-                onEncryptedReasoning: (items) => encryptedReasoningCache.set(input.chatId, items),
-              });
-            } catch (err: any) {
-              // If the error was caused by an abort, cancel silently and skip post-processing.
-              if (abortController.signal.aborted || (err && err.name === "AbortError")) {
-                return null;
-              }
-              throw err;
-            }
-
-            // If abort was triggered during chat completion, exit before using the result.
-            if (abortController.signal.aborted) {
-              return null;
-            }
-
-            // If provider doesn't support onToken (fell back to non-streaming),
-            // write the content conventionally
-            if (result.content && !fullResponse.endsWith(result.content)) {
-              writeContentChunked(result.content);
-            }
-
-            // Accumulate usage across tool rounds
-            if (result.usage) {
-              if (!usage) {
-                usage = { ...result.usage };
-              } else {
-                usage.promptTokens += result.usage.promptTokens;
-                usage.completionTokens += result.usage.completionTokens;
-                usage.totalTokens += result.usage.totalTokens;
-              }
-            }
-            finishReason = result.finishReason;
-
-            if (!result.toolCalls.length) break;
-
-            loopMessages.push({
-              role: "assistant",
-              content: result.content ?? "",
-              tool_calls: result.toolCalls,
-            });
-
-            const toolResults = await executeToolCalls(result.toolCalls, {
-              customTools: customToolDefs,
-              spotify: spotifyCreds,
-              searchLorebook: async (query: string, category?: string | null) => {
-                const entries = await lorebooksStore.listActiveEntries({
-                  chatId: input.chatId,
-                  characterIds,
-                  activeLorebookIds: chatActiveLorebookIds,
-                });
-                const q = query.toLowerCase();
-                return entries
-                  .filter((e: any) => {
-                    const nameMatch = e.name?.toLowerCase().includes(q);
-                    const contentMatch = e.content?.toLowerCase().includes(q);
-                    const keyMatch = (e.keys as string[])?.some((k: string) => k.toLowerCase().includes(q));
-                    const catMatch = !category || e.tag === category;
-                    return catMatch && (nameMatch || contentMatch || keyMatch);
-                  })
-                  .slice(0, 20)
-                  .map((e: any) => ({ name: e.name, content: e.content, tag: e.tag, keys: e.keys as string[] }));
+              enableThinking,
+              reasoningEffort: resolvedEffort ?? undefined,
+              verbosity: verbosity ?? undefined,
+              openrouterProvider: conn.openrouterProvider ?? undefined,
+              onThinking,
+              onResponseParts: (parts) => {
+                geminiResponseParts = parts;
               },
+              signal: abortController.signal,
+              encryptedReasoningItems: encryptedReasoningCache.get(input.chatId),
+              onEncryptedReasoning: (items) => encryptedReasoningCache.set(input.chatId, items),
             });
+            let result = await gen.next();
+            while (!result.done) {
+              fullResponse += result.value;
+              // Break large chunks (e.g. Gemini non-streaming) into small pieces
+              // so the client sees progressive streaming.
+              const val = result.value;
+              if (val.length <= 6) {
+                reply.raw.write(`data: ${JSON.stringify({ type: "token", data: val })}\n\n`);
+              } else {
+                for (let i = 0; i < val.length; i += 6) {
+                  reply.raw.write(`data: ${JSON.stringify({ type: "token", data: val.slice(i, i + 6) })}\n\n`);
+                }
+              }
+              result = await gen.next();
+            }
+            // Generator return value contains usage
+            if (result.value) usage = result.value;
+          }
 
-            for (const tr of toolResults) {
-              reply.raw.write(
-                `data: ${JSON.stringify({
-                  type: "tool_result",
-                  data: { name: tr.name, result: tr.result, success: tr.success },
-                })}\n\n`,
+          const durationMs = Date.now() - genStartTime;
+
+          // ── Auto-detect <think>/<thinking> tags in model output ──
+          // Some models emit reasoning wrapped in <think>...</think> or <thinking>...</thinking>
+          // even when the provider doesn't natively separate reasoning tokens.
+          // Extract this into `fullThinking` so it displays under the brain icon.
+          const thinkTagRe = /^(\s*)<(think(?:ing)?)>([\s\S]*?)<\/\2>/i;
+          const thinkMatch = fullResponse.match(thinkTagRe);
+          if (thinkMatch) {
+            const extractedThinking = thinkMatch[3]!.trim();
+            if (extractedThinking) {
+              // Append to any provider-native thinking already captured
+              fullThinking = fullThinking ? fullThinking + "\n\n" + extractedThinking : extractedThinking;
+            }
+            // Strip the entire think block from the visible response
+            fullResponse = fullResponse.slice(thinkMatch[0].length).trimStart();
+            reply.raw.write(`data: ${JSON.stringify({ type: "content_replace", data: fullResponse })}\n\n`);
+          }
+
+          // Send usage to client for debug display
+          if (input.debugMode && (usage || durationMs)) {
+            reply.raw.write(
+              `data: ${JSON.stringify({
+                type: "debug_usage",
+                data: {
+                  tokensPrompt: usage?.promptTokens ?? null,
+                  tokensCompletion: usage?.completionTokens ?? null,
+                  tokensTotal: usage?.totalTokens ?? null,
+                  durationMs,
+                  finishReason: finishReason ?? null,
+                },
+              })}\n\n`,
+            );
+          }
+
+          // ── Parse and strip character commands (Conversation mode only) ──
+          let parsedCommands: CharacterCommand[] = [];
+          let contentReplaced = false;
+          if (chatMode === "conversation" && !input.impersonate) {
+            const parsed = parseCharacterCommands(fullResponse);
+            if (parsed.commands.length > 0) {
+              parsedCommands = parsed.commands;
+              fullResponse = parsed.cleanContent;
+              contentReplaced = true;
+              console.log(
+                `[generate] Parsed ${parsed.commands.length} character command(s):`,
+                parsed.commands.map((c) => c.type),
               );
+            }
+          }
 
-              // Persist update_game_state tool calls to the game state DB
-              if (tr.name === "update_game_state" && tr.success) {
-                try {
-                  const parsed = JSON.parse(tr.result);
-                  if (parsed.applied && parsed.update) {
-                    const latest = await gameStateStore.getLatest(input.chatId);
-                    if (latest) {
-                      const u = parsed.update;
-                      const updates: Record<string, unknown> = {};
-                      if (u.type === "location_change") updates.location = u.value;
-                      if (u.type === "time_advance") updates.time = u.value;
-                      if (Object.keys(updates).length > 0) {
-                        await gameStateStore.updateLatest(input.chatId, updates);
-                      }
-                      // Send game_state_patch so HUD updates live
-                      reply.raw.write(`data: ${JSON.stringify({ type: "game_state_patch", data: updates })}\n\n`);
-                    }
-                  }
-                } catch {
-                  // Non-critical
-                }
+          // ── Extract <ooc> tags from roleplay responses and post to connected conversation ──
+          let oocMessages: string[] = [];
+          if (chatMode === "roleplay" && !input.impersonate && chat.connectedChatId) {
+            const OOC_RE = /<ooc>([\s\S]*?)<\/ooc>/gi;
+            for (const match of fullResponse.matchAll(OOC_RE)) {
+              const text = match[1]!.trim();
+              if (text) oocMessages.push(text);
+            }
+            if (oocMessages.length > 0) {
+              fullResponse = fullResponse
+                .replace(OOC_RE, "")
+                .replace(/\n{3,}/g, "\n\n")
+                .trim();
+              contentReplaced = true;
+              console.log(
+                `[generate] Extracted ${oocMessages.length} OOC message(s) for conversation ${chat.connectedChatId}`,
+              );
+            }
+          }
+
+          // ── Strip character name prefix in individual group mode ──
+          // LLMs often prefix the response with the character name even when told not to.
+          // Also strip any leftover <speaker> tags from individual mode responses.
+          if (chatMode === "conversation" && isGroupChat && groupChatMode === "individual" && targetCharId) {
+            const charRow = charInfo.find((c) => c.id === targetCharId);
+            if (charRow) {
+              const cName = charRow.name;
+              // Strip <speaker="Name">...</speaker> wrapper if present
+              const speakerWrap = new RegExp(
+                `^\\s*<speaker="${cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}">[\\s\\S]*?<\\/speaker>\\s*$`,
+                "i",
+              );
+              const speakerMatch = fullResponse.match(speakerWrap);
+              if (speakerMatch) {
+                fullResponse = fullResponse
+                  .replace(/<speaker="[^"]*">/gi, "")
+                  .replace(/<\/speaker>/gi, "")
+                  .trim();
+                contentReplaced = true;
+              }
+              // Strip plain name prefix: "Dottore\n", "Dottore:\n", "Dottore: "
+              const namePrefix = new RegExp(`^\\s*${cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:?\\s*\n`, "i");
+              if (namePrefix.test(fullResponse)) {
+                fullResponse = fullResponse.replace(namePrefix, "");
+                contentReplaced = true;
               }
             }
+          }
 
-            for (const tr of toolResults) {
-              loopMessages.push({
-                role: "tool",
-                content: tr.result,
-                tool_call_id: tr.toolCallId,
-              });
-            }
+          if (contentReplaced) {
+            reply.raw.write(`data: ${JSON.stringify({ type: "content_replace", data: fullResponse })}\n\n`);
+          }
 
-            if (round === MAX_TOOL_ROUNDS - 1) {
-              // Reset per-character accumulator for final round content
-              const prevLen = fullResponse.length;
-              const finalResult = await provider.chatComplete(loopMessages, {
+          // Guard: don't save empty responses — the model returned nothing useful
+          if (!fullResponse.trim() && !input.impersonate) {
+            console.warn(`[generate] Empty response from model for chat ${input.chatId} (char: ${targetCharId})`);
+            reply.raw.write(
+              `data: ${JSON.stringify({ type: "error", data: "The AI returned an empty response. Try sending your message again." })}\n\n`,
+            );
+            return null;
+          }
+
+          // Save assistant message (or user message for impersonate)
+          let savedMsg: any;
+          if (input.regenerateMessageId) {
+            savedMsg = await chats.addSwipe(input.regenerateMessageId, fullResponse);
+            savedMsg = await chats.getMessage(input.regenerateMessageId);
+          } else {
+            savedMsg = await chats.createMessage({
+              chatId: input.chatId,
+              role: input.impersonate ? "user" : "assistant",
+              characterId: input.impersonate ? null : targetCharId,
+              content: fullResponse,
+            });
+          }
+
+          // Persist thinking/reasoning and generation info
+          if (savedMsg?.id) {
+            const extraUpdate: Record<string, unknown> = {
+              generationInfo: {
                 model: conn.model,
-                temperature,
-                maxTokens,
-                topP,
-                topK: topK || undefined,
-                frequencyPenalty: frequencyPenalty || undefined,
-                presencePenalty: presencePenalty || undefined,
-                enableCaching: conn.enableCaching === "true",
-                enableThinking,
-                reasoningEffort: resolvedEffort ?? undefined,
-                verbosity: verbosity ?? undefined,
-                onThinking,
-                onToken: input.streaming ? onToken : undefined,
-                signal: abortController.signal,
-                encryptedReasoningItems: encryptedReasoningCache.get(input.chatId),
-                onEncryptedReasoning: (items) => encryptedReasoningCache.set(input.chatId, items),
-              });
-              if (finalResult.content && fullResponse.length === prevLen) {
-                writeContentChunked(finalResult.content);
-              }
-              if (finalResult.usage) {
-                if (!usage) {
-                  usage = { ...finalResult.usage };
-                } else {
-                  usage.promptTokens += finalResult.usage.promptTokens;
-                  usage.completionTokens += finalResult.usage.completionTokens;
-                  usage.totalTokens += finalResult.usage.totalTokens;
-                }
-              }
-              finishReason = finalResult.finishReason;
-            }
-          }
-        } else {
-          const gen = provider.chat(messagesForGen, {
-            model: conn.model,
-            temperature,
-            maxTokens,
-            topP,
-            topK: topK || undefined,
-            frequencyPenalty: frequencyPenalty || undefined,
-            presencePenalty: presencePenalty || undefined,
-            stream: input.streaming,
-            enableCaching: conn.enableCaching === "true",
-            enableThinking,
-            reasoningEffort: resolvedEffort ?? undefined,
-            verbosity: verbosity ?? undefined,
-            openrouterProvider: conn.openrouterProvider ?? undefined,
-            onThinking,
-            onResponseParts: (parts) => {
-              geminiResponseParts = parts;
-            },
-            signal: abortController.signal,
-            encryptedReasoningItems: encryptedReasoningCache.get(input.chatId),
-            onEncryptedReasoning: (items) => encryptedReasoningCache.set(input.chatId, items),
-          });
-          let result = await gen.next();
-          while (!result.done) {
-            fullResponse += result.value;
-            // Break large chunks (e.g. Gemini non-streaming) into small pieces
-            // so the client sees progressive streaming.
-            const val = result.value;
-            if (val.length <= 6) {
-              reply.raw.write(`data: ${JSON.stringify({ type: "token", data: val })}\n\n`);
-            } else {
-              for (let i = 0; i < val.length; i += 6) {
-                reply.raw.write(`data: ${JSON.stringify({ type: "token", data: val.slice(i, i + 6) })}\n\n`);
-              }
-            }
-            result = await gen.next();
-          }
-          // Generator return value contains usage
-          if (result.value) usage = result.value;
-        }
-
-        const durationMs = Date.now() - genStartTime;
-
-        // ── Auto-detect <think>/<thinking> tags in model output ──
-        // Some models emit reasoning wrapped in <think>...</think> or <thinking>...</thinking>
-        // even when the provider doesn't natively separate reasoning tokens.
-        // Extract this into `fullThinking` so it displays under the brain icon.
-        const thinkTagRe = /^(\s*)<(think(?:ing)?)>([\s\S]*?)<\/\2>/i;
-        const thinkMatch = fullResponse.match(thinkTagRe);
-        if (thinkMatch) {
-          const extractedThinking = thinkMatch[3]!.trim();
-          if (extractedThinking) {
-            // Append to any provider-native thinking already captured
-            fullThinking = fullThinking ? fullThinking + "\n\n" + extractedThinking : extractedThinking;
-          }
-          // Strip the entire think block from the visible response
-          fullResponse = fullResponse.slice(thinkMatch[0].length).trimStart();
-          reply.raw.write(`data: ${JSON.stringify({ type: "content_replace", data: fullResponse })}\n\n`);
-        }
-
-        // Send usage to client for debug display
-        if (input.debugMode && (usage || durationMs)) {
-          reply.raw.write(
-            `data: ${JSON.stringify({
-              type: "debug_usage",
-              data: {
+                provider: conn.provider,
+                temperature: temperature ?? null,
+                maxTokens: maxTokens ?? null,
+                showThoughts: showThoughts ?? null,
+                reasoningEffort: resolvedEffort ?? reasoningEffort ?? null,
+                verbosity: verbosity ?? null,
                 tokensPrompt: usage?.promptTokens ?? null,
                 tokensCompletion: usage?.completionTokens ?? null,
-                tokensTotal: usage?.totalTokens ?? null,
                 durationMs,
                 finishReason: finishReason ?? null,
               },
-            })}\n\n`,
-          );
-        }
-
-        // ── Parse and strip character commands (Conversation mode only) ──
-        let parsedCommands: CharacterCommand[] = [];
-        let contentReplaced = false;
-        if (chatMode === "conversation" && !input.impersonate) {
-          const parsed = parseCharacterCommands(fullResponse);
-          if (parsed.commands.length > 0) {
-            parsedCommands = parsed.commands;
-            fullResponse = parsed.cleanContent;
-            contentReplaced = true;
-            console.log(
-              `[generate] Parsed ${parsed.commands.length} character command(s):`,
-              parsed.commands.map((c) => c.type),
-            );
-          }
-        }
-
-        // ── Extract <ooc> tags from roleplay responses and post to connected conversation ──
-        let oocMessages: string[] = [];
-        if (chatMode === "roleplay" && !input.impersonate && chat.connectedChatId) {
-          const OOC_RE = /<ooc>([\s\S]*?)<\/ooc>/gi;
-          for (const match of fullResponse.matchAll(OOC_RE)) {
-            const text = match[1]!.trim();
-            if (text) oocMessages.push(text);
-          }
-          if (oocMessages.length > 0) {
-            fullResponse = fullResponse
-              .replace(OOC_RE, "")
-              .replace(/\n{3,}/g, "\n\n")
-              .trim();
-            contentReplaced = true;
-            console.log(
-              `[generate] Extracted ${oocMessages.length} OOC message(s) for conversation ${chat.connectedChatId}`,
-            );
-          }
-        }
-
-        // ── Strip character name prefix in individual group mode ──
-        // LLMs often prefix the response with the character name even when told not to.
-        // Also strip any leftover <speaker> tags from individual mode responses.
-        if (chatMode === "conversation" && isGroupChat && groupChatMode === "individual" && targetCharId) {
-          const charRow = charInfo.find((c) => c.id === targetCharId);
-          if (charRow) {
-            const cName = charRow.name;
-            // Strip <speaker="Name">...</speaker> wrapper if present
-            const speakerWrap = new RegExp(
-              `^\\s*<speaker="${cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}">[\\s\\S]*?<\\/speaker>\\s*$`,
-              "i",
-            );
-            const speakerMatch = fullResponse.match(speakerWrap);
-            if (speakerMatch) {
-              fullResponse = fullResponse
-                .replace(/<speaker="[^"]*">/gi, "")
-                .replace(/<\/speaker>/gi, "")
-                .trim();
-              contentReplaced = true;
+            };
+            if (fullThinking) extraUpdate.thinking = fullThinking;
+            else extraUpdate.thinking = null;
+            // Store Gemini response parts (thought signatures + summaries) for multi-turn continuity
+            if (geminiResponseParts) extraUpdate.geminiParts = geminiResponseParts;
+            // Cache context injections (prose-guardian etc.) on the message so regens can reuse them
+            if (!input.regenerateMessageId && contextInjections.length > 0) {
+              extraUpdate.contextInjections = contextInjections;
             }
-            // Strip plain name prefix: "Dottore\n", "Dottore:\n", "Dottore: "
-            const namePrefix = new RegExp(`^\\s*${cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:?\\s*\n`, "i");
-            if (namePrefix.test(fullResponse)) {
-              fullResponse = fullResponse.replace(namePrefix, "");
-              contentReplaced = true;
+            // Cache the final prompt (what was actually sent to the model) for Peek Prompt
+            extraUpdate.cachedPrompt = messagesForGen.map((m) => ({ role: m.role, content: m.content }));
+            await chats.updateMessageExtra(savedMsg.id, extraUpdate);
+            // Also persist on the active swipe so switching swipes preserves per-swipe extras
+            const refreshedMsg = await chats.getMessage(savedMsg.id);
+            if (refreshedMsg) {
+              await chats.updateSwipeExtra(savedMsg.id, refreshedMsg.activeSwipeIndex, extraUpdate);
             }
-          }
-        }
 
-        if (contentReplaced) {
-          reply.raw.write(`data: ${JSON.stringify({ type: "content_replace", data: fullResponse })}\n\n`);
-        }
+            sendSseEvent(reply, {
+              type: "message_saved",
+              data: refreshedMsg ?? savedMsg,
+            });
 
-        // Guard: don't save empty responses — the model returned nothing useful
-        if (!fullResponse.trim() && !input.impersonate) {
-          console.warn(`[generate] Empty response from model for chat ${input.chatId} (char: ${targetCharId})`);
-          reply.raw.write(
-            `data: ${JSON.stringify({ type: "error", data: "The AI returned an empty response. Try sending your message again." })}\n\n`,
-          );
-          return null;
-        }
-
-        // Save assistant message (or user message for impersonate)
-        let savedMsg: any;
-        if (input.regenerateMessageId) {
-          savedMsg = await chats.addSwipe(input.regenerateMessageId, fullResponse);
-          savedMsg = await chats.getMessage(input.regenerateMessageId);
-        } else {
-          savedMsg = await chats.createMessage({
-            chatId: input.chatId,
-            role: input.impersonate ? "user" : "assistant",
-            characterId: input.impersonate ? null : targetCharId,
-            content: fullResponse,
-          });
-        }
-
-        // Persist thinking/reasoning and generation info
-        if (savedMsg?.id) {
-          const extraUpdate: Record<string, unknown> = {
-            generationInfo: {
-              model: conn.model,
-              provider: conn.provider,
-              temperature: temperature ?? null,
-              maxTokens: maxTokens ?? null,
-              showThoughts: showThoughts ?? null,
-              reasoningEffort: resolvedEffort ?? reasoningEffort ?? null,
-              verbosity: verbosity ?? null,
-              tokensPrompt: usage?.promptTokens ?? null,
-              tokensCompletion: usage?.completionTokens ?? null,
-              durationMs,
-              finishReason: finishReason ?? null,
-            },
-          };
-          if (fullThinking) extraUpdate.thinking = fullThinking;
-          else extraUpdate.thinking = null;
-          // Store Gemini response parts (thought signatures + summaries) for multi-turn continuity
-          if (geminiResponseParts) extraUpdate.geminiParts = geminiResponseParts;
-          // Cache context injections (prose-guardian etc.) on the message so regens can reuse them
-          if (!input.regenerateMessageId && contextInjections.length > 0) {
-            extraUpdate.contextInjections = contextInjections;
-          }
-          // Cache the final prompt (what was actually sent to the model) for Peek Prompt
-          extraUpdate.cachedPrompt = messagesForGen.map((m) => ({ role: m.role, content: m.content }));
-          await chats.updateMessageExtra(savedMsg.id, extraUpdate);
-          // Also persist on the active swipe so switching swipes preserves per-swipe extras
-          const refreshedMsg = await chats.getMessage(savedMsg.id);
-          if (refreshedMsg) {
-            await chats.updateSwipeExtra(savedMsg.id, refreshedMsg.activeSwipeIndex, extraUpdate);
-          }
-
-          sendSseEvent(reply, {
-            type: "message_saved",
-            data: refreshedMsg ?? savedMsg,
-          });
-
-          // Evict cachedPrompt from older messages to save storage (keep last 2 assistant msgs)
-          const allMsgs = await chats.listMessages(input.chatId);
-          const assistantMsgIds = allMsgs.filter((m) => m.role === "assistant").map((m) => m.id);
-          const staleIds = assistantMsgIds.slice(0, -2);
-          for (const staleId of staleIds) {
-            const staleMsg = await chats.getMessage(staleId);
-            if (!staleMsg) continue;
-            const staleExtra = typeof staleMsg.extra === "string" ? JSON.parse(staleMsg.extra) : (staleMsg.extra ?? {});
-            if (!staleExtra.cachedPrompt) continue;
-            await chats.updateMessageExtra(staleId, { cachedPrompt: null });
-            // Also clean swipes
-            const swipes = await chats.getSwipes(staleId);
-            for (const sw of swipes) {
-              const swExtra = typeof sw.extra === "string" ? JSON.parse(sw.extra) : (sw.extra ?? {});
-              if (swExtra.cachedPrompt) {
-                await chats.updateSwipeExtra(staleId, sw.index, { cachedPrompt: null });
+            // Evict cachedPrompt from older messages to save storage (keep last 2 assistant msgs)
+            const allMsgs = await chats.listMessages(input.chatId);
+            const assistantMsgIds = allMsgs.filter((m) => m.role === "assistant").map((m) => m.id);
+            const staleIds = assistantMsgIds.slice(0, -2);
+            for (const staleId of staleIds) {
+              const staleMsg = await chats.getMessage(staleId);
+              if (!staleMsg) continue;
+              const staleExtra =
+                typeof staleMsg.extra === "string" ? JSON.parse(staleMsg.extra) : (staleMsg.extra ?? {});
+              if (!staleExtra.cachedPrompt) continue;
+              await chats.updateMessageExtra(staleId, { cachedPrompt: null });
+              // Also clean swipes
+              const swipes = await chats.getSwipes(staleId);
+              for (const sw of swipes) {
+                const swExtra = typeof sw.extra === "string" ? JSON.parse(sw.extra) : (sw.extra ?? {});
+                if (swExtra.cachedPrompt) {
+                  await chats.updateSwipeExtra(staleId, sw.index, { cachedPrompt: null });
+                }
               }
             }
           }
-        }
 
-        // Mirror character response to Discord (fire-and-forget, skip regens/swipes)
-        if (discordWebhookUrl && fullResponse.trim() && !input.impersonate && !input.regenerateMessageId) {
-          const charName = charInfo.find((c) => c.id === targetCharId)?.name ?? "Character";
-          postToDiscordWebhook(discordWebhookUrl, { content: fullResponse, username: charName });
-        }
+          // Mirror character response to Discord (fire-and-forget, skip regens/swipes)
+          if (discordWebhookUrl && fullResponse.trim() && !input.impersonate && !input.regenerateMessageId) {
+            const charName = charInfo.find((c) => c.id === targetCharId)?.name ?? "Character";
+            postToDiscordWebhook(discordWebhookUrl, { content: fullResponse, username: charName });
+          }
 
-        return { savedMsg, response: fullResponse, commands: parsedCommands, oocMessages, characterId: targetCharId };
+          return { savedMsg, response: fullResponse, commands: parsedCommands, oocMessages, characterId: targetCharId };
         } finally {
           clearInterval(keepaliveTimer);
         }
@@ -4420,6 +4665,15 @@ export async function generateRoutes(app: FastifyInstance) {
                     const fullPrompt = style ? `${style}, ${imagePrompt}` : imagePrompt;
 
                     console.log(`[illustrator] Starting image generation (${imgWidth}x${imgHeight})...`);
+
+                    // Try to read the first character's avatar for reference image consistency
+                    const firstCharId = characterIds[0];
+                    let illustratorRefImage: string | undefined;
+                    if (firstCharId) {
+                      const refCharRow = await chars.getById(firstCharId);
+                      illustratorRefImage = readAvatarBase64(refCharRow?.avatarPath as string | null);
+                    }
+
                     const imageResult = await generateImage(imgModel, imgBaseUrl, imgApiKey, {
                       prompt: fullPrompt,
                       negativePrompt: negativePrompt || undefined,
@@ -4427,6 +4681,7 @@ export async function generateRoutes(app: FastifyInstance) {
                       width: imgWidth,
                       height: imgHeight,
                       comfyWorkflow: (imgConnFull as any).comfyuiWorkflow || undefined,
+                      referenceImage: illustratorRefImage,
                     });
 
                     // Save to disk
@@ -4754,6 +5009,9 @@ export async function generateRoutes(app: FastifyInstance) {
                   const appearance = charData?.extensions?.appearance ?? charData?.description ?? "";
 
                   // Use the LLM to build a proper image prompt
+                  const selfieTags: string[] = Array.isArray(chatMeta.selfieTags)
+                    ? (chatMeta.selfieTags as string[])
+                    : [];
                   const promptBuilder = createLLMProvider(conn.provider, baseUrl, conn.apiKey);
                   const promptResult = await promptBuilder.chatComplete(
                     [
@@ -4772,6 +5030,9 @@ export async function generateRoutes(app: FastifyInstance) {
                           `- Lighting and mood`,
                           ``,
                           `Infer the appropriate art style from the character. For example, anime/game characters should use anime/illustration style, realistic characters should use photorealistic style. Match the style to the character's origin.`,
+                          ...(selfieTags.length > 0
+                            ? [``, `Always include these tags/modifiers in the prompt: ${selfieTags.join(", ")}`]
+                            : []),
                           `Output ONLY the prompt text, nothing else.`,
                         ].join("\n"),
                       },
@@ -4805,6 +5066,7 @@ export async function generateRoutes(app: FastifyInstance) {
                       width: selfieW || 512,
                       height: selfieH || 768,
                       comfyWorkflow: (imgConnFull as any).comfyuiWorkflow || undefined,
+                      referenceImage: readAvatarBase64(charRow?.avatarPath as string | null),
                     });
 
                     // Save to disk and DB

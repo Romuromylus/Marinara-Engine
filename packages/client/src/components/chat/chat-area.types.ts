@@ -10,6 +10,7 @@ export type CharacterMap = Map<
     boxColor?: string;
     avatarCrop?: { zoom: number; offsetX: number; offsetY: number } | null;
     conversationStatus?: "online" | "idle" | "dnd" | "offline";
+    conversationActivity?: string;
   }
 >;
 

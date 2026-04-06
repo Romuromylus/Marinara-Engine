@@ -115,7 +115,7 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   addEchoMessage: (characterName, reaction) =>
     set((s) => ({
-      echoMessages: [...s.echoMessages, { characterName, reaction, timestamp: Date.now() }].slice(-100),
+      echoMessages: [...s.echoMessages, { characterName, reaction, timestamp: Date.now() }].slice(-500),
     })),
 
   setEchoMessages: (messages) => set({ echoMessages: messages.slice(-100) }),

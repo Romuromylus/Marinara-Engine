@@ -70,10 +70,53 @@ export async function agentsRoutes(app: FastifyInstance) {
     return storage.getEchoMessages(req.params.chatId);
   });
 
+  /** Clear all echo chamber messages for a chat. */
+  app.delete<{ Params: { chatId: string } }>("/echo-messages/:chatId", async (req, reply) => {
+    await storage.clearEchoMessages(req.params.chatId);
+    return reply.status(204).send();
+  });
+
   /** Clear all agent runs and memory for a specific chat. */
   app.delete<{ Params: { chatId: string } }>("/runs/:chatId", async (req, reply) => {
-    await storage.clearRunsForChat(req.params.chatId);
-    await storage.clearMemoryForChat(req.params.chatId);
+    const chatId = req.params.chatId;
+
+    // Before wiping all memory, preserve the secret-plot-driver's overarching arc.
+    // Scene directions + pacing are cleared (ephemeral per-generation), but the arc
+    // is a long-term structure that only clears when the agent is removed from the chat.
+    let preservedArc: unknown = null;
+    let secretPlotConfigId: string | null = null;
+    try {
+      const secretPlotConfig = await storage.getByType("secret-plot-driver");
+      if (secretPlotConfig) {
+        secretPlotConfigId = secretPlotConfig.id;
+        const mem = await storage.getMemory(secretPlotConfigId, chatId);
+        if (mem.overarchingArc) preservedArc = mem.overarchingArc;
+      }
+    } catch {
+      /* non-critical */
+    }
+
+    await storage.clearRunsForChat(chatId);
+    await storage.clearMemoryForChat(chatId);
+
+    // Restore the overarching arc
+    if (preservedArc && secretPlotConfigId) {
+      try {
+        await storage.setMemory(secretPlotConfigId, chatId, "overarchingArc", preservedArc);
+      } catch {
+        /* non-critical */
+      }
+    }
+
+    return reply.status(204).send();
+  });
+
+  /** Clear all memory for a specific agent in a specific chat (used when removing an agent from a chat). */
+  app.delete<{ Params: { agentType: string; chatId: string } }>("/memory/:agentType/:chatId", async (req, reply) => {
+    const config = await storage.getByType(req.params.agentType);
+    if (config) {
+      await storage.clearMemoryForAgentInChat(config.id, req.params.chatId);
+    }
     return reply.status(204).send();
   });
 }

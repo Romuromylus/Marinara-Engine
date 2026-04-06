@@ -145,7 +145,11 @@ export class OpenAIProvider extends BaseLLMProvider {
   async *chat(messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {
     // Route to Responses API for models that require it
     if (this.useResponsesAPI(options.model)) {
-      console.log("[OpenAI] Routing chat() to Responses API for model=%s stream=%s", options.model, options.stream ?? true);
+      console.log(
+        "[OpenAI] Routing chat() to Responses API for model=%s stream=%s",
+        options.model,
+        options.stream ?? true,
+      );
       return yield* this.chatResponses(messages, options);
     }
 
@@ -322,7 +326,11 @@ export class OpenAIProvider extends BaseLLMProvider {
   async chatComplete(messages: ChatMessage[], options: ChatOptions): Promise<ChatCompletionResult> {
     // Route to Responses API for models that require it
     if (this.useResponsesAPI(options.model)) {
-      console.log("[OpenAI] Routing chatComplete() to Responses API for model=%s onToken=%s", options.model, !!options.onToken);
+      console.log(
+        "[OpenAI] Routing chatComplete() to Responses API for model=%s onToken=%s",
+        options.model,
+        !!options.onToken,
+      );
       return this.chatCompleteResponses(messages, options);
     }
 
@@ -744,11 +752,7 @@ export class OpenAIProvider extends BaseLLMProvider {
   ): AsyncGenerator<string, LLMUsage | void, unknown> {
     const url = `${this.baseUrl}/responses`;
     const body = this.buildResponsesBody(messages, options);
-    console.log(
-      "[OpenAI chatResponses] reasoning=%j onThinking=%s",
-      body.reasoning ?? null,
-      !!options.onThinking,
-    );
+    console.log("[OpenAI chatResponses] reasoning=%j onThinking=%s", body.reasoning ?? null, !!options.onThinking);
 
     let response = await llmFetch(url, {
       method: "POST",
@@ -760,7 +764,11 @@ export class OpenAIProvider extends BaseLLMProvider {
     if (!response.ok) {
       const errorText = await response.text();
       // Retry without encrypted reasoning items if they're stale/corrupt
-      if (response.status === 400 && this.isEncryptedContentError(errorText) && options.encryptedReasoningItems?.length) {
+      if (
+        response.status === 400 &&
+        this.isEncryptedContentError(errorText) &&
+        options.encryptedReasoningItems?.length
+      ) {
         console.warn("[OpenAI chatResponses] Encrypted reasoning items rejected, retrying without them");
         options.onEncryptedReasoning?.([]); // clear the cache
         this.stripEncryptedItems(body);
@@ -906,7 +914,11 @@ export class OpenAIProvider extends BaseLLMProvider {
     if (!response.ok) {
       const errorText = await response.text();
       // Retry without encrypted reasoning items if they're stale/corrupt
-      if (response.status === 400 && this.isEncryptedContentError(errorText) && options.encryptedReasoningItems?.length) {
+      if (
+        response.status === 400 &&
+        this.isEncryptedContentError(errorText) &&
+        options.encryptedReasoningItems?.length
+      ) {
         console.warn("[OpenAI chatCompleteResponses] Encrypted reasoning items rejected, retrying without them");
         options.onEncryptedReasoning?.([]); // clear the cache
         this.stripEncryptedItems(body);
@@ -1137,9 +1149,7 @@ export class OpenAIProvider extends BaseLLMProvider {
   private extractEncryptedReasoningItems(json: Record<string, unknown>): unknown[] {
     const output = json.output as Array<Record<string, unknown>> | undefined;
     if (!output) return [];
-    return output.filter(
-      (item) => item.type === "reasoning" && typeof item.encrypted_content === "string",
-    );
+    return output.filter((item) => item.type === "reasoning" && typeof item.encrypted_content === "string");
   }
 
   /** Emit encrypted reasoning items via the callback if present */

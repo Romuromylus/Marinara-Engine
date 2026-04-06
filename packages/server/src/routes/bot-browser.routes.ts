@@ -181,5 +181,4 @@ export async function botBrowserRoutes(app: FastifyInstance) {
       clearTimeout(timeout);
     }
   });
-
 }

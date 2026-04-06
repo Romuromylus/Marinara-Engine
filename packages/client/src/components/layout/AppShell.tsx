@@ -59,7 +59,6 @@ function BotBrowserPersistent({ open }: { open: boolean }) {
   );
 }
 
-
 function SidePanelFallback() {
   return (
     <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">Loading...</div>

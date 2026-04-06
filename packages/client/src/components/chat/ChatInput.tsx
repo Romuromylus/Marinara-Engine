@@ -52,6 +52,7 @@ export const ChatInput = memo(function ChatInput({
   const [feedback, setFeedback] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [charPickerOpen, setCharPickerOpen] = useState(false);
   const charPickerBtnRef = useRef<HTMLButtonElement>(null);
   const charPickerMenuRef = useRef<HTMLDivElement>(null);
@@ -158,6 +159,83 @@ export const ChatInput = memo(function ChatInput({
   const removeAttachment = (idx: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== idx));
   };
+
+  const addFiles = useCallback(async (files: FileList | File[]) => {
+    for (const file of Array.from(files)) {
+      if (file.size > 20 * 1024 * 1024) {
+        toast.error(`${file.name} is too large (max 20 MB)`);
+        continue;
+      }
+      // Convert GIFs to PNG (Gemini and some providers don't support image/gif)
+      if (file.type === "image/gif") {
+        try {
+          const bitmap = await createImageBitmap(file);
+          const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(bitmap, 0, 0);
+          const pngBlob = await canvas.convertToBlob({ type: "image/png" });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            setAttachments((prev) => [
+              ...prev,
+              { type: "image/png", data: reader.result as string, name: file.name.replace(/\.gif$/i, ".png") },
+            ]);
+          };
+          reader.readAsDataURL(pngBlob);
+        } catch {
+          toast.error(`Failed to convert ${file.name}`);
+        }
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setAttachments((prev) => [...prev, { type: file.type, data: reader.result as string, name: file.name }]);
+      };
+      reader.onerror = () => toast.error(`Failed to read ${file.name}`);
+      reader.readAsDataURL(file);
+    }
+  }, []);
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items || !activeChatId) return;
+      const imageFiles: File[] = [];
+      for (const item of Array.from(items)) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) imageFiles.push(file);
+        }
+      }
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        addFiles(imageFiles);
+      }
+    },
+    [activeChatId, addFiles],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      if (!activeChatId) return;
+      const imageFiles = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+      if (imageFiles.length > 0) addFiles(imageFiles);
+    },
+    [activeChatId, addFiles],
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    // Only leave if we exit the container (not just enter a child)
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragging(false);
+  }, []);
 
   // Get the current textarea value (always from the DOM directly)
   const getValue = () => textareaRef.current?.value ?? "";
@@ -520,10 +598,17 @@ export const ChatInput = memo(function ChatInput({
       {/* Main input container */}
       <div
         ref={inputBarRef}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         className={cn(
           "mari-chat-input-box relative flex items-center gap-1.5 rounded-2xl border-2 px-2.5 py-2.5 transition-all duration-200 sm:gap-2 sm:px-4",
           "bg-black/40",
-          hasInput || attachments.length ? "border-blue-400/30 shadow-md shadow-blue-500/5" : "border-foreground/25",
+          isDragging
+            ? "border-blue-400/50 bg-blue-500/10 shadow-lg shadow-blue-500/10"
+            : hasInput || attachments.length
+              ? "border-blue-400/30 shadow-md shadow-blue-500/5"
+              : "border-foreground/25",
         )}
       >
         {/* Attachment button */}
@@ -561,6 +646,7 @@ export const ChatInput = memo(function ChatInput({
           ref={textareaRef}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={
             activeChatId
               ? characterNames.length > 0

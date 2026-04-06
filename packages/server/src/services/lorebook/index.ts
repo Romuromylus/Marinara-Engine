@@ -53,15 +53,17 @@ export async function processLorebooks(
 ): Promise<LorebookScanResult> {
   const storage = createLorebooksStorage(db);
 
-  // Build filters for scoped lorebook selection
-  const filters =
-    options?.chatId || options?.characterIds?.length || options?.activeLorebookIds?.length
-      ? {
-          chatId: options.chatId,
-          characterIds: options.characterIds,
-          activeLorebookIds: options.activeLorebookIds,
-        }
-      : undefined;
+  // Build filters for scoped lorebook selection.
+  // When the caller provides options (even with empty arrays), scope to matching
+  // lorebooks only. This prevents the "load everything" fallback when the caller
+  // explicitly has no context (e.g., the prompt reviewer).
+  const filters = options
+    ? {
+        chatId: options.chatId,
+        characterIds: options.characterIds,
+        activeLorebookIds: options.activeLorebookIds,
+      }
+    : undefined;
 
   // Fetch active entries (filtered if context provided)
   let allEntries = (await storage.listActiveEntries(filters)) as unknown as LorebookEntry[];

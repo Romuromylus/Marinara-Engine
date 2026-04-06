@@ -134,18 +134,7 @@ export function ChatArea() {
 
   // Build character lookup map
   const characterMap: CharacterMap = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        name: string;
-        avatarUrl: string | null;
-        nameColor?: string;
-        dialogueColor?: string;
-        boxColor?: string;
-        avatarCrop?: { zoom: number; offsetX: number; offsetY: number } | null;
-        conversationStatus?: "online" | "idle" | "dnd" | "offline";
-      }
-    >();
+    const map: CharacterMap = new Map();
     if (!allCharacters) return map;
     for (const char of allCharacters as Array<{ id: string; data: string; avatarPath: string | null }>) {
       try {
@@ -158,6 +147,7 @@ export function ChatArea() {
           boxColor: parsed.extensions?.boxColor || undefined,
           avatarCrop: parsed.extensions?.avatarCrop || null,
           conversationStatus: parsed.extensions?.conversationStatus || undefined,
+          conversationActivity: parsed.extensions?.conversationActivity || undefined,
         });
       } catch {
         map.set(char.id, { name: "Unknown", avatarUrl: null });

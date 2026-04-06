@@ -84,6 +84,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   // @mention autocomplete
   const [_mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionCompletions, setMentionCompletions] = useState<string[]>([]);
@@ -168,6 +169,52 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
       };
       reader.readAsDataURL(file);
     }
+  }, []);
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items || !activeChatId) return;
+      const imageFiles: File[] = [];
+      for (const item of Array.from(items)) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) imageFiles.push(file);
+        }
+      }
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        const dt = new DataTransfer();
+        for (const f of imageFiles) dt.items.add(f);
+        handleFileUpload(dt.files);
+      }
+    },
+    [activeChatId, handleFileUpload],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      if (!activeChatId) return;
+      const imageFiles = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+      if (imageFiles.length > 0) {
+        const dt = new DataTransfer();
+        for (const f of imageFiles) dt.items.add(f);
+        handleFileUpload(dt.files);
+      }
+    },
+    [activeChatId, handleFileUpload],
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragging(false);
   }, []);
 
   /** Extract @mentioned character names from a message string. */
@@ -529,7 +576,13 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
       {/* Input bar */}
       <div
         ref={inputBarRef}
-        className="relative flex items-center gap-1.5 rounded-2xl border-2 px-2.5 py-2.5 transition-all duration-200 sm:gap-2 sm:px-4 bg-black/40 border-foreground/25"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={cn(
+          "relative flex items-center gap-1.5 rounded-2xl border-2 px-2.5 py-2.5 transition-all duration-200 sm:gap-2 sm:px-4 bg-black/40",
+          isDragging ? "border-blue-400/50 bg-blue-500/10 shadow-lg shadow-blue-500/10" : "border-foreground/25",
+        )}
       >
         {/* Attach button */}
         <input
@@ -568,6 +621,7 @@ export function ConversationInput({ characterNames = [] }: ConversationInputProp
           rows={1}
           onInput={handleInput}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           className="max-h-[12.5rem] min-w-0 flex-1 resize-none bg-transparent py-0 text-[1rem] leading-normal text-[#c3c2c2] outline-none placeholder:text-foreground/30"
         />
 

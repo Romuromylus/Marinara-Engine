@@ -1523,6 +1523,10 @@ function formatAgentBubble(agentType: string, agentName: string, data: unknown):
       return `📝 ${text || "Chat summary active"}`;
     }
 
+    case "secret-plot-driver": {
+      return `🎭 The roleplay is following a secret plotline…`;
+    }
+
     default:
       return null;
   }

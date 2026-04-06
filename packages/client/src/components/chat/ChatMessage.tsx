@@ -378,8 +378,7 @@ function renderContent(
   const ATTR_NL_PLACEHOLDER = "\x00ATTRNL\x00";
   const attrProtected = stripped.replace(
     /(<[^>]*?)("[^"]*"|'[^']*')([^>]*>)/g,
-    (_m, before: string, attr: string, after: string) =>
-      before + attr.replace(/\n/g, ATTR_NL_PLACEHOLDER) + after,
+    (_m, before: string, attr: string, after: string) => before + attr.replace(/\n/g, ATTR_NL_PLACEHOLDER) + after,
   );
   const withBreaks = attrProtected
     .replace(/(<style[\s\S]*?<\/style>)|(>\s*)\n(\s*<)|\n/gi, (m, styleBlock, pre, post) =>
@@ -508,6 +507,8 @@ export const ChatMessage = memo(function ChatMessage({
     textStrokeWidth,
     textStrokeColor,
     showModelName,
+    showTokenUsage,
+    showMessageNumbers,
     boldDialogue,
   } = useUIStore(
     useShallow((s) => ({
@@ -517,6 +518,8 @@ export const ChatMessage = memo(function ChatMessage({
       textStrokeWidth: s.textStrokeWidth,
       textStrokeColor: s.textStrokeColor,
       showModelName: s.showModelName,
+      showTokenUsage: s.showTokenUsage,
+      showMessageNumbers: s.showMessageNumbers,
       boldDialogue: s.boldDialogue ?? true,
     })),
   );
@@ -613,19 +616,21 @@ export const ChatMessage = memo(function ChatMessage({
 
   // Model name display
   const _modelName = !isUser && showModelName ? (extra.generationInfo?.model ?? null) : null;
-  const genInfo = !isUser && showModelName ? extra.generationInfo : null;
+  const genInfo = !isUser && (showModelName || showTokenUsage) ? extra.generationInfo : null;
   const genLabel = useMemo(() => {
     if (!genInfo) return null;
     const parts: string[] = [];
-    if (genInfo.model) parts.push(genInfo.model);
-    if (genInfo.tokensPrompt != null || genInfo.tokensCompletion != null) {
-      const p = genInfo.tokensPrompt ?? "?";
-      const c = genInfo.tokensCompletion ?? "?";
-      parts.push(`${p}→${c} tok`);
+    if (showModelName && genInfo.model) parts.push(genInfo.model);
+    if (showTokenUsage) {
+      if (genInfo.tokensPrompt || genInfo.tokensCompletion != null) {
+        const p = genInfo.tokensPrompt ? genInfo.tokensPrompt : null;
+        const c = genInfo.tokensCompletion ?? "?";
+        parts.push(p != null ? `${p}→${c} tok` : `${c} tok`);
+      }
+      if (genInfo.durationMs != null) parts.push(`${(genInfo.durationMs / 1000).toFixed(1)}s`);
     }
-    if (genInfo.durationMs != null) parts.push(`${(genInfo.durationMs / 1000).toFixed(1)}s`);
     return parts.length > 0 ? parts.join(" · ") : null;
-  }, [genInfo]);
+  }, [genInfo, showModelName, showTokenUsage]);
   // useLayoutEffect runs after DOM mutation but before browser paint — prevents visible scroll jump
   useLayoutEffect(() => {
     // Restore scroll position saved before the state change
@@ -942,7 +947,7 @@ export const ChatMessage = memo(function ChatMessage({
                   {isUser ? <User size="1rem" className="text-white" /> : <Bot size="1rem" className="text-white" />}
                 </div>
               )}
-              {showActions && messageIndex != null && (
+              {(showActions || showMessageNumbers) && messageIndex != null && (
                 <span className="mt-1 text-[0.5625rem] font-medium text-[var(--muted-foreground)] select-none">
                   #{messageIndex}
                 </span>
@@ -1251,7 +1256,7 @@ export const ChatMessage = memo(function ChatMessage({
                 {displayName[0]}
               </div>
             )}
-            {showActions && messageIndex != null && (
+            {(showActions || showMessageNumbers) && messageIndex != null && (
               <span className="mt-0.5 text-[0.5rem] font-medium text-[var(--muted-foreground)] select-none">
                 #{messageIndex}
               </span>

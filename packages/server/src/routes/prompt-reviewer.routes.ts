@@ -5,16 +5,12 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createPromptsStorage } from "../services/storage/prompts.storage.js";
-import { createChatsStorage } from "../services/storage/chats.storage.js";
-import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { assemblePrompt, type AssemblerInput } from "../services/prompt/index.js";
 
 const reviewRequestSchema = z.object({
   presetId: z.string().min(1),
   connectionId: z.string().min(1),
-  /** Optional chat ID to preview with real data; otherwise uses a mock context */
-  chatId: z.string().optional(),
   /** Focus areas for the review */
   focusAreas: z
     .array(z.enum(["clarity", "consistency", "coverage", "jailbreak_safety", "token_efficiency", "role_balance"]))
@@ -54,8 +50,6 @@ Be specific and actionable. Reference exact sections when possible.`;
 export async function promptReviewerRoutes(app: FastifyInstance) {
   const connections = createConnectionsStorage(app.db);
   const presets = createPromptsStorage(app.db);
-  const chats = createChatsStorage(app.db);
-  const chars = createCharactersStorage(app.db);
 
   /**
    * POST /api/prompt-reviewer/review
@@ -95,47 +89,9 @@ export async function promptReviewerRoutes(app: FastifyInstance) {
         presets.listChoiceBlocksForPreset(input.presetId),
       ]);
 
-      // If a chatId is provided, use real context; otherwise, use mock data
-      let chatId = input.chatId ?? "";
-      let characterIds: string[] = [];
-      let personaName = "User";
-      let personaDescription = "A roleplay participant.";
-      let personaFields: { personality?: string; scenario?: string; backstory?: string; appearance?: string } = {};
-      let chatMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
-
-      if (input.chatId) {
-        const chat = await chats.getById(input.chatId);
-        if (chat) {
-          chatId = chat.id;
-          characterIds = JSON.parse(chat.characterIds as string);
-          const dbMessages = await chats.listMessages(chatId);
-          chatMessages = dbMessages.slice(-10).map((m: any) => ({
-            role: m.role === "narrator" ? ("system" as const) : (m.role as "user" | "assistant" | "system"),
-            content: m.content as string,
-          }));
-        }
-      } else {
-        // Mock context for preview
-        chatMessages = [
-          { role: "user", content: "Hello, how are you?" },
-          { role: "assistant", content: "*waves* I'm doing well, thanks for asking!" },
-        ];
-      }
-
-      // Resolve persona
-      const allPersonas = await chars.listPersonas();
-      const activePersona = allPersonas.find((p: any) => p.isActive === "true");
-      if (activePersona) {
-        personaName = activePersona.name;
-        personaDescription = activePersona.description;
-        personaFields = {
-          personality: activePersona.personality ?? "",
-          scenario: activePersona.scenario ?? "",
-          backstory: activePersona.backstory ?? "",
-          appearance: activePersona.appearance ?? "",
-        };
-      }
-
+      // Use only placeholder data — the reviewer should evaluate the preset
+      // structure itself, not any user-specific content (personas, characters,
+      // lorebooks, chat history).
       const assemblerInput: AssemblerInput = {
         db: app.db,
         preset: preset as any,
@@ -143,12 +99,16 @@ export async function promptReviewerRoutes(app: FastifyInstance) {
         groups: groups as any,
         choiceBlocks: choiceBlocks as any,
         chatChoices: {},
-        chatId,
-        characterIds,
-        personaName,
-        personaDescription,
-        personaFields,
-        chatMessages,
+        chatId: "",
+        characterIds: [],
+        personaName: "{{user}}",
+        personaDescription: "{{user}}'s description would appear here.",
+        personaFields: {},
+        chatMessages: [
+          { role: "user", content: "(Sample user message)" },
+          { role: "assistant", content: "(Sample assistant response)" },
+        ],
+        activeLorebookIds: [],
       };
 
       const result = await assemblePrompt(assemblerInput);

@@ -129,7 +129,7 @@ export function createAgentsStorage(db: DB) {
           /* skip malformed entries */
         }
       }
-      return messages.slice(-100);
+      return messages;
     },
 
     // ── Agent Memory (persistent KV per agent per chat) ──
@@ -176,6 +176,11 @@ export function createAgentsStorage(db: DB) {
       }
     },
 
+    /** Delete echo chamber message runs for a specific chat. */
+    async clearEchoMessages(chatId: string) {
+      await db.delete(agentRuns).where(and(eq(agentRuns.chatId, chatId), eq(agentRuns.resultType, "echo_message")));
+    },
+
     /** Delete all agent runs for a specific chat. */
     async clearRunsForChat(chatId: string) {
       await db.delete(agentRuns).where(eq(agentRuns.chatId, chatId));
@@ -184,6 +189,22 @@ export function createAgentsStorage(db: DB) {
     /** Delete all agent memory entries for a specific chat. */
     async clearMemoryForChat(chatId: string) {
       await db.delete(agentMemory).where(eq(agentMemory.chatId, chatId));
+    },
+
+    /** Delete a specific memory key for an agent in a chat. */
+    async deleteMemoryKey(agentConfigId: string, chatId: string, key: string) {
+      await db
+        .delete(agentMemory)
+        .where(
+          and(eq(agentMemory.agentConfigId, agentConfigId), eq(agentMemory.chatId, chatId), eq(agentMemory.key, key)),
+        );
+    },
+
+    /** Delete all memory for a specific agent in a specific chat. */
+    async clearMemoryForAgentInChat(agentConfigId: string, chatId: string) {
+      await db
+        .delete(agentMemory)
+        .where(and(eq(agentMemory.agentConfigId, agentConfigId), eq(agentMemory.chatId, chatId)));
     },
   };
 }

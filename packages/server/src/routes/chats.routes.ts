@@ -249,13 +249,7 @@ export async function chatsRoutes(app: FastifyInstance) {
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i]!.role === "assistant") {
         const msg = msgs[i]!;
-        updated = await gameStateStore.updateByMessage(
-          msg.id,
-          msg.activeSwipeIndex,
-          req.params.id,
-          fields,
-          manual,
-        );
+        updated = await gameStateStore.updateByMessage(msg.id, msg.activeSwipeIndex, req.params.id, fields, manual);
         break;
       }
     }

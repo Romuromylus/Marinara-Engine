@@ -148,9 +148,10 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
       try {
         const directRes = await fetch(pageUrl, {
           headers: {
-            "Accept": "text/html,application/xhtml+xml,*/*",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Referer": "https://jannyai.com/",
+            Accept: "text/html,application/xhtml+xml,*/*",
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            Referer: "https://jannyai.com/",
           },
           signal: controller.signal,
           redirect: "follow",
@@ -161,15 +162,17 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
             html = "";
           }
         }
-      } catch { /* fall through */ }
+      } catch {
+        /* fall through */
+      }
 
       // Strategy 2: corsproxy.io
       if (!html) {
         try {
           const proxyRes = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(pageUrl)}`, {
             headers: {
-              "Accept": "text/html,application/xhtml+xml,*/*",
-              "Origin": "https://jannyai.com",
+              Accept: "text/html,application/xhtml+xml,*/*",
+              Origin: "https://jannyai.com",
             },
             signal: controller.signal,
           });
@@ -179,7 +182,9 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
               html = "";
             }
           }
-        } catch { /* fall through */ }
+        } catch {
+          /* fall through */
+        }
       }
 
       if (!html) {
@@ -187,9 +192,7 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
       }
 
       // Parse Astro island props containing character data
-      let astroMatch = html.match(
-        /astro-island[^>]*component-export="CharacterButtons"[^>]*props="([^"]+)"/
-      );
+      let astroMatch = html.match(/astro-island[^>]*component-export="CharacterButtons"[^>]*props="([^"]+)"/);
       if (!astroMatch) {
         astroMatch = html.match(/astro-island[^>]*props="([^"]*character[^"]*)"/);
       }
@@ -199,9 +202,9 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
 
       const propsDecoded = astroMatch[1]!
         .replace(/&quot;/g, '"')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
         .replace(/&#39;/g, "'");
 
       const propsJson = JSON.parse(propsDecoded);
@@ -210,7 +213,7 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
         if (!Array.isArray(value)) return value;
         const [type, data] = value;
         if (type === 0) {
-          if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+          if (typeof data === "object" && data !== null && !Array.isArray(data)) {
             const decoded: Record<string, unknown> = {};
             for (const [key, val] of Object.entries(data as Record<string, unknown>)) {
               decoded[key] = decodeAstroValue(val);

@@ -5,7 +5,7 @@
 // HUD widget position (top/left/right), and the top bar.
 // ──────────────────────────────────────────────
 import { useRef, useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { X, Trash2 } from "lucide-react";
 import { useAgentStore } from "../../stores/agent.store";
 import { useUIStore } from "../../stores/ui.store";
 import type { EchoChamberSide } from "../../stores/ui.store";
@@ -134,7 +134,16 @@ export function EchoChamberPanel() {
       .catch(() => {
         /* silently ignore load failures */
       });
-  }, [activeChatId, echoEnabled, echoLoadedChatId, setEchoLoadedChatId, setEchoMessages, clearEchoMessages, setEchoVisibleCount, setEchoBaseline]);
+  }, [
+    activeChatId,
+    echoEnabled,
+    echoLoadedChatId,
+    setEchoLoadedChatId,
+    setEchoMessages,
+    clearEchoMessages,
+    setEchoVisibleCount,
+    setEchoBaseline,
+  ]);
 
   // When new messages arrive beyond the baseline, stagger them one-by-one.
   useEffect(() => {
@@ -243,6 +252,25 @@ export function EchoChamberPanel() {
           )}
         </span>
         <div className="flex items-center gap-1.5">
+          {visibleMessages.length > 0 && (
+            <button
+              onClick={async () => {
+                if (!activeChatId) return;
+                clearEchoMessages();
+                setEchoVisibleCount(0);
+                setEchoBaseline(0);
+                try {
+                  await api.delete(`/agents/echo-messages/${activeChatId}`);
+                } catch {
+                  /* best-effort */
+                }
+              }}
+              className="rounded p-0.5 text-white/20 transition-colors hover:bg-white/10 hover:text-white/50"
+              title="Clear messages"
+            >
+              <Trash2 size="0.5625rem" />
+            </button>
+          )}
           {/* Hide position button on mobile */}
           <span className="hidden md:inline-flex">
             <CornerPicker current={echoChamberSide} onChange={setEchoChamberSide} />

@@ -31,7 +31,8 @@ export type AgentResultType =
   | "chat_summary"
   | "spotify_control"
   | "haptic_command"
-  | "cyoa_choices";
+  | "cyoa_choices"
+  | "secret_plot";
 
 /** Configuration for a single agent. */
 export interface AgentConfig {
@@ -149,6 +150,7 @@ export const BUILT_IN_AGENT_IDS = {
   CUSTOM_TRACKER: "custom-tracker",
   HAPTIC: "haptic",
   CYOA: "cyoa",
+  SECRET_PLOT_DRIVER: "secret-plot-driver",
 } as const;
 
 export type AgentCategory = "writer" | "tracker" | "misc";
@@ -198,7 +200,7 @@ export const BUILT_IN_AGENTS: BuiltInAgentMeta[] = [
     description: "Simulates a live streaming-style chat reacting to your roleplay in real time.",
     phase: "parallel",
     enabledByDefault: false,
-    category: "writer",
+    category: "misc",
   },
   {
     id: "prompt-reviewer",
@@ -392,6 +394,16 @@ export const BUILT_IN_AGENTS: BuiltInAgentMeta[] = [
       "Generates interactive Choose Your Own Adventure choices after each assistant message. Click a choice to send it as your response. Roleplay mode only.",
     phase: "post_processing",
     enabledByDefault: false,
+    category: "misc",
+  },
+  {
+    id: "secret-plot-driver",
+    name: "Secret Plot Driver",
+    description:
+      "Secretly develops an overarching story arc and scene directions behind the scenes. The user never sees the actual plot — only a hint that something is unfolding. Creates long-term narrative structure with protagonist growth, mysteries, and pacing control.",
+    phase: "pre_generation",
+    enabledByDefault: false,
+    defaultInjectAsSection: true,
     category: "writer",
   },
 ];
@@ -429,6 +441,7 @@ export const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
   "custom-tracker": ["update_game_state"],
   haptic: [],
   cyoa: [],
+  "secret-plot-driver": [],
 };
 
 /** Data shape for a lorebook_update agent result. */

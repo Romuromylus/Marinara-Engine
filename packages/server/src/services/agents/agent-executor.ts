@@ -766,6 +766,12 @@ function buildAgentExtras(context: AgentContext): string {
     parts.push(`</previous_cyoa_choices>`);
   }
 
+  if (context.memory._secretPlotState) {
+    parts.push(`<secret_plot_state>`);
+    parts.push(JSON.stringify(context.memory._secretPlotState));
+    parts.push(`</secret_plot_state>`);
+  }
+
   return parts.join("\n");
 }
 
@@ -792,6 +798,7 @@ const AGENT_RESULT_TYPE_MAP: Record<string, AgentResultType> = {
   "knowledge-retrieval": "context_injection",
   haptic: "haptic_command",
   cyoa: "cyoa_choices",
+  "secret-plot-driver": "secret_plot",
 };
 
 /** Agents that return structured JSON. */
@@ -814,6 +821,7 @@ const JSON_AGENTS = new Set([
   "editor",
   "haptic",
   "cyoa",
+  "secret-plot-driver",
 ]);
 
 /**

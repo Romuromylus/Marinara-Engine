@@ -346,9 +346,15 @@ export function ChatSettingsDrawer({
   const toggleAgent = (agentId: string) => {
     const current = [...activeAgentIds];
     const idx = current.indexOf(agentId);
-    if (idx >= 0) current.splice(idx, 1);
+    const isRemoving = idx >= 0;
+    if (isRemoving) current.splice(idx, 1);
     else current.push(agentId);
     updateMeta.mutate({ id: chat.id, activeAgentIds: current });
+
+    // When removing an agent that stores persistent memory, clean it up
+    if (isRemoving && agentId === "secret-plot-driver") {
+      api.delete(`/agents/memory/${agentId}/${chat.id}`).catch(() => {});
+    }
   };
 
   const toggleTool = (toolId: string) => {
@@ -1267,6 +1273,14 @@ export function ChatSettingsDrawer({
                         })}
                       </div>
                     </div>
+                  )}
+
+                  {/* Selfie tags */}
+                  {(metadata.imageGenConnectionId as string) && (
+                    <SelfieTagsEditor
+                      tags={(metadata.selfieTags as string[]) ?? []}
+                      onChange={(tags) => updateMeta.mutate({ id: chat.id, selfieTags: tags })}
+                    />
                   )}
                 </div>
 
@@ -2908,6 +2922,62 @@ interface ScheduleBlock {
   time: string;
   activity: string;
   status: "online" | "idle" | "dnd" | "offline";
+}
+
+function SelfieTagsEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
+  const [input, setInput] = useState("");
+  const addTag = () => {
+    const tag = input.trim();
+    if (!tag || tags.includes(tag)) return;
+    onChange([...tags, tag]);
+    setInput("");
+  };
+  return (
+    <div className="mt-2 space-y-1.5">
+      <span className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">Tags</span>
+      <div className="flex flex-wrap items-center gap-1">
+        {tags.map((tag) => (
+          <span
+            key={tag}
+            className="inline-flex items-center gap-0.5 rounded-full bg-[var(--secondary)] px-1.5 py-0.5 text-[0.5625rem] text-[var(--muted-foreground)]"
+          >
+            {tag}
+            <button
+              onClick={() => onChange(tags.filter((t) => t !== tag))}
+              className="ml-0.5 hover:text-[var(--destructive)]"
+            >
+              <X size="0.5rem" />
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex items-center gap-1">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addTag();
+            }
+          }}
+          placeholder="Add tag…"
+          className="w-full min-w-0 rounded border border-[var(--border)] bg-[var(--background)] px-1.5 py-0.5 text-[0.625rem] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+        />
+        <button
+          onClick={addTag}
+          disabled={!input.trim()}
+          className="shrink-0 rounded bg-[var(--primary)] px-1.5 py-0.5 text-[0.5625rem] text-[var(--primary-foreground)] disabled:opacity-40"
+        >
+          Add
+        </button>
+      </div>
+      <p className="text-[0.55rem] text-[var(--muted-foreground)]">
+        Extra tags appended to every selfie prompt (e.g. art style, quality modifiers).
+      </p>
+    </div>
+  );
 }
 
 function ScheduleEditor({

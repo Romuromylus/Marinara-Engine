@@ -154,14 +154,18 @@ function loadPersist(): BrowserPersist {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return { nsfw: {}, logins: {} };
 }
 
 function savePersist(data: BrowserPersist) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 function getPersistNsfw(sourceId: string): boolean {
@@ -504,12 +508,16 @@ const jannyProvider: ProviderConfig = {
       if (!astroMatch?.[1]) return null;
       try {
         const decoded = astroMatch[1]
-          .replace(/&quot;/g, '"').replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
           .replace(/&#39;/g, "'");
         const propsJson = JSON.parse(decoded);
         return decodeAstro(propsJson.character) as Record<string, unknown> | null;
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     }
 
     // Strategy 1: Server-side proxy
@@ -525,17 +533,21 @@ const jannyProvider: ProviderConfig = {
             firstMessage: char.firstMessage || undefined,
             exampleDialogs: char.exampleDialogs || undefined,
             creatorNotes: char.description
-              ? (typeof char.description === "string" ? char.description.replace(/<[^>]*>/g, "").trim() : undefined)
+              ? typeof char.description === "string"
+                ? char.description.replace(/<[^>]*>/g, "").trim()
+                : undefined
               : undefined,
           };
         }
       }
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
 
     // Strategy 2: corsproxy.io from browser
     try {
       const proxyRes = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(pageUrl)}`, {
-        headers: { "Accept": "text/html,application/xhtml+xml,*/*" },
+        headers: { Accept: "text/html,application/xhtml+xml,*/*" },
       });
       if (proxyRes.ok) {
         const html = await proxyRes.text();
@@ -547,12 +559,16 @@ const jannyProvider: ProviderConfig = {
             firstMessage: (char.firstMessage as string) || undefined,
             exampleDialogs: (char.exampleDialogs as string) || undefined,
             creatorNotes: char.description
-              ? (typeof char.description === "string" ? char.description.replace(/<[^>]*>/g, "").trim() : undefined)
+              ? typeof char.description === "string"
+                ? char.description.replace(/<[^>]*>/g, "").trim()
+                : undefined
               : undefined,
           };
         }
       }
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
 
     // Fallback: use search result data
     const rawDesc = raw?.description || "";
@@ -860,8 +876,6 @@ const wyvernProvider: ProviderConfig = {
   importCard: async () => {},
 };
 
-
-
 // ════════════════════════════════════════════════
 // Provider Registry
 // ════════════════════════════════════════════════
@@ -873,7 +887,6 @@ const ALL_PROVIDERS: ProviderConfig[] = [
   pygmalionProvider,
   wyvernProvider,
 ];
-
 
 function getProvider(id: string): ProviderConfig {
   return ALL_PROVIDERS.find((p) => p.id === id) ?? chubProvider;
@@ -931,11 +944,15 @@ export function BotBrowserView() {
   const [ctLoggedIn, setCtLoggedInRaw] = useState(() => getPersistLogin("chartavern"));
   const [loginLoading, setLoginLoading] = useState(false);
 
-  const setPygLoggedIn = useCallback((val: boolean) => { setPygLoggedInRaw(val); setPersistLogin("pygmalion", val); }, []);
-  const setCtLoggedIn = useCallback((val: boolean) => { setCtLoggedInRaw(val); setPersistLogin("chartavern", val); }, []);
+  const setPygLoggedIn = useCallback((val: boolean) => {
+    setPygLoggedInRaw(val);
+    setPersistLogin("pygmalion", val);
+  }, []);
+  const setCtLoggedIn = useCallback((val: boolean) => {
+    setCtLoggedInRaw(val);
+    setPersistLogin("chartavern", val);
+  }, []);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-
 
   // ── Check auth sessions on mount — sync persisted state with server ──
   useEffect(() => {
@@ -957,9 +974,8 @@ export function BotBrowserView() {
         } else if (d?.active) setCtLoggedIn(true);
       })
       .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
 
   // ── Dynamically update nsfwAvailable based on auth ──
   const effectiveNsfwAvailable = useMemo(() => {
@@ -971,7 +987,6 @@ export function BotBrowserView() {
     }
     return provider.nsfwAvailable;
   }, [provider, sourceId, pygLoggedIn, ctLoggedIn]);
-
 
   const switchProvider = useCallback((newId: string) => {
     const newProv = getProvider(newId);
@@ -1316,8 +1331,6 @@ export function BotBrowserView() {
     toast.info("Logged out of CharacterTavern.");
   };
 
-
-
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* ═══ Header ═══ */}
@@ -1371,7 +1384,6 @@ export function BotBrowserView() {
             <CheckCircle size="0.625rem" /> Session active
           </span>
         )}
-
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -1619,7 +1631,8 @@ export function BotBrowserView() {
                 {/* NSFW toggle */}
                 {(() => {
                   const isLoginProvider = provider.nsfwMode === "login";
-                  const isLoggedInForProvider = (sourceId === "pygmalion" && pygLoggedIn) || (sourceId === "chartavern" && ctLoggedIn);
+                  const isLoggedInForProvider =
+                    (sourceId === "pygmalion" && pygLoggedIn) || (sourceId === "chartavern" && ctLoggedIn);
                   const nsfwGreyedOut = isLoginProvider && isLoggedInForProvider;
                   return (
                     <label
@@ -1696,8 +1709,6 @@ export function BotBrowserView() {
                     Use "🔞 Popular NSFW" sort for NSFW content
                   </span>
                 )}
-
-
 
                 <button
                   onClick={doSearch}
@@ -1870,7 +1881,6 @@ export function BotBrowserView() {
           onCtLogout={handleCtLogout}
         />
       )}
-
     </div>
   );
 }
@@ -1910,7 +1920,6 @@ function LoginModal({
   const isPyg = sourceId === "pygmalion";
   const isCt = sourceId === "chartavern";
   const isLoggedIn = isPyg ? pygLoggedIn : ctLoggedIn;
-
 
   return (
     <div
@@ -2230,7 +2239,6 @@ function DetailView({
     }
   };
 
-
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2">
@@ -2338,14 +2346,19 @@ function DetailView({
               </div>
             )}
 
-
             {displayDetail ? (
               <div className="flex flex-col gap-3">
-                {displayDetail.creatorNotes && <DefSection title="Creator's Notes" content={displayDetail.creatorNotes} />}
-                {displayDetail.description && <DefSection title="Description / Personality" content={displayDetail.description} />}
+                {displayDetail.creatorNotes && (
+                  <DefSection title="Creator's Notes" content={displayDetail.creatorNotes} />
+                )}
+                {displayDetail.description && (
+                  <DefSection title="Description / Personality" content={displayDetail.description} />
+                )}
                 {displayDetail.personality && <DefSection title="Personality" content={displayDetail.personality} />}
                 {displayDetail.scenario && <DefSection title="Scenario" content={displayDetail.scenario} />}
-                {displayDetail.firstMessage && <DefSection title="First Message" content={displayDetail.firstMessage} />}
+                {displayDetail.firstMessage && (
+                  <DefSection title="First Message" content={displayDetail.firstMessage} />
+                )}
                 {displayDetail.alternateGreetings && displayDetail.alternateGreetings.length > 0 && (
                   <div>
                     <h4 className="mb-1 text-xs font-semibold text-[var(--foreground)]">
@@ -2363,7 +2376,9 @@ function DetailView({
                     </div>
                   </div>
                 )}
-                {displayDetail.exampleDialogs && <DefSection title="Example Dialogues" content={displayDetail.exampleDialogs} />}
+                {displayDetail.exampleDialogs && (
+                  <DefSection title="Example Dialogues" content={displayDetail.exampleDialogs} />
+                )}
                 {displayDetail.hasLorebook && (
                   <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
                     <CheckCircle size="0.75rem" /> Has embedded lorebook
@@ -2396,10 +2411,7 @@ function DetailView({
 // ════════════════════════════════════════════════
 
 /** Build a SillyTavern-compatible PNG character card with embedded V2 JSON in a tEXt chunk. */
-async function buildCharacterCardPng(
-  avatarUrl: string,
-  charData: Record<string, unknown>,
-): Promise<Blob> {
+async function buildCharacterCardPng(avatarUrl: string, charData: Record<string, unknown>): Promise<Blob> {
   // Step 1: Fetch avatar and draw to canvas to get raw PNG bytes
   const img = new Image();
   img.crossOrigin = "anonymous";
@@ -2523,8 +2535,6 @@ function crc32(data: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 crc32.table = null as Uint32Array | null;
-
-
 
 function DefSection({ title, content }: { title: string; content: string }) {
   return (

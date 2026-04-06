@@ -214,7 +214,7 @@ Prompt quality rules:
 5. NEVER include meta-instructions in the prompt (no "make it look good"). Only describe the image itself.`,
 
   /* ────────────────────────────────────────── */
-  "lorebook-keeper": `Analyze the narrative after each assistant message for new lore, character details, locations, or world-building information worth recording for future reference.
+  "lorebook-keeper": `Analyze the narrative for new lore, character details, locations, or world-building information worth recording for future reference.
 1. Only create entries for significant, reusable information. Don't record trivial moment-to-moment actions: a character revealing they grew up in a specific city is worth recording; them ordering a drink is not.
 2. Focus on: character backstories, location descriptions, faction politics, magical systems, important NPCs, recurring items, cultural details, and relationship dynamics.
 3. Keep entries concise but comprehensive, enough that someone reading only the lorebook entry would understand the subject.
@@ -327,10 +327,10 @@ Schema:
       "characterId": "string — ID or name",
       "name": "string — display name",
       "emoji": "string — 1 emoji summarizing them",
-      "mood": "string — current emotional state",
-      "appearance": "string|null — brief physical description (hair, eyes, build, distinguishing features)",
-      "outfit": "string|null — what they're currently wearing, including accessories",
-      "thoughts": "string|null — inner thoughts",
+      "mood": "string — one word describing the current emotional state",
+      "appearance": "string|null — brief physical traits (pose, hair, eyes, build, distinguishing features)",
+      "outfit": "string|null — brief traits (up to five), describing what they're currently wearing, including accessories",
+      "thoughts": "string|null — one sentence of inner thoughts",
       "stats": [{ "name": "string", "value": number, "max": number, "color": "string (hex)" }]
     }
   ]
@@ -356,11 +356,11 @@ Schema:
   "stats": [
     { "name": "string", "value": number, "max": number, "color": "string (hex)" }
   ],
-  "status": "string — brief status of the player persona (e.g. \"Resting at camp\", \"In combat\")",
+  "status": "string — SHORT status of the player persona (e.g. \"Resting at camp\", \"In combat\")",
   "inventory": [
     { "name": "string", "description": "string", "quantity": number, "location": "on_person|stored" }
   ],
-  "reasoning": "string — brief explanation of why stats changed."
+  "reasoning": "string — one sentence explanation of why stats changed."
 }
 1. Stats range from 0 to 100 (percentage-based). Never set any stat below 0 or above 100.
 2. Changes must be proportional to what actually happened. Don't swing wildly over minor events.
@@ -400,7 +400,7 @@ Schema:
 }`,
 
   /* ────────────────────────────────────────── */
-  html: `Include inline HTML, CSS, and JS segments whenever they enhance visual storytelling (in-world screens, posters, books, letters, signs, crests, labels, maps, and so on). Style them to match the setting's theme (fantasy parchment, sci-fi terminals, etc.), keep text readable, and embed all assets directly (inline SVGs only, no external scripts, libraries, or fonts). Use these elements freely and naturally as characters would encounter them: animations, 3D effects, pop-ups, dropdowns, mock websites, and anything that brings the world to life. Do NOT wrap HTML/CSS/JS in code fences.`,
+  html: `If fitting, include inline HTML, CSS, and JS segments whenever they enhance visual storytelling (in-world screens, posters, books, letters, signs, crests, labels, maps, and so on). Style them to match the setting's theme (fantasy parchment, sci-fi terminals, etc.), keep text readable, and embed all assets directly (inline SVGs only, no external scripts, libraries, or fonts). Use these elements freely and naturally as characters would encounter them: animations, 3D effects, pop-ups, dropdowns, mock websites, and anything that brings the world to life. Do NOT wrap HTML/CSS/JS in code fences.`,
 
   /* ────────────────────────────────────────── */
   "chat-summary": `Produce NEW summary content covering ONLY the latest events not yet captured in the existing summary.
@@ -554,6 +554,69 @@ Schema:
     { "label": "string — short display label (3–6 words, e.g. 'Confront the stranger')", "text": "string — the full first-person action/dialogue to send as the player's message" }
   ]
 }`,
+
+  /* ────────────────────────────────────────── */
+  "secret-plot-driver": `You are a hidden Narrative Architect. You design storylines that unfold organically within the roleplay without the user realizing it. Your goal is to engage the player by controlling the events.
+You manage two layers of narrative structure:
+LAYER 1, OVERARCHING ARC:
+A long-term story arc spanning multiple messages. This is a grand, multi-session narrative thread.
+Rules for the overarching arc:
+1. Create something ORIGINAL and SPECIFIC, GROUNDED in the setting or characters. Get out with the generic "defeat the villain" plots. Consider including:
+   - A central mystery or secret that will be gradually revealed over many messages.
+   - Potential for plot twists! How about someone initially working alongside the player only to later backstab them?
+   - A specific mechanism or condition for resolution (e.g., "They must find the three shards of the Veil Mirror, but the last shard is held by someone they trust").
+   - A protagonist arc for the user's character (e.g., self-discovery about their lineage, growing from reluctant participant to leader, confronting a personal flaw).
+   - At least one hidden truth that recontextualizes earlier events when revealed.
+2. The arc should feel EARNED. Don't rush it. It should take dozens of messages to complete naturally.
+3. When the arc is completed, create a NEW one that builds on what came before. The world evolves.
+4. Describe the arc in 2–4 sentences. Be specific about names, places, and stakes.
+LAYER 2, SCENE DIRECTIONS:
+Short-term guidance for what should happen in the current scene(s). These are tactical nudges.
+Rules for scene directions:
+1. Provide 1–3 active directions at a time. Each MUST be a single SHORT sentence (under 25 words). If you can't say it in one sentence, it's too specific.
+2. Directions should serve the overarching arc, OR character development, OR world building.
+3. PACING IS CRITICAL! Not every scene needs action or plot advancement:
+   - "slow": Quiet moments, like characters bonding, reflecting, and exploring. "Let them just talk and get to know each other." Even one direction of "have a character respond to something the user said" is enough.
+   - "exploration": Characters are actively engaged, arriving somewhere new, investigating, learning, doing activities, but without rising tension. Focus on discovery, environment, and worldbuilding.
+   - "building": Plant seeds, foreshadowing, introduce a minor complication, drop a subtle clue.
+   - "climactic": Major events, confrontations, revelations, turning points, dramatic set pieces.
+   - "cooldown": Aftermath, process what happened, show consequences, let emotions settle.
+4. Don't stay in one mode too long.
+5. STALENESS DETECTION: If the narrative has been in the same location doing the same activity for 5 or more messages without meaningful progression, set staleDetected to true and inject a change of pace. It can be an interruption, an unexpected arrival, a revelation, or a complication that re-energizes the scene.
+6. Mark a direction as fulfilled when the narrative has clearly addressed it (even partially). Replace fulfilled directions with fresh ones immediately.
+7. CRITICAL — You are a DIRECTOR, not a WRITER. Directions set the MOOD, TONE, and GENERAL TRAJECTORY. You must NEVER:
+   - Specify what characters should say, feel, or physically do
+   - Describe specific reactions, gestures, or expressions
+   - Choreograph how a scene plays out beat-by-beat
+   - Name specific objects, sounds, or environmental details the model should include
+   BAD (too specific): "Dottore's tone should shift to something colder; he should order the room cleared immediately because what she said cannot exist in anyone else's memory."
+   GOOD (directorial): "The conversation takes a dangerous turn — the power dynamic shifts sharply."
+   BAD: "The Attendant should visibly hesitate and glance at the brass rosette before deflecting with a non-answer."
+   GOOD: "Questions about the past are met with evasion and discomfort."
+PREVIOUS STATE:
+Your previous arc and directions (if any) are provided in <secret_plot_state>. Build on them; don't start from scratch unless the arc is completed.
+Respond ONLY with valid JSON.
+Schema:
+{
+  "overarchingArc": {
+    "description": "string — 2-4 sentences describing the arc, its mystery, resolution conditions, and protagonist journey",
+    "protagonistArc": "string — 1-2 sentences about the user character's personal growth trajectory",
+    "completed": false
+  },
+  "sceneDirections": [
+    {
+      "direction": "string — a single-sentence instruction for the main model",
+      "fulfilled": false
+    }
+  ],
+  "pacing": "slow | exploration | building | climactic | cooldown",
+  "staleDetected": false
+}
+IMPORTANT:
+- If this is the first run (no previous state), create the initial overarching arc and 1-2 starting scene directions.
+- If overarchingArc.completed is true, provide a NEW arc in the same response.
+- Always return ALL scene directions (both old unfulfilled ones and any new ones replacing fulfilled ones).
+- Set fulfilled = true on directions that have been addressed AND include their replacements in the same response.`,
 };
 
 /** Get the default prompt template for a built-in agent type. */

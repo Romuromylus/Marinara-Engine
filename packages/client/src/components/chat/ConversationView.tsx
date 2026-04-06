@@ -479,6 +479,7 @@ export function ConversationView({
               name: string;
               avatarUrl: string | null;
               conversationStatus?: "online" | "idle" | "dnd" | "offline";
+              conversationActivity?: string;
             }>;
             if (chars.length === 0) return <div />;
 
@@ -509,7 +510,12 @@ export function ConversationView({
                       className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-[1.5px] ring-black/30 ${statusColor(c.conversationStatus)}`}
                     />
                   </div>
-                  <span className="text-[0.75rem] font-medium text-foreground/90">{c.name}</span>
+                  <div className="flex flex-col leading-tight">
+                    <span className="text-[0.75rem] font-medium text-foreground/90">{c.name}</span>
+                    {c.conversationActivity && (
+                      <span className="text-[0.5625rem] text-foreground/50">{c.conversationActivity}</span>
+                    )}
+                  </div>
                 </div>
               );
             }

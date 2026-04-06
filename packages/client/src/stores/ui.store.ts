@@ -87,6 +87,8 @@ interface UIState {
   messageGrouping: boolean;
   showTimestamps: boolean;
   showModelName: boolean;
+  showTokenUsage: boolean;
+  showMessageNumbers: boolean;
   confirmBeforeDelete: boolean;
   /** Number of messages to load per page (0 = load all) */
   messagesPerPage: number;
@@ -205,6 +207,8 @@ interface UIState {
   setMessageGrouping: (v: boolean) => void;
   setShowTimestamps: (v: boolean) => void;
   setShowModelName: (v: boolean) => void;
+  setShowTokenUsage: (v: boolean) => void;
+  setShowMessageNumbers: (v: boolean) => void;
   setConfirmBeforeDelete: (v: boolean) => void;
   setMessagesPerPage: (n: number) => void;
   setBoldDialogue: (v: boolean) => void;
@@ -272,6 +276,8 @@ export const useUIStore = create<UIState>()(
       messageGrouping: true,
       showTimestamps: false,
       showModelName: false,
+      showTokenUsage: false,
+      showMessageNumbers: false,
       confirmBeforeDelete: true,
       messagesPerPage: 20,
       boldDialogue: true,
@@ -474,6 +480,8 @@ export const useUIStore = create<UIState>()(
       setMessageGrouping: (v) => set({ messageGrouping: v }),
       setShowTimestamps: (v) => set({ showTimestamps: v }),
       setShowModelName: (v) => set({ showModelName: v }),
+      setShowTokenUsage: (v) => set({ showTokenUsage: v }),
+      setShowMessageNumbers: (v) => set({ showMessageNumbers: v }),
       setConfirmBeforeDelete: (v) => set({ confirmBeforeDelete: v }),
       setMessagesPerPage: (n) => set({ messagesPerPage: n }),
       setBoldDialogue: (v) => set({ boldDialogue: v }),
@@ -621,6 +629,8 @@ export const useUIStore = create<UIState>()(
         messageGrouping: state.messageGrouping,
         showTimestamps: state.showTimestamps,
         showModelName: state.showModelName,
+        showTokenUsage: state.showTokenUsage,
+        showMessageNumbers: state.showMessageNumbers,
         confirmBeforeDelete: state.confirmBeforeDelete,
         messagesPerPage: state.messagesPerPage,
         boldDialogue: state.boldDialogue,

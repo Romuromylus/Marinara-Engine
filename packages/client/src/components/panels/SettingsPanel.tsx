@@ -1648,6 +1648,10 @@ function AdvancedSettings() {
   const setShowTimestamps = useUIStore((s) => s.setShowTimestamps);
   const showModelName = useUIStore((s) => s.showModelName);
   const setShowModelName = useUIStore((s) => s.setShowModelName);
+  const showTokenUsage = useUIStore((s) => s.showTokenUsage);
+  const setShowTokenUsage = useUIStore((s) => s.setShowTokenUsage);
+  const showMessageNumbers = useUIStore((s) => s.showMessageNumbers);
+  const setShowMessageNumbers = useUIStore((s) => s.setShowMessageNumbers);
   const clearAllData = useClearAllData();
   const [confirmStep, setConfirmStep] = useState(0); // 0=idle, 1=first click, 2=confirmed
   const [exportingProfile, setExportingProfile] = useState(false);
@@ -1879,6 +1883,18 @@ function AdvancedSettings() {
         checked={showModelName}
         onChange={setShowModelName}
         help="Displays which AI model generated each response, shown as a small label on assistant messages."
+      />
+      <ToggleSetting
+        label="Show token usage on messages"
+        checked={showTokenUsage}
+        onChange={setShowTokenUsage}
+        help="Displays prompt and completion token counts on each AI message. Useful for monitoring context size and cost."
+      />
+      <ToggleSetting
+        label="Show message numbers"
+        checked={showMessageNumbers}
+        onChange={setShowMessageNumbers}
+        help="Displays a message number below each avatar in roleplay chats."
       />
       <ToggleSetting
         label="Debug mode (log prompts to console)"

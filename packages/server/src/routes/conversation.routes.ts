@@ -242,8 +242,15 @@ export async function conversationRoutes(app: FastifyInstance) {
       const charRow = await chars.getById(charId);
       if (charRow) {
         const charData = JSON.parse(charRow.data as string) as CharacterData;
-        if (charData.extensions?.conversationStatus !== status) {
-          const extensions = { ...(charData.extensions ?? {}), conversationStatus: status };
+        if (
+          charData.extensions?.conversationStatus !== status ||
+          charData.extensions?.conversationActivity !== activity
+        ) {
+          const extensions = {
+            ...(charData.extensions ?? {}),
+            conversationStatus: status,
+            conversationActivity: activity,
+          };
           await chars.update(charId, { extensions } as Partial<CharacterData>);
         }
       }

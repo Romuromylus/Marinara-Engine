@@ -31,6 +31,8 @@ export interface ImageGenRequest {
   model?: string;
   /** Optional ComfyUI workflow JSON. Placeholders like %prompt%, %width%, %height%, %seed% will be replaced. */
   comfyWorkflow?: string;
+  /** Optional base64-encoded reference image for img2img / character consistency. */
+  referenceImage?: string;
 }
 
 export interface ImageGenResult {
@@ -155,6 +157,15 @@ async function generateStability(baseUrl: string, apiKey: string, request: Image
   const formData = new FormData();
   formData.append("prompt", request.prompt);
   if (request.negativePrompt) formData.append("negative_prompt", request.negativePrompt);
+  if (request.referenceImage) {
+    formData.append(
+      "image",
+      new Blob([Buffer.from(request.referenceImage, "base64")], { type: "image/png" }),
+      "reference.png",
+    );
+    formData.append("strength", "0.5");
+    formData.append("mode", "image-to-image");
+  }
   formData.append("output_format", "png");
 
   const resp = await fetch(url, {
@@ -249,9 +260,15 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
       use_coords: false,
       use_order: true,
     };
-    parameters.reference_image_multiple = [];
-    parameters.reference_information_extracted_multiple = [];
-    parameters.reference_strength_multiple = [];
+    if (request.referenceImage) {
+      parameters.reference_image_multiple = [request.referenceImage];
+      parameters.reference_information_extracted_multiple = [1];
+      parameters.reference_strength_multiple = [0.6];
+    } else {
+      parameters.reference_image_multiple = [];
+      parameters.reference_information_extracted_multiple = [];
+      parameters.reference_strength_multiple = [];
+    }
   }
 
   const body: Record<string, unknown> = {
@@ -511,6 +528,9 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
   if (request.model) {
     wfStr = wfStr.replace(/%model%/g, request.model.replace(/"/g, '\\"'));
   }
+  if (request.referenceImage) {
+    wfStr = wfStr.replace(/%reference_image%/g, request.referenceImage.replace(/"/g, '\\"'));
+  }
   const resolvedWorkflow = JSON.parse(wfStr);
 
   // Queue the workflow
@@ -578,6 +598,7 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
 
 async function generateAutomatic1111(baseUrl: string, request: ImageGenRequest): Promise<ImageGenResult> {
   const base = baseUrl.replace(/\/+$/, "");
+  const useImg2Img = !!request.referenceImage;
   const body: Record<string, unknown> = {
     prompt: request.prompt,
     negative_prompt: request.negativePrompt || "",
@@ -593,8 +614,14 @@ async function generateAutomatic1111(baseUrl: string, request: ImageGenRequest):
   if (request.model) {
     body.override_settings = { sd_model_checkpoint: request.model };
   }
+  if (useImg2Img) {
+    body.init_images = [request.referenceImage];
+    body.denoising_strength = 0.6;
+  }
 
-  const resp = await fetch(`${base}/sdapi/v1/txt2img`, {
+  const endpoint = useImg2Img ? `${base}/sdapi/v1/img2img` : `${base}/sdapi/v1/txt2img`;
+
+  const resp = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
