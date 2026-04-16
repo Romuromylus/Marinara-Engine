@@ -441,11 +441,18 @@ export function ChatArea() {
 
   const handleDeleteMore = useCallback(() => {
     if (deleteDialogMessageId) {
-      setSelectedMessageIds(new Set([deleteDialogMessageId]));
+      const startIdx = messages?.findIndex((m) => m.id === deleteDialogMessageId) ?? -1;
+      if (messages && startIdx >= 0) {
+        const ids = new Set<string>();
+        for (let i = startIdx; i < messages.length; i++) ids.add(messages[i]!.id);
+        setSelectedMessageIds(ids);
+      } else {
+        setSelectedMessageIds(new Set([deleteDialogMessageId]));
+      }
     }
     setDeleteDialogMessageId(null);
     setMultiSelectMode(true);
-  }, [deleteDialogMessageId]);
+  }, [deleteDialogMessageId, messages]);
 
   const handleToggleSelectMessage = useCallback((messageId: string) => {
     setSelectedMessageIds((prev) => {
@@ -468,6 +475,40 @@ export function ChatArea() {
     setMultiSelectMode(false);
     setSelectedMessageIds(new Set());
   }, []);
+
+  const handleUnselectAllMessages = useCallback(() => {
+    setSelectedMessageIds(new Set());
+  }, []);
+
+  const handleSelectAllAboveSelection = useCallback(() => {
+    if (!messages || messages.length === 0) return;
+    setSelectedMessageIds((prev) => {
+      if (prev.size === 0) return prev;
+      let firstIdx = -1;
+      for (let i = 0; i < messages.length; i++) {
+        if (prev.has(messages[i]!.id)) { firstIdx = i; break; }
+      }
+      if (firstIdx <= 0) return prev;
+      const next = new Set(prev);
+      for (let i = 0; i < firstIdx; i++) next.add(messages[i]!.id);
+      return next;
+    });
+  }, [messages]);
+
+  const handleSelectAllBelowSelection = useCallback(() => {
+    if (!messages || messages.length === 0) return;
+    setSelectedMessageIds((prev) => {
+      if (prev.size === 0) return prev;
+      let lastIdx = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (prev.has(messages[i]!.id)) { lastIdx = i; break; }
+      }
+      if (lastIdx < 0 || lastIdx >= messages.length - 1) return prev;
+      const next = new Set(prev);
+      for (let i = lastIdx + 1; i < messages.length; i++) next.add(messages[i]!.id);
+      return next;
+    });
+  }, [messages]);
 
   const handleRegenerate = useCallback(
     async (messageId: string) => {
@@ -926,6 +967,9 @@ export function ChatArea() {
           onCloseDeleteDialog={() => setDeleteDialogMessageId(null)}
           onBulkDelete={handleBulkDelete}
           onCancelMultiSelect={handleCancelMultiSelect}
+          onUnselectAllMessages={handleUnselectAllMessages}
+          onSelectAllAboveSelection={handleSelectAllAboveSelection}
+          onSelectAllBelowSelection={handleSelectAllBelowSelection}
           lastAssistantMessageId={lastAssistantMessageId}
         />
       </Suspense>
@@ -1022,6 +1066,9 @@ export function ChatArea() {
         onCloseDeleteDialog={() => setDeleteDialogMessageId(null)}
         onBulkDelete={handleBulkDelete}
         onCancelMultiSelect={handleCancelMultiSelect}
+        onUnselectAllMessages={handleUnselectAllMessages}
+        onSelectAllAboveSelection={handleSelectAllAboveSelection}
+        onSelectAllBelowSelection={handleSelectAllBelowSelection}
         isGrouped={isGrouped}
       />
     </Suspense>

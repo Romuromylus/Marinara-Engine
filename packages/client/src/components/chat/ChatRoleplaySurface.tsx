@@ -610,6 +610,9 @@ type RoleplaySurfaceProps = {
   onCloseDeleteDialog: () => void;
   onBulkDelete: () => void;
   onCancelMultiSelect: () => void;
+  onUnselectAllMessages: () => void;
+  onSelectAllAboveSelection: () => void;
+  onSelectAllBelowSelection: () => void;
   isGrouped: (index: number) => boolean;
 };
 
@@ -692,6 +695,9 @@ export function ChatRoleplaySurface({
   onCloseDeleteDialog,
   onBulkDelete,
   onCancelMultiSelect,
+  onUnselectAllMessages,
+  onSelectAllAboveSelection,
+  onSelectAllBelowSelection,
   isGrouped,
 }: RoleplaySurfaceProps) {
   const linkedChatName = chat?.connectedChatId ? allChats?.find((c) => c.id === chat.connectedChatId)?.name : undefined;
@@ -1088,6 +1094,9 @@ export function ChatRoleplaySurface({
         onCloseDeleteDialog={onCloseDeleteDialog}
         onBulkDelete={onBulkDelete}
         onCancelMultiSelect={onCancelMultiSelect}
+        onUnselectAllMessages={onUnselectAllMessages}
+        onSelectAllAboveSelection={onSelectAllAboveSelection}
+        onSelectAllBelowSelection={onSelectAllBelowSelection}
       />
     </div>
   );
