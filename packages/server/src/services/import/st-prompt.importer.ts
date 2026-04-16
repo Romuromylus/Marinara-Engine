@@ -22,6 +22,10 @@ const MARKER_DISPLAY_NAMES: Partial<Record<string, string>> = {
 function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
+function normalizeTopP(v: number | null | undefined) {
+  const clamped = clamp(v ?? 1, 0, 1);
+  return clamped <= 0 ? 1 : clamped;
+}
 function toReasoningEffort(v: unknown): "low" | "medium" | "high" | "maximum" | null {
   if (typeof v === "string" && VALID_REASONING.has(v)) return v as "low" | "medium" | "high" | "maximum";
   return null;
@@ -86,7 +90,7 @@ export async function importSTPreset(
       variableValues: {},
       parameters: {
         temperature: clamp(preset.temperature ?? 1, 0, 2),
-        topP: clamp(preset.top_p ?? 1, 0, 1),
+        topP: normalizeTopP(preset.top_p),
         topK: Math.max(0, Math.round(preset.top_k ?? 0)),
         minP: clamp(preset.min_p ?? 0, 0, 1),
         maxTokens: Math.max(1, Math.round(preset.openai_max_tokens ?? 4096)),
@@ -102,7 +106,6 @@ export async function importSTPreset(
         strictRoleFormatting: true,
         singleUserMessage: false,
       },
-    },
     options?.timestampOverrides,
   );
 

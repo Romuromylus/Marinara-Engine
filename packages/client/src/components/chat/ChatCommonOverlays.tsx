@@ -1,6 +1,6 @@
 import { Suspense, lazy, type ComponentProps } from "react";
 import type { SpriteSide } from "@marinara-engine/shared";
-import { Trash2 } from "lucide-react";
+import { ChevronUp, ChevronDown, Trash2 } from "lucide-react";
 import { PinnedImageOverlay } from "./PinnedImageOverlay";
 import type { PeekPromptData } from "./chat-area.types";
 
@@ -85,28 +85,68 @@ type MultiSelectBarProps = {
   selectedCount: number;
   onDelete: () => void;
   onCancel: () => void;
+  onUnselectAll: () => void;
+  onSelectAllAbove: () => void;
+  onSelectAllBelow: () => void;
 };
 
-function MultiSelectBar({ open, selectedCount, onDelete, onCancel }: MultiSelectBarProps) {
+function MultiSelectBar({
+  open,
+  selectedCount,
+  onDelete,
+  onCancel,
+  onUnselectAll,
+  onSelectAllAbove,
+  onSelectAllBelow,
+}: MultiSelectBarProps) {
   if (!open) return null;
 
   return (
-    <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-xl bg-[var(--card)] px-5 py-3 shadow-2xl ring-1 ring-[var(--border)]">
-      <span className="text-xs font-medium text-[var(--muted-foreground)]">{selectedCount} selected</span>
-      <button
-        onClick={onDelete}
-        disabled={selectedCount === 0}
-        className="flex items-center gap-1.5 rounded-lg bg-[var(--destructive)] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[var(--destructive)]/80 disabled:opacity-40"
-      >
-        <Trash2 size="0.75rem" />
-        Delete selected
-      </button>
-      <button
-        onClick={onCancel}
-        className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]"
-      >
-        Cancel
-      </button>
+    <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 flex-col items-stretch gap-2 rounded-xl bg-[var(--card)] px-5 py-3 shadow-2xl ring-1 ring-[var(--border)]">
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-medium text-[var(--muted-foreground)]">{selectedCount} selected</span>
+        <button
+          onClick={onDelete}
+          disabled={selectedCount === 0}
+          className="flex items-center gap-1.5 rounded-lg bg-[var(--destructive)] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[var(--destructive)]/80 disabled:opacity-40"
+        >
+          <Trash2 size="0.75rem" />
+          Delete selected
+        </button>
+        <button
+          onClick={onCancel}
+          className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]"
+        >
+          Cancel
+        </button>
+      </div>
+      <div className="flex items-center justify-center gap-2">
+        <button
+          onClick={onSelectAllAbove}
+          disabled={selectedCount === 0}
+          title="Select all messages above"
+          aria-label="Select all messages above"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-40"
+        >
+          <ChevronUp size="0.85rem" />
+        </button>
+        <button
+          onClick={onUnselectAll}
+          disabled={selectedCount === 0}
+          className="rounded-lg px-3 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-40"
+        >
+          Unselect all
+        </button>
+        <button
+          onClick={onSelectAllBelow}
+          disabled={selectedCount === 0}
+          title="Select all messages below"
+          aria-label="Select all messages below"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-40"
+        >
+          <ChevronDown size="0.85rem" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -133,6 +173,9 @@ type ChatCommonOverlaysProps = {
   onCloseDeleteDialog: () => void;
   onBulkDelete: () => void;
   onCancelMultiSelect: () => void;
+  onUnselectAllMessages: () => void;
+  onSelectAllAboveSelection: () => void;
+  onSelectAllBelowSelection: () => void;
 };
 
 export function ChatCommonOverlays({
@@ -157,6 +200,9 @@ export function ChatCommonOverlays({
   onCloseDeleteDialog,
   onBulkDelete,
   onCancelMultiSelect,
+  onUnselectAllMessages,
+  onSelectAllAboveSelection,
+  onSelectAllBelowSelection,
 }: ChatCommonOverlaysProps) {
   return (
     <>
@@ -203,6 +249,9 @@ export function ChatCommonOverlays({
         selectedCount={selectedMessageCount}
         onDelete={onBulkDelete}
         onCancel={onCancelMultiSelect}
+        onUnselectAll={onUnselectAllMessages}
+        onSelectAllAbove={onSelectAllAboveSelection}
+        onSelectAllBelow={onSelectAllBelowSelection}
       />
     </>
   );

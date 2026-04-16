@@ -66,6 +66,9 @@ type ConversationSurfaceProps = {
   onCloseDeleteDialog: () => void;
   onBulkDelete: () => void;
   onCancelMultiSelect: () => void;
+  onUnselectAllMessages: () => void;
+  onSelectAllAboveSelection: () => void;
+  onSelectAllBelowSelection: () => void;
   lastAssistantMessageId: string | null;
 };
 
@@ -119,6 +122,9 @@ export function ChatConversationSurface({
   onCloseDeleteDialog,
   onBulkDelete,
   onCancelMultiSelect,
+  onUnselectAllMessages,
+  onSelectAllAboveSelection,
+  onSelectAllBelowSelection,
   lastAssistantMessageId,
 }: ConversationSurfaceProps) {
   return (
@@ -184,6 +190,9 @@ export function ChatConversationSurface({
         onCloseDeleteDialog={onCloseDeleteDialog}
         onBulkDelete={onBulkDelete}
         onCancelMultiSelect={onCancelMultiSelect}
+        onUnselectAllMessages={onUnselectAllMessages}
+        onSelectAllAboveSelection={onSelectAllAboveSelection}
+        onSelectAllBelowSelection={onSelectAllBelowSelection}
       />
     </div>
   );

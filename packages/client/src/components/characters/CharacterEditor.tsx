@@ -12,6 +12,7 @@ import {
   useUpdateCharacter,
   useUploadAvatar,
   useDeleteCharacter,
+  useDuplicateCharacter,
   useCharacterSprites,
   useUploadSprite,
   useDeleteSprite,
@@ -32,6 +33,7 @@ import {
   Settings2,
   Library,
   Camera,
+  Copy,
   Trash2,
   Star,
   StarOff,
@@ -88,6 +90,7 @@ export function CharacterEditor() {
   const updateCharacter = useUpdateCharacter();
   const uploadAvatar = useUploadAvatar();
   const deleteCharacter = useDeleteCharacter();
+  const duplicateCharacter = useDuplicateCharacter();
 
   const [activeTab, setActiveTab] = useState<TabId>("metadata");
   const [formData, setFormData] = useState<CharacterData | null>(null);
@@ -291,6 +294,21 @@ export function CharacterEditor() {
           title="Export as PNG card"
         >
           <ImageDown size="1.125rem" />
+        </button>
+        {/* Duplicate */}
+        <button
+          onClick={() => {
+            if (!characterId) return;
+            duplicateCharacter.mutate(characterId, {
+              onSuccess: () => {
+                toast.success("Character duplicated");
+              },
+            });
+          }}
+          className="rounded-xl p-2 text-[var(--muted-foreground)] transition-all hover:bg-sky-400/10 hover:text-sky-400"
+          title="Duplicate character"
+        >
+          <Copy size="1.125rem" />
         </button>
 
         {/* Delete */}
