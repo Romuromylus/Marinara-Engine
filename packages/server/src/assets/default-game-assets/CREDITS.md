@@ -54,6 +54,7 @@ sound libraries (OpenGameArt, Freesound.org CC0 tier, Kenney, etc.).
 Drop files into the appropriate subdirectory and hit the **Rescan** button in the app, or call `POST /api/game-assets/rescan`.
 
 Supported formats:
+
 - **Music/SFX**: `.mp3`, `.ogg`, `.wav`, `.flac`, `.m4a`
 - **Backgrounds**: `.jpg`, `.jpeg`, `.png`, `.webp`
 - **Sprites**: `.png`, `.webp`, `.svg`

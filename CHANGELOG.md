@@ -2,7 +2,7 @@
 
 This file is the release-notes source of truth for Marinara Engine. Reuse these entries when publishing GitHub Releases for tags in the `vX.Y.Z` format.
 
-## v1.5.0
+## [1.5.0]
 
 ### Added
 
