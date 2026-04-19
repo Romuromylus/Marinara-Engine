@@ -47,6 +47,7 @@ const API_KEY_LINKS: Partial<Record<APIProvider, { label: string; url: string }>
   mistral: { label: "Get your Mistral API key", url: "https://console.mistral.ai/api-keys" },
   cohere: { label: "Get your Cohere API key", url: "https://dashboard.cohere.com/api-keys" },
   openrouter: { label: "Get your OpenRouter API key", url: "https://openrouter.ai/keys" },
+  nanogpt: { label: "Get your NanoGPT API key", url: "https://nano-gpt.com/api" },
 };
 
 // ═══════════════════════════════════════════════
@@ -102,6 +103,7 @@ export function ConnectionEditor() {
   const [modelSearch, setModelSearch] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const modelTriggerRef = useRef<HTMLDivElement>(null);
+  const modelSearchInputRef = useRef<HTMLInputElement>(null);
   const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number; width: number; maxH: number } | null>(
     null,
   );
@@ -318,6 +320,11 @@ export function ConnectionEditor() {
       onSuccess: (data) => {
         const result = data as { models: Array<{ id: string; name: string }> };
         setRemoteModels(result.models);
+        setShowModelDropdown(true);
+        requestAnimationFrame(() => {
+          modelSearchInputRef.current?.focus();
+          modelSearchInputRef.current?.select();
+        });
       },
       onError: (err) => {
         setFetchError(err instanceof Error ? err.message : "Failed to fetch models");
@@ -336,6 +343,7 @@ export function ConnectionEditor() {
   const markDirty = useCallback(() => setDirty(true), []);
 
   const providerDef = PROVIDERS[localProvider];
+  const isImageGenerationProvider = localProvider === "image_generation";
 
   if (!connectionDetailId) return null;
 
@@ -618,45 +626,48 @@ export function ConnectionEditor() {
             )}
           </FieldGroup>
 
+          {/* ── Image Service (only for image_generation provider) ── */}
+          {localProvider === "image_generation" && (
+            <FieldGroup
+              label="Image Service"
+              icon={<Globe size="0.875rem" className="text-sky-400" />}
+              help="Select which image generation service to use. This sets the Base URL automatically. You can also set a custom URL in the Base URL field above."
+            >
+              <div className="grid grid-cols-2 gap-1.5">
+                {IMAGE_GENERATION_SOURCES.map((src) => {
+                  const isActive = localBaseUrl === src.defaultBaseUrl;
+                  return (
+                    <button
+                      key={src.id}
+                      onClick={() => {
+                        setLocalBaseUrl(src.defaultBaseUrl);
+                        markDirty();
+                      }}
+                      className={cn(
+                        "flex flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left text-[0.6875rem] transition-all",
+                        isActive
+                          ? "bg-sky-400/15 text-sky-400 ring-1 ring-sky-400/30"
+                          : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{src.name}</span>
+                        {isActive && <Check size="0.625rem" />}
+                      </div>
+                      <span className="text-[0.5625rem] opacity-70">{src.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </FieldGroup>
+          )}
+
           {/* ── Model Selection ── */}
           <FieldGroup
             label="Model"
             icon={<Server size="0.875rem" className="text-sky-400" />}
             help="The specific AI model to use. You can pick from the list or type a custom model ID directly."
           >
-            {/* Image generation: show service quick-pick as base URL helper */}
-            {localProvider === "image_generation" && (
-              <div className="mb-3 space-y-1.5">
-                <p className="text-[0.625rem] font-medium text-[var(--muted-foreground)] uppercase tracking-wide">
-                  Service (sets Base URL)
-                </p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {IMAGE_GENERATION_SOURCES.map((src) => {
-                    const isActive = localBaseUrl === src.defaultBaseUrl;
-                    return (
-                      <button
-                        key={src.id}
-                        onClick={() => {
-                          setLocalBaseUrl(src.defaultBaseUrl);
-                          markDirty();
-                        }}
-                        className={cn(
-                          "flex flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left text-[0.6875rem] transition-all",
-                          isActive
-                            ? "bg-sky-400/15 text-sky-400 ring-1 ring-sky-400/30"
-                            : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-                        )}
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-medium">{src.name}</span>
-                          {isActive && <Check size="0.625rem" />}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
             {/* Standard model dropdown + manual input (used for all providers including image_generation) */}
             <div ref={modelTriggerRef} className="relative">
               <div
@@ -669,6 +680,7 @@ export function ConnectionEditor() {
                 <Search size="0.8125rem" className="shrink-0 text-[var(--muted-foreground)]" />
                 {showModelDropdown ? (
                   <input
+                    ref={modelSearchInputRef}
                     value={modelSearch}
                     onChange={(e) => setModelSearch(e.target.value)}
                     className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--muted-foreground)]"
@@ -973,30 +985,41 @@ export function ConnectionEditor() {
           )}
 
           {/* ── Default for Agents ── */}
-          {localProvider !== "image_generation" && (
-            <FieldGroup
-              label="Default for Agents"
-              icon={<Bot size="0.875rem" className="text-teal-400" />}
-              help="When enabled, all agents that don't have a specific connection override will use this connection instead of the chat's active connection."
-            >
-              <label className="flex items-center gap-3 cursor-pointer select-none px-2 py-1">
-                <div className="relative">
-                  <input
-                    type="checkbox"
-                    checked={localDefaultForAgents}
-                    onChange={(e) => {
-                      setLocalDefaultForAgents(e.target.checked);
-                      markDirty();
-                    }}
-                    className="peer sr-only"
-                  />
-                  <div className="h-5 w-9 rounded-full bg-[var(--border)] transition-colors peer-checked:bg-teal-400/70" />
-                  <div className="absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-4" />
-                </div>
-                <span className="text-sm">Use as default agent connection</span>
-              </label>
-            </FieldGroup>
-          )}
+          <FieldGroup
+            label={isImageGenerationProvider ? "Default for Illustrator" : "Default for Agents"}
+            icon={<Bot size="0.875rem" className="text-teal-400" />}
+            help={
+              isImageGenerationProvider
+                ? "When enabled, the Illustrator agent will use this image generation connection by default whenever it does not have a specific Image Generation Connection assigned."
+                : "When enabled, all agents that don't have a specific connection override will use this connection instead of the chat's active connection."
+            }
+          >
+            <label className="flex items-center gap-3 cursor-pointer select-none px-2 py-1">
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={localDefaultForAgents}
+                  onChange={(e) => {
+                    setLocalDefaultForAgents(e.target.checked);
+                    markDirty();
+                  }}
+                  className="peer sr-only"
+                />
+                <div className="h-5 w-9 rounded-full bg-[var(--border)] transition-colors peer-checked:bg-teal-400/70" />
+                <div className="absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-4" />
+              </div>
+              <span className="text-sm">
+                {isImageGenerationProvider
+                  ? "Use as default Illustrator agent connection"
+                  : "Use as default agent connection"}
+              </span>
+            </label>
+            {isImageGenerationProvider && (
+              <p className="px-2 text-[0.625rem] text-[var(--muted-foreground)]">
+                Only one image generation connection should be marked as the default for the Illustrator agent.
+              </p>
+            )}
+          </FieldGroup>
 
           {/* ── Embedding Model (for lorebook vectorization) ── */}
           {localProvider !== "image_generation" && (

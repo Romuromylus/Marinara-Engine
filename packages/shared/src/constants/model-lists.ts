@@ -433,6 +433,13 @@ export const IMAGE_GENERATION_SOURCES: ImageGenSource[] = [
     requiresApiKey: false,
   },
   {
+    id: "nanogpt",
+    name: "NanoGPT",
+    description: "Image generation via the NanoGPT aggregator.",
+    defaultBaseUrl: "https://nano-gpt.com/api/v1",
+    requiresApiKey: true,
+  },
+  {
     id: "blockentropy",
     name: "Block Entropy",
     description: "Decentralised image generation network.",
@@ -484,6 +491,7 @@ export function inferImageSource(model: string, baseUrl: string): string {
   if (m.includes("gemini") && m.includes("image")) return "gemini_image";
   if (m.includes("imagen")) return "gemini_image";
   // OpenAI-compatible fallback (works for most proxies)
+  if (u.includes("nano-gpt.com")) return "nanogpt";
   return "openai";
 }
 
@@ -496,6 +504,7 @@ export const MODEL_LISTS: Record<APIProvider, KnownModel[]> = {
   mistral: MISTRAL_MODELS,
   cohere: COHERE_MODELS,
   openrouter: OPENROUTER_MODELS,
+  nanogpt: [], // NanoGPT aggregator — models fetched dynamically via API
   custom: [], // User must type model ID manually for custom endpoints
   image_generation: IMAGE_GEN_MODELS,
 };
