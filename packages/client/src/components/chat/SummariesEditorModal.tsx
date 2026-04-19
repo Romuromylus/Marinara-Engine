@@ -2,7 +2,7 @@
 // Summaries Editor Modal — edit auto-generated day/week summaries
 // ──────────────────────────────────────────────
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { X, Plus, Trash2, CalendarClock } from "lucide-react";
+import { X, Plus, Trash2, CalendarClock, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { Chat, ChatMetadata, DaySummaryEntry, WeekSummaryEntry } from "@marinara-engine/shared";
 import { useQueryClient } from "@tanstack/react-query";
@@ -108,6 +108,7 @@ export function SummariesEditorModal({ chat, open, onClose }: SummariesEditorMod
   const snapshotRef = useRef<Drafts>(drafts);
   const updateSummaries = useUpdateChatSummaries();
   const qc = useQueryClient();
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   // Reinitialize drafts whenever the modal opens, refetching the chat first so
   // auto-summaries written during a prior generation show up without a page refresh.
@@ -126,6 +127,7 @@ export function SummariesEditorModal({ chat, open, onClose }: SummariesEditorMod
       const fresh = cloneDrafts(latestMeta);
       setDrafts(fresh);
       snapshotRef.current = fresh;
+      setExpanded(new Set());
       updateSummaries.reset();
     })();
     return () => {
@@ -167,6 +169,20 @@ export function SummariesEditorModal({ chat, open, onClose }: SummariesEditorMod
 
   const delta = useMemo(() => computeDelta(drafts, snapshotRef.current), [drafts]);
   const isDirty = !!(delta.daySummaries || delta.weekSummaries);
+
+  const allExpanded = entries.length > 0 && expanded.size === entries.length;
+  const toggleEntry = (id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    if (allExpanded) setExpanded(new Set());
+    else setExpanded(new Set(entries.map((e) => `${e.kind}:${e.key}`)));
+  };
 
   const updateEntry = (kind: EntryKind, key: string, next: DaySummaryEntry | WeekSummaryEntry) => {
     setDrafts((prev) => {
@@ -230,82 +246,116 @@ export function SummariesEditorModal({ chat, open, onClose }: SummariesEditorMod
             </div>
           )}
 
+          {entries.length > 0 && (
+            <div className="flex items-center justify-end">
+              <button
+                onClick={toggleAll}
+                title={allExpanded ? "Collapse all" : "Expand all"}
+                aria-label={allExpanded ? "Collapse all" : "Expand all"}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+              >
+                {allExpanded ? <ChevronsDownUp size="0.85rem" /> : <ChevronsUpDown size="0.85rem" />}
+                {allExpanded ? "Collapse all" : "Expand all"}
+              </button>
+            </div>
+          )}
+
           {entries.map((entry) => {
             const current =
               entry.kind === "week" ? drafts.weekSummaries[entry.key]! : drafts.daySummaries[entry.key]!;
+            const id = `${entry.kind}:${entry.key}`;
+            const isOpen = expanded.has(id);
 
             return (
               <div
-                key={`${entry.kind}:${entry.key}`}
-                className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/20 p-3 space-y-2"
+                key={id}
+                className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/20"
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[0.75rem] font-semibold">{entry.label}</span>
-                    <span
-                      className={cn(
-                        "rounded-full px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wider",
-                        entry.kind === "week"
-                          ? "bg-purple-500/20 text-purple-400"
-                          : "bg-blue-500/20 text-blue-400",
-                      )}
-                    >
-                      {entry.kind}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Summary textarea */}
-                <div className="space-y-1">
-                  <label className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Summary</label>
-                  <AutoSizingTextarea
-                    value={current.summary}
-                    onChange={(next) => updateEntry(entry.kind, entry.key, { ...current, summary: next })}
-                    className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-[0.75rem] leading-relaxed text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
+                <button
+                  onClick={() => toggleEntry(id)}
+                  aria-expanded={isOpen}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--accent)]/50"
+                >
+                  <ChevronRight
+                    size="0.85rem"
+                    className={cn(
+                      "shrink-0 text-[var(--muted-foreground)] transition-transform",
+                      isOpen && "rotate-90",
+                    )}
                   />
-                </div>
-
-                {/* Key details rows */}
-                <div className="space-y-1">
-                  <label className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Key Details</label>
-                  {current.keyDetails.length === 0 && (
-                    <p className="text-[0.6875rem] italic text-[var(--muted-foreground)]">No key details.</p>
-                  )}
-                  <div className="space-y-1.5">
-                    {current.keyDetails.map((detail, i) => (
-                      <div key={i} className="flex gap-1.5">
-                        <AutoSizingTextarea
-                          value={detail}
-                          onChange={(next) => {
-                            const nextDetails = [...current.keyDetails];
-                            nextDetails[i] = next;
-                            updateEntry(entry.kind, entry.key, { ...current, keyDetails: nextDetails });
-                          }}
-                          className="flex-1 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-[0.75rem] leading-relaxed text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
-                        />
-                        <button
-                          onClick={() => {
-                            const nextDetails = current.keyDetails.filter((_, idx) => idx !== i);
-                            updateEntry(entry.kind, entry.key, { ...current, keyDetails: nextDetails });
-                          }}
-                          className="shrink-0 self-start rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
-                          title="Delete key detail"
-                        >
-                          <Trash2 size="0.75rem" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  <button
-                    onClick={() =>
-                      updateEntry(entry.kind, entry.key, { ...current, keyDetails: [...current.keyDetails, ""] })
-                    }
-                    className="mt-1 flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                  <span className="text-[0.75rem] font-semibold">{entry.label}</span>
+                  <span
+                    className={cn(
+                      "shrink-0 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wider",
+                      entry.kind === "week"
+                        ? "bg-purple-500/20 text-purple-400"
+                        : "bg-blue-500/20 text-blue-400",
+                    )}
                   >
-                    <Plus size="0.75rem" />
-                    Add key detail
-                  </button>
-                </div>
+                    {entry.kind}
+                  </span>
+                  {!isOpen && current.summary && (
+                    <span className="min-w-0 flex-1 truncate text-[0.6875rem] italic text-[var(--muted-foreground)]">
+                      {current.summary}
+                    </span>
+                  )}
+                </button>
+
+                {isOpen && (
+                  <div className="space-y-2 border-t border-[var(--border)] px-3 py-2">
+                    {/* Summary textarea */}
+                    <div className="space-y-1">
+                      <label className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Summary</label>
+                      <AutoSizingTextarea
+                        value={current.summary}
+                        onChange={(next) => updateEntry(entry.kind, entry.key, { ...current, summary: next })}
+                        className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-[0.75rem] leading-relaxed text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Key details rows */}
+                    <div className="space-y-1">
+                      <label className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Key Details</label>
+                      {current.keyDetails.length === 0 && (
+                        <p className="text-[0.6875rem] italic text-[var(--muted-foreground)]">No key details.</p>
+                      )}
+                      <div className="space-y-1.5">
+                        {current.keyDetails.map((detail, i) => (
+                          <div key={i} className="flex gap-1.5">
+                            <AutoSizingTextarea
+                              value={detail}
+                              onChange={(next) => {
+                                const nextDetails = [...current.keyDetails];
+                                nextDetails[i] = next;
+                                updateEntry(entry.kind, entry.key, { ...current, keyDetails: nextDetails });
+                              }}
+                              className="flex-1 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-[0.75rem] leading-relaxed text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
+                            />
+                            <button
+                              onClick={() => {
+                                const nextDetails = current.keyDetails.filter((_, idx) => idx !== i);
+                                updateEntry(entry.kind, entry.key, { ...current, keyDetails: nextDetails });
+                              }}
+                              className="shrink-0 self-start rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
+                              title="Delete key detail"
+                            >
+                              <Trash2 size="0.75rem" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() =>
+                          updateEntry(entry.kind, entry.key, { ...current, keyDetails: [...current.keyDetails, ""] })
+                        }
+                        className="mt-1 flex items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                      >
+                        <Plus size="0.75rem" />
+                        Add key detail
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
