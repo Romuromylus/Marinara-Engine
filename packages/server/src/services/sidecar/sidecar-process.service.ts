@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "child_process";
-import { createWriteStream, existsSync, writeFileSync, type WriteStream } from "fs";
+import { createWriteStream, existsSync, readFileSync, writeFileSync, type WriteStream } from "fs";
 import { createServer } from "net";
 import { dirname } from "path";
 import { sidecarModelService } from "./sidecar-model.service.js";
@@ -29,6 +29,19 @@ async function getFreePort(): Promise<number> {
   });
 }
 
+class LlamaServerExitError extends Error {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+
+  constructor(code: number | null, signal: NodeJS.Signals | null) {
+    const reason = signal ? `signal ${signal}` : `exit ${code ?? "null"}`;
+    super(`llama-server exited before becoming ready (${reason})`);
+    this.name = "LlamaServerExitError";
+    this.exitCode = code;
+    this.signal = signal;
+  }
+}
+
 class SidecarProcessService {
   private child: ChildProcess | null = null;
   private logStream: WriteStream | null = null;
@@ -38,6 +51,7 @@ class SidecarProcessService {
   private intentionalStop = false;
   private unexpectedCrashCount = 0;
   private lastReadyAt = 0;
+  private starting = false;
   private syncLock: Promise<void> = Promise.resolve();
 
   isReady(): boolean {
@@ -146,7 +160,7 @@ class SidecarProcessService {
     }
   }
 
-  private buildArgs(modelPath: string): string[] {
+  private buildArgs(modelPath: string, gpuLayers: number): string[] {
     const config = sidecarModelService.getConfig();
     const args = [
       "-m",
@@ -162,9 +176,62 @@ class SidecarProcessService {
       "none",
     ];
 
-    const gpuLayers = config.gpuLayers === -1 ? 999 : config.gpuLayers;
     args.push("-ngl", String(gpuLayers));
     return args;
+  }
+
+  private usesGpuRuntime(runtime: SidecarRuntimeInstall): boolean {
+    return /(cuda|rocm|vulkan|metal)/i.test(runtime.variant);
+  }
+
+  private buildStartupPlans(runtime: SidecarRuntimeInstall): Array<{ gpuLayers: number; label: string }> {
+    const config = sidecarModelService.getConfig();
+    if (config.gpuLayers !== -1) {
+      return [{ gpuLayers: config.gpuLayers, label: `gpuLayers=${config.gpuLayers}` }];
+    }
+
+    const plans = [{ gpuLayers: 999, label: "max GPU offload" }];
+    if (this.usesGpuRuntime(runtime)) {
+      plans.push({ gpuLayers: 0, label: "CPU fallback" });
+    }
+    return plans;
+  }
+
+  private shouldRetryStartup(error: unknown): error is LlamaServerExitError {
+    return error instanceof LlamaServerExitError;
+  }
+
+  private formatCommandArgs(args: string[]): string {
+    return args.map((arg) => (/[\s"]/u.test(arg) ? JSON.stringify(arg) : arg)).join(" ");
+  }
+
+  private readRecentLogLines(maxLines = 12): string | null {
+    try {
+      const log = readFileSync(sidecarRuntimeService.getLogPath(), "utf-8").trim();
+      if (!log) {
+        return null;
+      }
+      return log.split(/\r?\n/u).slice(-maxLines).join("\n");
+    } catch {
+      return null;
+    }
+  }
+
+  private decorateStartupError(error: unknown, args: string[]): Error {
+    const baseMessage = error instanceof Error ? error.message : "llama-server failed to start";
+    const commandLine = `${this.child?.spawnfile ?? "llama-server"} ${this.formatCommandArgs(args)}`.trim();
+    const recentLogs = this.readRecentLogLines();
+    if (!recentLogs) {
+      return new Error(`${baseMessage}\nCommand: ${commandLine}`);
+    }
+    return new Error(`${baseMessage}\nCommand: ${commandLine}\nRecent llama-server log:\n${recentLogs}`);
+  }
+
+  private getChildExitError(child: ChildProcess): LlamaServerExitError | null {
+    if (child.exitCode === null && child.signalCode === null) {
+      return null;
+    }
+    return new LlamaServerExitError(child.exitCode, child.signalCode);
   }
 
   private async startUnlocked(runtime: SidecarRuntimeInstall, modelPath: string, signature: string): Promise<void> {
@@ -172,47 +239,73 @@ class SidecarProcessService {
       throw new Error("The selected sidecar model file is missing. Please download it again.");
     }
 
-    const port = await getFreePort();
-    const args = this.buildArgs(modelPath);
-    args.push("--port", String(port));
-
     writeFileSync(sidecarRuntimeService.getLogPath(), "", "utf-8");
-    const logStream = createWriteStream(sidecarRuntimeService.getLogPath(), { flags: "a" });
+    const startupPlans = this.buildStartupPlans(runtime);
+    let lastError: Error | null = null;
 
-    const child = spawn(runtime.serverPath, args, {
-      cwd: dirname(runtime.serverPath),
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    this.child = child;
-    this.logStream = logStream;
-    this.baseUrl = `http://127.0.0.1:${port}`;
-    this.ready = false;
-    this.currentSignature = signature;
-    this.intentionalStop = false;
-
-    child.stdout!.on("data", (chunk) => {
-      logStream.write(chunk);
-    });
-    child.stderr!.on("data", (chunk) => {
-      logStream.write(chunk);
-    });
-    child.on("exit", (code, signal) => {
-      void this.handleChildExit(code, signal);
-    });
-
+    this.starting = true;
     try {
-      await this.waitForHealth(this.baseUrl, child);
-      this.ready = true;
-      this.unexpectedCrashCount = 0;
-      this.lastReadyAt = Date.now();
-      sidecarModelService.setStatus("ready");
-      sidecarModelService.clearLegacyRuntimeStamp();
+      for (let attempt = 0; attempt < startupPlans.length; attempt += 1) {
+        const plan = startupPlans[attempt]!;
+        const port = await getFreePort();
+        const args = this.buildArgs(modelPath, plan.gpuLayers);
+        args.push("--port", String(port));
+
+        const logStream = createWriteStream(sidecarRuntimeService.getLogPath(), { flags: "a" });
+        logStream.write(`[sidecar] startup attempt ${attempt + 1}/${startupPlans.length} (${plan.label})\n`);
+        logStream.write(`[sidecar] command: ${runtime.serverPath} ${this.formatCommandArgs(args)}\n`);
+
+        const child = spawn(runtime.serverPath, args, {
+          cwd: dirname(runtime.serverPath),
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+
+        this.child = child;
+        this.logStream = logStream;
+        this.baseUrl = `http://127.0.0.1:${port}`;
+        this.ready = false;
+        this.currentSignature = signature;
+        this.intentionalStop = false;
+
+        child.stdout!.on("data", (chunk) => {
+          logStream.write(chunk);
+        });
+        child.stderr!.on("data", (chunk) => {
+          logStream.write(chunk);
+        });
+        child.on("exit", (code, signal) => {
+          void this.handleChildExit(code, signal);
+        });
+
+        try {
+          await this.waitForHealth(this.baseUrl, child);
+          this.ready = true;
+          this.unexpectedCrashCount = 0;
+          this.lastReadyAt = Date.now();
+          sidecarModelService.setStatus("ready");
+          sidecarModelService.clearLegacyRuntimeStamp();
+          return;
+        } catch (error) {
+          lastError = this.decorateStartupError(error, args);
+          await this.stopUnlocked();
+
+          const nextPlan = startupPlans[attempt + 1];
+          if (nextPlan && this.shouldRetryStartup(error)) {
+            console.warn(
+              `[sidecar] Startup with ${plan.label} failed (${error.message}). Retrying with ${nextPlan.label}.`,
+            );
+            continue;
+          }
+
+          throw lastError;
+        }
+      }
     } catch (error) {
       sidecarModelService.setStatus("server_error");
-      await this.stopUnlocked();
       throw error;
+    } finally {
+      this.starting = false;
     }
   }
 
@@ -221,8 +314,9 @@ class SidecarProcessService {
     let lastError: unknown = null;
 
     while (Date.now() < timeoutAt) {
-      if (child.exitCode !== null) {
-        throw new Error(`llama-server exited before becoming ready (exit ${child.exitCode})`);
+      const exitError = this.getChildExitError(child);
+      if (exitError) {
+        throw exitError;
       }
 
       try {
@@ -233,9 +327,18 @@ class SidecarProcessService {
         lastError = new Error(`HTTP ${response.status}`);
       } catch (error) {
         lastError = error;
+        const latestExitError = this.getChildExitError(child);
+        if (latestExitError) {
+          throw latestExitError;
+        }
       }
 
       await delay(500);
+    }
+
+    const exitError = this.getChildExitError(child);
+    if (exitError) {
+      throw exitError;
     }
 
     throw lastError instanceof Error ? lastError : new Error("Timed out waiting for llama-server health");
@@ -294,6 +397,10 @@ class SidecarProcessService {
     }
 
     console.error(`[sidecar] llama-server exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`);
+
+    if (this.starting) {
+      return;
+    }
 
     const crashedSoonAfterReady = this.lastReadyAt > 0 && Date.now() - this.lastReadyAt < 30_000;
     this.unexpectedCrashCount = crashedSoonAfterReady ? this.unexpectedCrashCount + 1 : 1;
