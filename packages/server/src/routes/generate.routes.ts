@@ -6528,8 +6528,15 @@ export async function generateRoutes(app: FastifyInstance) {
                   return d.name?.toLowerCase() === ucCmd.name.toLowerCase();
                 });
                 if (targetChar) {
+                  const latestTargetChar = await chars.getById(targetChar.id);
+                  if (!latestTargetChar) {
+                    console.warn(`[commands] Update character: "${ucCmd.name}" disappeared before update`);
+                    continue;
+                  }
                   const existingData =
-                    typeof targetChar.data === "string" ? JSON.parse(targetChar.data as string) : targetChar.data;
+                    typeof latestTargetChar.data === "string"
+                      ? JSON.parse(latestTargetChar.data as string)
+                      : latestTargetChar.data;
                   const updates: Record<string, unknown> = {};
                   const extensionUpdates: Record<string, unknown> = {};
                   if (ucCmd.description !== undefined) updates.description = ucCmd.description;
@@ -6547,7 +6554,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   if (Object.keys(extensionUpdates).length > 0) {
                     updates.extensions = { ...(existingData.extensions ?? {}), ...extensionUpdates };
                   }
-                  await chars.update(targetChar.id, { ...existingData, ...updates });
+                  await chars.update(targetChar.id, updates);
                   reply.raw.write(
                     `data: ${JSON.stringify({
                       type: "assistant_action",

@@ -65,3 +65,28 @@ test("strips update commands while preserving visible assistant text", () => {
   assert.equal(commands.length, 2);
   assert.equal(cleanContent, "I'll tune those cards for you.\n\nAnything else?");
 });
+
+test("parses empty-string updates so assistant commands can clear fields", () => {
+  const { commands } = parseCharacterCommands(
+    `[update_character: name="Luna", backstory="", appearance="", mes_example="", creator_notes="", system_prompt="", post_history_instructions=""][update_persona: name="Alex Storm", scenario="", backstory=""]`,
+  );
+
+  assert.deepEqual(commands, [
+    {
+      type: "update_character",
+      name: "Luna",
+      backstory: "",
+      appearance: "",
+      mesExample: "",
+      creatorNotes: "",
+      systemPrompt: "",
+      postHistoryInstructions: "",
+    },
+    {
+      type: "update_persona",
+      name: "Alex Storm",
+      scenario: "",
+      backstory: "",
+    },
+  ]);
+});
