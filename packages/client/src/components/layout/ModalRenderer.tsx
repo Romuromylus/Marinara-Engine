@@ -47,6 +47,9 @@ const CreateConnectionModal = lazy(() =>
 const CreatePersonaModal = lazy(() =>
   import("../modals/CreatePersonaModal").then((module) => ({ default: module.CreatePersonaModal })),
 );
+const CharacterCardUpdateModal = lazy(() =>
+  import("../modals/CharacterCardUpdateModal").then((module) => ({ default: module.CharacterCardUpdateModal })),
+);
 
 export function ModalRenderer() {
   const modal = useUIStore((s) => s.modal);
@@ -98,6 +101,9 @@ export function ModalRenderer() {
       break;
     case "st-bulk-import":
       content = <STBulkImportModal open onClose={closeModal} />;
+      break;
+    case "character-card-update":
+      content = <CharacterCardUpdateModal open onClose={closeModal} />;
       break;
     default:
       content = null;

@@ -16,6 +16,7 @@ export const agentResultTypeSchema = z.enum([
   "continuity_check",
   "director_event",
   "lorebook_update",
+  "character_card_update",
   "prompt_review",
   "background_change",
   "character_tracker_update",

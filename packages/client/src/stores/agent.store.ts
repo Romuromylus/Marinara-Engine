@@ -2,7 +2,25 @@
 // Zustand Store: Agent Slice
 // ──────────────────────────────────────────────
 import { create } from "zustand";
-import type { AgentResult } from "@marinara-engine/shared";
+import type { AgentResult, CharacterCardFieldUpdate } from "@marinara-engine/shared";
+
+/**
+ * A character_card_update result awaiting user confirmation.
+ *
+ * Character cards are sensitive (they define the character's identity) so
+ * the Card Evolution Auditor never writes them automatically — each batch
+ * of proposed edits sits here until the user approves or rejects it.
+ */
+export interface PendingCardUpdate {
+  /** Client-generated ID, used as key for dismissal. */
+  id: string;
+  characterId: string;
+  characterName: string;
+  updates: CharacterCardFieldUpdate[];
+  agentName: string;
+  /** ms since epoch — used for stable ordering. */
+  timestamp: number;
+}
 
 interface AgentDebugEntry {
   timestamp: number;
@@ -46,6 +64,7 @@ interface AgentState {
     label: string;
     text: string;
   }>;
+  pendingCardUpdates: PendingCardUpdate[];
   debugLog: AgentDebugEntry[];
 
   // Actions
@@ -65,6 +84,9 @@ interface AgentState {
   setEchoLoadedChatId: (chatId: string | null) => void;
   setCyoaChoices: (choices: Array<{ label: string; text: string }>) => void;
   clearCyoaChoices: () => void;
+  enqueuePendingCardUpdate: (entry: PendingCardUpdate) => void;
+  dismissPendingCardUpdate: (id: string) => void;
+  clearPendingCardUpdates: () => void;
   addDebugEntry: (entry: AgentDebugEntry) => void;
   clearDebugLog: () => void;
   reset: () => void;
@@ -81,6 +103,7 @@ export const useAgentStore = create<AgentState>((set) => ({
   echoBaseline: 0,
   echoLoadedChatId: null,
   cyoaChoices: [],
+  pendingCardUpdates: [],
   debugLog: [],
 
   setActiveAgents: (agents) => set({ activeAgents: agents }),
@@ -129,6 +152,12 @@ export const useAgentStore = create<AgentState>((set) => ({
   setCyoaChoices: (choices) => set({ cyoaChoices: choices }),
   clearCyoaChoices: () => set({ cyoaChoices: [] }),
 
+  enqueuePendingCardUpdate: (entry) =>
+    set((s) => ({ pendingCardUpdates: [...s.pendingCardUpdates, entry].slice(-20) })),
+  dismissPendingCardUpdate: (id) =>
+    set((s) => ({ pendingCardUpdates: s.pendingCardUpdates.filter((e) => e.id !== id) })),
+  clearPendingCardUpdates: () => set({ pendingCardUpdates: [] }),
+
   addDebugEntry: (entry) => set((s) => ({ debugLog: [...s.debugLog, entry].slice(-100) })),
   clearDebugLog: () => set({ debugLog: [] }),
 
@@ -144,6 +173,7 @@ export const useAgentStore = create<AgentState>((set) => ({
       echoBaseline: 0,
       echoLoadedChatId: null,
       cyoaChoices: [],
+      pendingCardUpdates: [],
       debugLog: [],
     }),
 }));
