@@ -14,11 +14,11 @@
   "scripts": {
     "dev": "pnpm build:shared && pnpm --filter @marinara-engine/server --filter @marinara-engine/client -r --parallel run dev",
     "dev:server": "pnpm --filter @marinara-engine/server dev",
-    "dev:client": "pnpm --filter @marinara-engine/client dev",
+    "dev:client": "pnpm build:shared && pnpm --filter @marinara-engine/client dev",
     "build": "pnpm --filter @marinara-engine/shared build && pnpm --filter @marinara-engine/server --filter @marinara-engine/client --parallel run build",
     "build:shared": "pnpm --filter @marinara-engine/shared build",
     "build:server": "pnpm --filter @marinara-engine/server build",
-    "build:client": "pnpm --filter @marinara-engine/client build",
+    "build:client": "pnpm build:shared && pnpm --filter @marinara-engine/client build",
     "check": "pnpm lint && pnpm build",
     "start": "node packages/server/dist/index.js",
     "format": "prettier --write \"packages/**/*.{ts,tsx}\"",
