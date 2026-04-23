@@ -75,9 +75,6 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     # ── Remove @huggingface/transformers (embedding model runtime) ──
     rm -rf /app/node_modules/.pnpm/@huggingface+transformers@* \
            /app/node_modules/@huggingface && \
-    # ── Remove sharp native binaries ──
-    rm -rf /app/node_modules/.pnpm/sharp@* \
-           /app/node_modules/sharp && \
     # ── Sweep leftover native addons ──
     find /app/node_modules/.pnpm -name '*.node' -path '*onnxruntime*' -delete 2>/dev/null; true
 

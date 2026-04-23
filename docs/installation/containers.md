@@ -62,7 +62,6 @@ A **lite** image variant is available that trades some offline features for a si
 | Local sidecar model (llama-server / Gemma) | Native runtime libs (`libssl`, `libgomp`, `libvulkan`), large model downloads |
 | Local embedding model (all-MiniLM-L6-v2)   | `onnxruntime-node`, `onnxruntime-web`, `@huggingface/transformers`            |
 | Memory recall (semantic search)            | Depends on the local embedding model                                          |
-| `sharp` native image processing            | Platform-specific native binaries                                             |
 
 All core features — chat, roleplay, game mode, agents, lorebooks, characters, connections to remote LLM APIs — work exactly the same. You just need an external API connection (OpenRouter, OpenAI, Ollama, etc.) for all LLM features instead of being able to run a model locally via ME.
 
