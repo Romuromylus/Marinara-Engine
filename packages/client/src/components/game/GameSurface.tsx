@@ -1411,30 +1411,21 @@ export function GameSurface({
   }, [activeChatId]);
 
   // ── Persist narration segment index (localStorage for instant reads + server for durability) ──
-  // Saved as JSON `{messageId, index}` so we only restore on the same scene.
-  // After a scene transition the latest assistant message id changes, the saved
-  // entry becomes stale and we fall through to segment 0 instead of yanking the
-  // user to mid/end-of-scene with the previous scene's index.
   const segmentStorageKey = `narration-idx:${activeChatId}`;
   const segmentPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestAssistantIdForPersist = latestAssistantMsg?.id ?? null;
   const handleSegmentChange = useCallback(
     (index: number) => {
-      const messageId = latestAssistantIdForPersist;
-      if (!messageId) return;
       try {
-        localStorage.setItem(segmentStorageKey, JSON.stringify({ messageId, index }));
+        localStorage.setItem(segmentStorageKey, String(index));
       } catch {
         /* storage unavailable */
       }
       if (segmentPersistTimer.current) clearTimeout(segmentPersistTimer.current);
       segmentPersistTimer.current = setTimeout(() => {
-        api
-          .patch(`/chats/${activeChatId}/metadata`, { gameNarrationIndex: index, gameNarrationMsgId: messageId })
-          .catch(() => {});
+        api.patch(`/chats/${activeChatId}/metadata`, { gameNarrationIndex: index }).catch(() => {});
       }, 500);
     },
-    [activeChatId, segmentStorageKey, latestAssistantIdForPersist],
+    [activeChatId, segmentStorageKey],
   );
   useEffect(() => {
     return () => {
@@ -1444,20 +1435,7 @@ export function GameSurface({
         try {
           const saved = localStorage.getItem(segmentStorageKey);
           if (saved != null) {
-            try {
-              const parsed = JSON.parse(saved);
-              if (parsed && typeof parsed.index === "number" && typeof parsed.messageId === "string") {
-                api
-                  .patch(`/chats/${activeChatId}/metadata`, {
-                    gameNarrationIndex: parsed.index,
-                    gameNarrationMsgId: parsed.messageId,
-                  })
-                  .catch(() => {});
-              }
-            } catch {
-              /* legacy bare-number entries are intentionally dropped — they have
-                 no scene scope so applying them would re-introduce the bug. */
-            }
+            api.patch(`/chats/${activeChatId}/metadata`, { gameNarrationIndex: Number(saved) }).catch(() => {});
           }
         } catch {
           /* */
@@ -1467,45 +1445,24 @@ export function GameSurface({
   }, [activeChatId, segmentStorageKey]);
 
   // Read the saved narration index for restore — prefer localStorage (fast, survives
-  // browser restarts), fall back to server metadata. Only honor the saved index if
-  // it's tied to the current latest assistant message id (i.e. same scene).
+  // browser restarts) for instant restore, fall back to server metadata.
   const restoredNarrationState = useMemo(() => {
-    const currentMsgId = latestAssistantIdForPersist;
     try {
       const saved = localStorage.getItem(segmentStorageKey);
       if (saved != null) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (
-            parsed &&
-            typeof parsed.index === "number" &&
-            Number.isFinite(parsed.index) &&
-            parsed.index >= 0 &&
-            parsed.messageId === currentMsgId
-          ) {
-            return { index: parsed.index as number, hasStoredPosition: true };
-          }
-        } catch {
-          /* legacy bare-number format — discard, scene scope unknown */
-        }
+        const idx = Number(saved);
+        if (Number.isFinite(idx) && idx >= 0) return { index: idx, hasStoredPosition: true };
       }
     } catch {
       /* storage unavailable */
     }
-    // Fall back to server-persisted metadata, but only if the saved msg id matches
+    // Fall back to server-persisted metadata (survives browser restarts)
     const serverIdx = chatMeta.gameNarrationIndex;
-    const serverMsgId = chatMeta.gameNarrationMsgId;
-    if (
-      typeof serverIdx === "number" &&
-      Number.isFinite(serverIdx) &&
-      serverIdx >= 0 &&
-      typeof serverMsgId === "string" &&
-      serverMsgId === currentMsgId
-    ) {
+    if (typeof serverIdx === "number" && Number.isFinite(serverIdx) && serverIdx >= 0) {
       return { index: serverIdx, hasStoredPosition: false };
     }
     return { index: 0, hasStoredPosition: false };
-  }, [segmentStorageKey, chatMeta.gameNarrationIndex, chatMeta.gameNarrationMsgId, latestAssistantIdForPersist]);
+  }, [segmentStorageKey, chatMeta.gameNarrationIndex]);
 
   const restoredSegmentIndex = restoredNarrationState.index;
 
@@ -1601,9 +1558,7 @@ export function GameSurface({
     } catch {
       /* ignore */
     }
-    api
-      .patch(`/chats/${activeChatId}/metadata`, { gameNarrationIndex: 0, gameNarrationMsgId: null })
-      .catch(() => {});
+    api.patch(`/chats/${activeChatId}/metadata`, { gameNarrationIndex: 0 }).catch(() => {});
 
     const tags = parseGmTags(msg.content);
     const useSidecar = sidecarConfig.useForGameScene && sidecarReady;
