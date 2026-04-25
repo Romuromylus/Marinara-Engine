@@ -526,11 +526,16 @@ export function ConversationView({
     };
   }, []);
 
-  // Auto-scroll when staggered lines are revealed
+  // Auto-scroll when staggered lines are revealed.
+  // useLayoutEffect (not useEffect) so the scroll fires AFTER React has
+  // committed the unhidden line to the DOM but BEFORE the browser paints,
+  // so scrollIntoView reads the correct post-reveal layout. behavior:"auto"
+  // because a smooth scroll started here can race with the next reveal's
+  // layout shift and leave the viewport mid-list.
   const hiddenCount = hiddenLineKeys.size;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isLoadingMoreRef.current && isNearBottomRef.current && !userScrolledAwayRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     }
   }, [hiddenCount]);
 
