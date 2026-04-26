@@ -1910,7 +1910,7 @@ export function GameNarration({
                         playClickSfx();
                       };
                       const isInteractiveTarget = (target: EventTarget | null) =>
-                        target instanceof HTMLElement && !!target.closest("button, input, textarea, a");
+                        target instanceof Element && !!target.closest("button, input, textarea, a");
                       const jumpRowProps = canJumpToSeg
                         ? {
                             role: "button" as const,
