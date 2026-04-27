@@ -48,9 +48,21 @@ export async function conversationRoutes(app: FastifyInstance) {
   // POST /schedule/generate — Generate or refresh weekly schedules
   // ─────────────────────────────────────────────
   app.post<{
-    Body: { chatId: string; forceRefresh?: boolean; characterIds?: string[] };
+    Body: {
+      chatId: string;
+      forceRefresh?: boolean;
+      characterIds?: string[];
+      scheduleGenerationPreferences?: string;
+    };
   }>("/schedule/generate", async (req, reply) => {
     const { chatId, forceRefresh } = req.body;
+    // Runtime guard: TypeScript's Body type is compile-time only. If a client sends a non-string,
+    // .trim() would throw and surface as a 500. Reject explicitly with 400 instead.
+    const rawPrefs: unknown = req.body.scheduleGenerationPreferences;
+    if (rawPrefs != null && typeof rawPrefs !== "string") {
+      return reply.status(400).send({ error: "scheduleGenerationPreferences must be a string" });
+    }
+    const userSchedulePreferences = typeof rawPrefs === "string" ? rawPrefs.trim() : "";
 
     const chat = await chats.getById(chatId);
     if (!chat) return reply.status(404).send({ error: "Chat not found" });
@@ -174,6 +186,7 @@ export async function conversationRoutes(app: FastifyInstance) {
           charData.name,
           charData.description ?? "",
           charData.personality ?? "",
+          userSchedulePreferences,
         );
         logger.info("[schedule] Generated schedule for %s, days: %s", charData.name, Object.keys(schedule.days ?? {}));
 

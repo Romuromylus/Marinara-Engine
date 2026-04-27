@@ -195,7 +195,6 @@ function GeneralSettings() {
   const setMessagesPerPage = useUIStore((s) => s.setMessagesPerPage);
   const boldDialogue = useUIStore((s) => s.boldDialogue);
   const setBoldDialogue = useUIStore((s) => s.setBoldDialogue);
-
   return (
     <div className="flex flex-col gap-3">
       <div className="text-xs text-[var(--muted-foreground)]">General application settings.</div>

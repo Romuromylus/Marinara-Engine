@@ -217,6 +217,8 @@ export function ChatSettingsDrawer({
   const disconnectChat = useDisconnectChat();
   const { retryAgents } = useGenerate();
   const agentProcessing = useAgentStore((s) => s.isProcessing);
+  const scheduleGenerationPreferences = useUIStore((s) => s.scheduleGenerationPreferences);
+  const setScheduleGenerationPreferences = useUIStore((s) => s.setScheduleGenerationPreferences);
 
   const { data: allCharacters } = useCharacters();
   const { data: characterGroups } = useCharacterGroups();
@@ -637,6 +639,10 @@ export function ChatSettingsDrawer({
   const [choiceModalPresetId, setChoiceModalPresetId] = useState<string | null>(null);
   const [agentAddPreview, setAgentAddPreview] = useState<AgentAddPreview | null>(null);
   const [addingAgentToChat, setAddingAgentToChat] = useState(false);
+  const [isRegeneratingSchedules, setIsRegeneratingSchedules] = useState(false);
+  // Synchronous lock to close the re-entry gap: React state commits are async, so two
+  // fast clicks can both pass the `isRegeneratingSchedules` check before the state updates.
+  const isRegeneratingSchedulesRef = useRef(false);
   const [scenePromptExpanded, setScenePromptExpanded] = useState(false);
   const [scenePromptDraft, setScenePromptDraft] = useState(metadata.sceneSystemPrompt ?? "");
   const [groupScenarioDraft, setGroupScenarioDraft] = useState((metadata.groupScenarioText as string) ?? "");
@@ -2009,6 +2015,46 @@ export function ChatSettingsDrawer({
                   )}
                 </div>
 
+                {/* Schedule generation preferences — free-form authorial guidance */}
+                <label className="flex flex-col gap-1.5">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium">
+                    <Sparkles size="0.75rem" className="text-[var(--primary)]" />
+                    Schedule generation preferences
+                    <HelpTooltip text="Free-form guidance that steers how character schedules are generated. Both directives ('no characters past midnight') and factual constraints ('I work 9-5') work. This setting is global — it applies to every conversation chat." />
+                  </span>
+                  <textarea
+                    value={scheduleGenerationPreferences}
+                    onChange={(e) => setScheduleGenerationPreferences(e.target.value)}
+                    placeholder="e.g. Make everyone go to sleep before midnight. Give characters free time 10am-noon. I work 9-5 on weekdays."
+                    className="min-h-[5rem] resize-y rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-2.5 text-[0.6875rem] text-[var(--foreground)] outline-none transition-colors focus:border-[var(--primary)]/50 placeholder:text-[var(--muted-foreground)]/40"
+                  />
+                  <p className="text-[0.59375rem] text-[var(--muted-foreground)]/70">
+                    Global setting. Applies to every conversation chat&apos;s next schedule regeneration — manual or
+                    weekly auto.
+                  </p>
+                </label>
+
+                {/* Active schedule-generation preference indicator */}
+                {scheduleGenerationPreferences.trim() && (
+                  <div
+                    className="flex items-start gap-2 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/10 px-3 py-2.5"
+                    title={scheduleGenerationPreferences.trim()}
+                  >
+                    <Sparkles size="0.875rem" className="mt-0.5 shrink-0 text-[var(--primary)]" />
+                    <div className="flex-1 min-w-0">
+                      <span className="block text-[0.6875rem] font-medium leading-snug text-[var(--foreground)]">
+                        Schedule generation preference active
+                      </span>
+                      <p className="mt-0.5 truncate text-[0.625rem] italic text-[var(--muted-foreground)]">
+                        “{scheduleGenerationPreferences.trim()}”
+                      </p>
+                      <p className="mt-1 text-[0.59375rem] text-[var(--muted-foreground)]/70">
+                        Will be applied the next time schedules are regenerated.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Schedule status */}
                 <div className="flex items-center gap-2 rounded-lg bg-[var(--secondary)] px-3 py-2.5">
                   <CalendarClock size="0.875rem" className="text-[var(--muted-foreground)]" />
@@ -2024,23 +2070,38 @@ export function ChatSettingsDrawer({
                   </div>
                   <button
                     onClick={async () => {
+                      if (isRegeneratingSchedulesRef.current) return;
+                      isRegeneratingSchedulesRef.current = true;
+                      setIsRegeneratingSchedules(true);
                       try {
+                        const scheduleGenerationPreferences =
+                          useUIStore.getState().scheduleGenerationPreferences;
                         await api.post("/conversation/schedule/generate", {
                           chatId: chat.id,
                           characterIds: chatCharIds,
                           forceRefresh: true,
+                          scheduleGenerationPreferences,
                         });
                         // Refresh chat data to pick up new schedules
                         qc.invalidateQueries({ queryKey: chatKeys.detail(chat.id) });
                       } catch {
                         // non-critical
+                      } finally {
+                        isRegeneratingSchedulesRef.current = false;
+                        setIsRegeneratingSchedules(false);
                       }
                     }}
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                    title="Regenerate schedules"
+                    disabled={isRegeneratingSchedules}
+                    className={cn(
+                      "flex items-center gap-1 rounded-md px-2 py-1 text-[0.625rem] font-medium transition-colors",
+                      isRegeneratingSchedules
+                        ? "cursor-not-allowed text-[var(--muted-foreground)]/60"
+                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                    )}
+                    title={isRegeneratingSchedules ? "Regenerating schedules…" : "Regenerate schedules"}
                   >
-                    <RefreshCw size="0.6875rem" />
-                    Regenerate
+                    <RefreshCw size="0.6875rem" className={cn(isRegeneratingSchedules && "animate-spin")} />
+                    {isRegeneratingSchedules ? "Regenerating…" : "Regenerate"}
                   </button>
                 </div>
 

@@ -145,6 +145,10 @@ interface UIState {
   /** User's custom default system prompt for new conversations (null = built-in default). */
   customConversationPrompt: string | null;
 
+  // ── Schedule Generation Preferences ──
+  /** Free-form user guidance injected into the conversation-mode schedule generation prompt (empty = unset). */
+  scheduleGenerationPreferences: string;
+
   // ── Input ──
   enterToSendRP: boolean;
   enterToSendConvo: boolean;
@@ -261,6 +265,7 @@ interface UIState {
   setConvoNotificationSound: (v: boolean) => void;
   setRpNotificationSound: (v: boolean) => void;
   setCustomConversationPrompt: (v: string | null) => void;
+  setScheduleGenerationPreferences: (v: string) => void;
   setEnterToSendRP: (v: boolean) => void;
   setEnterToSendConvo: (v: boolean) => void;
   setEnterToSendGame: (v: boolean) => void;
@@ -338,6 +343,7 @@ export function pickSyncedSettings(state: UIState) {
     convoNotificationSound: state.convoNotificationSound,
     rpNotificationSound: state.rpNotificationSound,
     customConversationPrompt: state.customConversationPrompt,
+    scheduleGenerationPreferences: state.scheduleGenerationPreferences,
   };
 }
 
@@ -400,6 +406,7 @@ export const useUIStore = create<UIState>()(
       convoNotificationSound: true,
       rpNotificationSound: true,
       customConversationPrompt: null,
+      scheduleGenerationPreferences: "",
       enterToSendRP: false,
       enterToSendConvo: true,
       enterToSendGame: true,
@@ -643,6 +650,7 @@ export const useUIStore = create<UIState>()(
       setConvoNotificationSound: (v) => set({ convoNotificationSound: v }),
       setRpNotificationSound: (v) => set({ rpNotificationSound: v }),
       setCustomConversationPrompt: (v) => set({ customConversationPrompt: v }),
+      setScheduleGenerationPreferences: (v) => set({ scheduleGenerationPreferences: v }),
       setEnterToSendRP: (v) => set({ enterToSendRP: v }),
       setEnterToSendConvo: (v) => set({ enterToSendConvo: v }),
       setEnterToSendGame: (v) => set({ enterToSendGame: v }),
@@ -834,6 +842,7 @@ export const useUIStore = create<UIState>()(
         convoNotificationSound: state.convoNotificationSound,
         rpNotificationSound: state.rpNotificationSound,
         customConversationPrompt: state.customConversationPrompt,
+        scheduleGenerationPreferences: state.scheduleGenerationPreferences,
       }),
     },
   ),
