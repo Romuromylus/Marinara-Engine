@@ -97,6 +97,7 @@ Var NODE_OK
 Var PNPM_OK
 Var PNPM_RUNNER
 Var CLONE_DIR
+Var STAGE_DIR
 
 Function LaunchApp
   ExecShell "" "$INSTDIR\start.bat"
@@ -330,10 +331,12 @@ Please restart your computer and run this installer again."
     DetailPrint "This may take 2-5 minutes depending on your internet speed."
     DetailPrint ""
     ; Stage fresh clones outside $INSTDIR so robocopy never moves a child
-    ; directory into its own parent. This avoids runaway recursive copies on
-    ; Windows when installs are interrupted or files are locked.
+    ; directory into its own parent. Publish through a sibling staging directory
+    ; so failed copies never leave a half-populated checkout in $INSTDIR.
     StrCpy $CLONE_DIR "$TEMP\MarinaraEngine-repo-temp"
+    StrCpy $STAGE_DIR "$INSTDIR.__stage"
     RMDir /r "$CLONE_DIR"
+    RMDir /r "$STAGE_DIR"
     ; Clone with --depth 1 for faster initial download, then unshallow
     nsExec::ExecToLog 'git clone --depth 1 "${REPO_URL}" "$CLONE_DIR"'
     Pop $0
@@ -353,21 +356,40 @@ ${APP_URL}"
         Abort
       ${EndIf}
     ${EndIf}
-    DetailPrint "Moving files into place..."
+    DetailPrint "Staging downloaded files..."
     ; robocopy returns 0-7 for success, 8+ for errors
-    nsExec::ExecToLog 'robocopy "$CLONE_DIR" "$INSTDIR" /E /MOVE /NFL /NDL /NJH /NJS'
+    nsExec::ExecToLog 'robocopy "$CLONE_DIR" "$STAGE_DIR" /E /MOVE /NFL /NDL /NJH /NJS'
     Pop $0
     ${If} $0 == "error"
       RMDir /r "$CLONE_DIR"
+      RMDir /r "$STAGE_DIR"
       MessageBox MB_OK|MB_ICONSTOP "Failed to move downloaded files into the installation directory.$\r$\n$\r$\nPlease choose an empty folder and run the installer again."
       Abort
     ${EndIf}
     ${If} $0 >= 8
       RMDir /r "$CLONE_DIR"
+      RMDir /r "$STAGE_DIR"
       MessageBox MB_OK|MB_ICONSTOP "Failed to move downloaded files into the installation directory.$\r$\n$\r$\nPlease choose an empty folder and run the installer again."
       Abort
     ${EndIf}
     RMDir /r "$CLONE_DIR"
+    DetailPrint "Publishing files into place..."
+    SetOutPath "$TEMP"
+    ClearErrors
+    RMDir "$INSTDIR"
+    ${If} ${Errors}
+      RMDir /r "$STAGE_DIR"
+      MessageBox MB_OK|MB_ICONSTOP "The installation directory is not empty.$\r$\n$\r$\nPlease choose an empty folder and run the installer again."
+      Abort
+    ${EndIf}
+    ClearErrors
+    Rename "$STAGE_DIR" "$INSTDIR"
+    ${If} ${Errors}
+      RMDir /r "$STAGE_DIR"
+      MessageBox MB_OK|MB_ICONSTOP "Failed to move downloaded files into the installation directory.$\r$\n$\r$\nPlease choose an empty folder and run the installer again."
+      Abort
+    ${EndIf}
+    SetOutPath "$INSTDIR"
     ; Unshallow so future git pull works
     nsExec::ExecToLog 'git fetch --unshallow'
     Pop $0
