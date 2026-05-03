@@ -9,9 +9,7 @@ const installerPath = resolve(REPO_ROOT, "win/installer/installer.nsi");
 try {
   const content = await readFile(installerPath, "utf8");
   const lines = content.split(/\r?\n/);
-  const code = lines
-    .map((line) => (/^\s*;/.test(line) ? "" : line))
-    .join("\n");
+  const code = lines.map((line) => (/^\s*;/.test(line) ? "" : line)).join("\n");
 
   const unsafePatterns = [
     {
@@ -21,6 +19,15 @@ try {
     {
       pattern: /\brobocopy\s+"?\$INSTDIR\\repo-temp"?\s+"?\$INSTDIR"?\b/i,
       message: 'Do not robocopy from "$INSTDIR\\repo-temp" into its parent "$INSTDIR".',
+    },
+    {
+      pattern:
+        /\bStrCpy\s+\$[A-Za-z0-9_]+\s+(?:"\$TEMP\\MarinaraEngine-repo-temp"|\$TEMP\\MarinaraEngine-repo-temp)\s*(?:\r?\n|$)/i,
+      message: 'Temporary clone paths must include a per-run suffix, not fixed "$TEMP\\MarinaraEngine-repo-temp".',
+    },
+    {
+      pattern: /\bStrCpy\s+\$[A-Za-z0-9_]+\s+(?:"\$INSTDIR\.__stage"|\$INSTDIR\.__stage)\s*(?:\r?\n|$)/i,
+      message: 'Temporary stage paths must include a per-run suffix, not fixed "$INSTDIR.__stage".',
     },
   ];
 
