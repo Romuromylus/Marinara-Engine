@@ -17,7 +17,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Pygmalion, Jenny, and DataCat added to the Browser.
 - Pinnable taskbar shortcut via custom launcher.
 - Universal Tool Support for agents.
+- Custom agents can now maintain durable chat memory with read/append summary tools, metadata patch streaming, and configurable trigger cadence.
+- Prompt override APIs can now customize image-generation templates for sprites, NPC portraits, backgrounds, scene illustrations, and conversation selfies.
 - New Knowledge Router agent.
+- Active filter in the Lorebooks panel for lorebooks currently relevant to the selected chat.
 - You can now link Personas to Lorebooks.
 - Drag-and-drop Lorebook entries.
 - Added ElevenLabs for TTS support.
@@ -28,6 +31,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added the `/impersonate_prompt` command that allows you to change the impersonate prompt.
 - Added manual mode in Conversations that only makes the character respond when you ping them with `@name`.
 - Resizing sprites in game mode.
+- Conversation auto-summarization now has a Day Rollover Hour (so a late-night session doesn't get cut in half when calendar midnight passes) and a Recent Message Tail (keeps the last N messages verbatim across the day boundary so characters wake up remembering the actual flow of last night, not just the gist). Defaults: 4 AM rollover, 10-message tail.
+- Conversation characters can now emit durable `<note>...</note>` tags for connected roleplay and game chats. Notes persist in the target chat's prompt until cleared from Chat Settings.
 
 ### Fixed
 
