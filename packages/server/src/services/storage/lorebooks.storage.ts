@@ -12,6 +12,7 @@ import type {
   UpdateLorebookEntryInput,
 } from "@marinara-engine/shared";
 import { normalizeTimestampOverrides, type TimestampOverrides } from "../import/import-timestamps.js";
+import { isLorebookRelevantForFilters } from "../lorebook/filters.js";
 
 function resolveTimestamps(overrides?: TimestampOverrides | null) {
   const normalized = normalizeTimestampOverrides(overrides);
@@ -22,8 +23,38 @@ function resolveTimestamps(overrides?: TimestampOverrides | null) {
   };
 }
 
+function parseCharacterIds(row: Record<string, unknown>): string[] {
+  const legacyId = typeof row.characterId === "string" && row.characterId ? row.characterId : null;
+  try {
+    const parsed = JSON.parse((row.characterIds as string) || "[]");
+    if (Array.isArray(parsed)) {
+      const ids = parsed.filter((id): id is string => typeof id === "string");
+      return legacyId && !ids.includes(legacyId) ? [legacyId, ...ids] : ids;
+    }
+  } catch {
+    /* ignore malformed legacy data */
+  }
+  return legacyId ? [legacyId] : [];
+}
+
+function parsePersonaIds(row: Record<string, unknown>): string[] {
+  const legacyId = typeof row.personaId === "string" && row.personaId ? row.personaId : null;
+  try {
+    const parsed = JSON.parse((row.personaIds as string) || "[]");
+    if (Array.isArray(parsed)) {
+      const ids = parsed.filter((id): id is string => typeof id === "string");
+      return legacyId && !ids.includes(legacyId) ? [legacyId, ...ids] : ids;
+    }
+  } catch {
+    /* ignore malformed legacy data */
+  }
+  return legacyId ? [legacyId] : [];
+}
+
 /** Parse DB row booleans ("true"/"false") → real booleans and JSON strings → objects. */
 function parseLorebookRow(row: Record<string, unknown>) {
+  const characterIds = parseCharacterIds(row);
+  const personaIds = parsePersonaIds(row);
   return {
     ...row,
     recursiveScanning: row.recursiveScanning === "true",
@@ -31,8 +62,10 @@ function parseLorebookRow(row: Record<string, unknown>) {
     enabled: row.enabled === "true",
     generatedBy: row.generatedBy || null,
     sourceAgentId: row.sourceAgentId || null,
-    characterId: row.characterId || null,
-    personaId: row.personaId || null,
+    characterId: row.characterId || characterIds[0] || null,
+    characterIds,
+    personaId: row.personaId || personaIds[0] || null,
+    personaIds,
     chatId: row.chatId || null,
     tags: JSON.parse((row.tags as string) || "[]"),
   };
@@ -78,21 +111,17 @@ export function createLorebooksStorage(db: DB) {
     },
 
     async listByCharacter(characterId: string) {
-      const rows = await db
-        .select()
-        .from(lorebooks)
-        .where(eq(lorebooks.characterId, characterId))
-        .orderBy(desc(lorebooks.updatedAt));
-      return rows.map((r) => parseLorebookRow(r as Record<string, unknown>));
+      const rows = await db.select().from(lorebooks).orderBy(desc(lorebooks.updatedAt));
+      return rows
+        .map((r) => parseLorebookRow(r as Record<string, unknown>))
+        .filter((book) => book.characterIds.includes(characterId));
     },
 
     async listByPersona(personaId: string) {
-      const rows = await db
-        .select()
-        .from(lorebooks)
-        .where(eq(lorebooks.personaId, personaId))
-        .orderBy(desc(lorebooks.updatedAt));
-      return rows.map((r) => parseLorebookRow(r as Record<string, unknown>));
+      const rows = await db.select().from(lorebooks).orderBy(desc(lorebooks.updatedAt));
+      return rows
+        .map((r) => parseLorebookRow(r as Record<string, unknown>))
+        .filter((book) => book.personaIds.includes(personaId));
     },
 
     async listByChat(chatId: string) {
@@ -122,8 +151,10 @@ export function createLorebooksStorage(db: DB) {
         tokenBudget: input.tokenBudget ?? 2048,
         recursiveScanning: String(input.recursiveScanning ?? false),
         maxRecursionDepth: input.maxRecursionDepth ?? 3,
-        characterId: input.characterId ?? null,
-        personaId: input.personaId ?? null,
+        characterId: input.characterId ?? input.characterIds?.[0] ?? null,
+        characterIds: JSON.stringify(input.characterIds ?? (input.characterId ? [input.characterId] : [])),
+        personaId: input.personaId ?? input.personaIds?.[0] ?? null,
+        personaIds: JSON.stringify(input.personaIds ?? (input.personaId ? [input.personaId] : [])),
         chatId: input.chatId ?? null,
         enabled: String(input.enabled ?? true),
         tags: input.tags ? JSON.stringify(input.tags) : "[]",
@@ -144,8 +175,20 @@ export function createLorebooksStorage(db: DB) {
       if (input.tokenBudget !== undefined) updates.tokenBudget = input.tokenBudget;
       if (input.recursiveScanning !== undefined) updates.recursiveScanning = String(input.recursiveScanning);
       if (input.maxRecursionDepth !== undefined) updates.maxRecursionDepth = input.maxRecursionDepth;
-      if (input.characterId !== undefined) updates.characterId = input.characterId;
-      if (input.personaId !== undefined) updates.personaId = input.personaId;
+      if (input.characterIds !== undefined) {
+        updates.characterIds = JSON.stringify(input.characterIds);
+        updates.characterId = input.characterIds[0] ?? null;
+      } else if (input.characterId !== undefined) {
+        updates.characterId = input.characterId;
+        updates.characterIds = JSON.stringify(input.characterId ? [input.characterId] : []);
+      }
+      if (input.personaIds !== undefined) {
+        updates.personaIds = JSON.stringify(input.personaIds);
+        updates.personaId = input.personaIds[0] ?? null;
+      } else if (input.personaId !== undefined) {
+        updates.personaId = input.personaId;
+        updates.personaIds = JSON.stringify(input.personaId ? [input.personaId] : []);
+      }
       if (input.chatId !== undefined) updates.chatId = input.chatId;
       if (input.enabled !== undefined) updates.enabled = String(input.enabled);
       if (input.tags !== undefined) updates.tags = JSON.stringify(input.tags);
@@ -185,9 +228,10 @@ export function createLorebooksStorage(db: DB) {
     /**
      * Get all enabled entries from lorebooks that are relevant for a given context.
      * A lorebook is relevant if it's enabled AND one of:
+     *  - It has no character/persona/chat scope (global lorebook)
      *  - Its ID is in `activeLorebookIds` (user explicitly added it to this chat)
-     *  - Its `characterId` matches one of the chat's active characters
-     *  - Its `personaId` matches the chat's active persona
+     *  - One of its `characterIds` matches one of the chat's active characters
+     *  - One of its `personaIds` matches the chat's active persona
      *  - Its `chatId` matches the current chat
      * When no filters are provided, returns entries from ALL enabled lorebooks (legacy behavior).
      */
@@ -201,17 +245,19 @@ export function createLorebooksStorage(db: DB) {
 
       let relevantBooks = enabledBooks;
       if (filters) {
-        relevantBooks = enabledBooks.filter((b) => {
-          // Explicitly added to this chat
-          if (filters.activeLorebookIds?.includes(b.id)) return true;
-          // Belongs to one of the active characters
-          if (b.characterId && filters.characterIds?.includes(b.characterId)) return true;
-          // Belongs to the active persona
-          if (b.personaId && b.personaId === filters.personaId) return true;
-          // Belongs to this chat
-          if (b.chatId && b.chatId === filters.chatId) return true;
-          return false;
-        });
+        relevantBooks = enabledBooks.filter((b) =>
+          isLorebookRelevantForFilters(
+            {
+              id: b.id,
+              characterId: b.characterId,
+              characterIds: parseCharacterIds(b),
+              personaId: b.personaId,
+              personaIds: parsePersonaIds(b),
+              chatId: b.chatId,
+            },
+            filters,
+          ),
+        );
       }
 
       const bookIds = relevantBooks.map((b) => b.id);

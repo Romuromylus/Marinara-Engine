@@ -258,6 +258,7 @@ export async function importSTLorebook(
     recursiveScanning: false,
     generatedBy: "import" as const,
     characterId: options?.characterId ?? null,
+    characterIds: options?.characterId ? [options.characterId] : [],
   };
 
   let lorebook: Record<string, unknown> | null = null;

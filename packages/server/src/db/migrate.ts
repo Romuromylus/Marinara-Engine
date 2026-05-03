@@ -95,7 +95,9 @@ const CREATE_TABLES: string[] = [
     token_budget INTEGER NOT NULL DEFAULT 2048,
     recursive_scanning TEXT NOT NULL DEFAULT 'false',
     character_id TEXT,
+    character_ids TEXT NOT NULL DEFAULT '[]',
     persona_id TEXT,
+    persona_ids TEXT NOT NULL DEFAULT '[]',
     chat_id TEXT,
     enabled TEXT NOT NULL DEFAULT 'true',
     generated_by TEXT,
@@ -552,6 +554,16 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: "lorebook_entries",
     column: "description",
     definition: "TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    table: "lorebooks",
+    column: "character_ids",
+    definition: "TEXT NOT NULL DEFAULT '[]'",
+  },
+  {
+    table: "lorebooks",
+    column: "persona_ids",
+    definition: "TEXT NOT NULL DEFAULT '[]'",
   },
 ];
 

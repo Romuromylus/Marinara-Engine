@@ -151,6 +151,18 @@ async function importLorebook(data: unknown, db: DB) {
       recursiveScanning: Boolean(lb.recursiveScanning),
       enabled: lb.enabled !== false,
       generatedBy: "import",
+      characterId: typeof lb.characterId === "string" ? lb.characterId : null,
+      characterIds: Array.isArray(lb.characterIds)
+        ? lb.characterIds.filter((id): id is string => typeof id === "string")
+        : typeof lb.characterId === "string"
+          ? [lb.characterId]
+          : [],
+      personaId: typeof lb.personaId === "string" ? lb.personaId : null,
+      personaIds: Array.isArray(lb.personaIds)
+        ? lb.personaIds.filter((id): id is string => typeof id === "string")
+        : typeof lb.personaId === "string"
+          ? [lb.personaId]
+          : [],
     },
     readTimestampOverrides(lb),
   )) as Record<string, unknown> | null;

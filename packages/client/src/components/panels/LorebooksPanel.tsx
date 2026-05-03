@@ -101,6 +101,22 @@ export function LorebooksPanel() {
     return [];
   };
 
+  const getLinkedCharacterNames = useCallback(
+    (lb: Lorebook): string[] => {
+      const ids = lb.characterIds?.length ? lb.characterIds : lb.characterId ? [lb.characterId] : [];
+      return ids.map((id) => characterNameById.get(id)).filter((name): name is string => !!name);
+    },
+    [characterNameById],
+  );
+
+  const getLinkedPersonaNames = useCallback(
+    (lb: Lorebook): string[] => {
+      const ids = lb.personaIds?.length ? lb.personaIds : lb.personaId ? [lb.personaId] : [];
+      return ids.map((id) => personaNameById.get(id)).filter((name): name is string => !!name);
+    },
+    [personaNameById],
+  );
+
   const allTags = useMemo(() => {
     if (!lorebooks) return [] as string[];
     const tagSet = new Set<string>();
@@ -150,11 +166,11 @@ export function LorebooksPanel() {
       (lb: Lorebook) =>
         lb.name.toLowerCase().includes(q) ||
         lb.description.toLowerCase().includes(q) ||
-        (lb.characterId ? (characterNameById.get(lb.characterId) ?? "").toLowerCase().includes(q) : false) ||
-        (lb.personaId ? (personaNameById.get(lb.personaId) ?? "").toLowerCase().includes(q) : false) ||
+        getLinkedCharacterNames(lb).some((name) => name.toLowerCase().includes(q)) ||
+        getLinkedPersonaNames(lb).some((name) => name.toLowerCase().includes(q)) ||
         parseTags(lb).some((t) => t.toLowerCase().includes(q)),
     );
-  }, [lorebooks, searchQuery, activeTag, characterNameById, personaNameById]);
+  }, [lorebooks, searchQuery, activeTag, getLinkedCharacterNames, getLinkedPersonaNames]);
 
   const sorted = useMemo(() => {
     const list = [...filtered];
@@ -485,8 +501,7 @@ export function LorebooksPanel() {
                       <LorebookRow
                         key={lb.id}
                         lorebook={lb}
-                        characterName={lb.characterId ? characterNameById.get(lb.characterId) : undefined}
-                        personaName={lb.personaId ? personaNameById.get(lb.personaId) : undefined}
+                        linkedNames={[...getLinkedCharacterNames(lb), ...getLinkedPersonaNames(lb)]}
                         onClick={() => {
                           if (selectionMode) toggleSelection(lb.id);
                           else openLorebookDetail(lb.id);
@@ -516,8 +531,7 @@ export function LorebooksPanel() {
                 <LorebookRow
                   key={lb.id}
                   lorebook={lb}
-                  characterName={lb.characterId ? characterNameById.get(lb.characterId) : undefined}
-                  personaName={lb.personaId ? personaNameById.get(lb.personaId) : undefined}
+                  linkedNames={[...getLinkedCharacterNames(lb), ...getLinkedPersonaNames(lb)]}
                   onClick={() => {
                     if (selectionMode) toggleSelection(lb.id);
                     else openLorebookDetail(lb.id);
@@ -547,8 +561,7 @@ export function LorebooksPanel() {
 
 function LorebookRow({
   lorebook,
-  characterName,
-  personaName,
+  linkedNames,
   onClick,
   onDelete,
   selectionMode,
@@ -556,8 +569,7 @@ function LorebookRow({
   onToggleSelect,
 }: {
   lorebook: Lorebook;
-  characterName?: string;
-  personaName?: string;
+  linkedNames: string[];
   onClick: () => void;
   onDelete: () => void;
   selectionMode?: boolean;
@@ -611,10 +623,10 @@ function LorebookRow({
           )}
         </div>
         <div className="truncate text-[0.6875rem] text-[var(--muted-foreground)]">
-          {characterName || personaName ? (
+          {linkedNames.length > 0 ? (
             <span className="inline-flex items-center gap-1">
               <UserRound size="0.625rem" className="shrink-0" />
-              {characterName ?? personaName}
+              {linkedNames.join(", ")}
               {lorebook.description ? ` · ${lorebook.description}` : ""}
             </span>
           ) : (

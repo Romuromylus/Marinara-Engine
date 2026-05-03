@@ -14,6 +14,8 @@ import {
   type ActivatedEntry,
 } from "./keyword-scanner.js";
 import { applyTokenBudget, processActivatedEntries } from "./prompt-injector.js";
+export { filterRelevantLorebooks, isLorebookRelevantForFilters } from "./filters.js";
+import { filterRelevantLorebooks, type LorebookFilters } from "./filters.js";
 
 export interface LorebookScanResult {
   worldInfoBefore: string;
@@ -24,39 +26,6 @@ export interface LorebookScanResult {
   activatedEntryIds: string[];
   /** Updated per-chat entry state overrides (ephemeral countdown). Caller should persist to chat metadata. */
   updatedEntryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean }>;
-}
-
-type LorebookFilters = {
-  chatId?: string;
-  characterIds?: string[];
-  personaId?: string | null;
-  activeLorebookIds?: string[];
-};
-
-type RelevantLorebook = Pick<
-  Lorebook,
-  | "id"
-  | "enabled"
-  | "scanDepth"
-  | "tokenBudget"
-  | "recursiveScanning"
-  | "maxRecursionDepth"
-  | "characterId"
-  | "personaId"
-  | "chatId"
->;
-
-export function filterRelevantLorebooks(lorebooks: RelevantLorebook[], filters?: LorebookFilters): RelevantLorebook[] {
-  const enabledBooks = lorebooks.filter((book) => book.enabled);
-  if (!filters) return enabledBooks;
-
-  return enabledBooks.filter((book) => {
-    if (filters.activeLorebookIds?.includes(book.id)) return true;
-    if (book.characterId && filters.characterIds?.includes(book.characterId)) return true;
-    if (book.personaId && book.personaId === filters.personaId) return true;
-    if (book.chatId && book.chatId === filters.chatId) return true;
-    return false;
-  });
 }
 
 export function applyLorebookDefaults(

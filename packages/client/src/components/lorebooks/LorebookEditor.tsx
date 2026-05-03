@@ -153,8 +153,8 @@ export function LorebookEditor() {
   const [formTokenBudget, setFormTokenBudget] = useState(2048);
   const [formRecursive, setFormRecursive] = useState(false);
   const [formMaxRecursionDepth, setFormMaxRecursionDepth] = useState(3);
-  const [formCharacterId, setFormCharacterId] = useState<string | null>(null);
-  const [formPersonaId, setFormPersonaId] = useState<string | null>(null);
+  const [formCharacterIds, setFormCharacterIds] = useState<string[]>([]);
+  const [formPersonaIds, setFormPersonaIds] = useState<string[]>([]);
   const [formTags, setFormTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState("");
 
@@ -177,8 +177,12 @@ export function LorebookEditor() {
     setFormTokenBudget(lorebook.tokenBudget);
     setFormRecursive(lorebook.recursiveScanning);
     setFormMaxRecursionDepth(lorebook.maxRecursionDepth ?? 3);
-    setFormCharacterId(lorebook.characterId ?? null);
-    setFormPersonaId(lorebook.personaId ?? null);
+    setFormCharacterIds(
+      lorebook.characterIds?.length ? lorebook.characterIds : lorebook.characterId ? [lorebook.characterId] : [],
+    );
+    setFormPersonaIds(
+      lorebook.personaIds?.length ? lorebook.personaIds : lorebook.personaId ? [lorebook.personaId] : [],
+    );
     setFormTags(lorebook.tags ?? []);
     setLorebookDirty(false);
     loadedLorebookIdRef.current = lorebook.id;
@@ -365,8 +369,10 @@ export function LorebookEditor() {
         tokenBudget: formTokenBudget,
         recursiveScanning: formRecursive,
         maxRecursionDepth: formMaxRecursionDepth,
-        characterId: formCharacterId,
-        personaId: formPersonaId,
+        characterIds: formCharacterIds,
+        characterId: formCharacterIds[0] ?? null,
+        personaIds: formPersonaIds,
+        personaId: formPersonaIds[0] ?? null,
         tags: formTags,
       });
       setLorebookDirty(false);
@@ -383,8 +389,8 @@ export function LorebookEditor() {
     formTokenBudget,
     formRecursive,
     formMaxRecursionDepth,
-    formCharacterId,
-    formPersonaId,
+    formCharacterIds,
+    formPersonaIds,
     formTags,
     updateLorebook,
   ]);
@@ -1013,82 +1019,101 @@ export function LorebookEditor() {
                   </div>
                 </div>
 
-                {/* Character Link */}
+                {/* Character Links */}
                 <div>
                   <label className="mb-1.5 flex items-center gap-1 text-xs font-medium">
-                    Linked Character{" "}
-                    <HelpTooltip text="When linked to a character, this lorebook will only activate in chats that include that character." />
+                    Linked Characters{" "}
+                    <HelpTooltip text="When linked to characters, this lorebook activates in chats that include any selected character." />
                   </label>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={formCharacterId ?? ""}
-                      onChange={(e) => {
-                        const nextCharacterId = e.target.value || null;
-                        setFormCharacterId(nextCharacterId);
-                        if (nextCharacterId) setFormPersonaId(null);
-                        markLorebookDirty();
-                      }}
-                      className="flex-1 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-                    >
-                      <option value="">None</option>
-                      {characters.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    {formCharacterId && (
-                      <button
-                        onClick={() => {
-                          setFormCharacterId(null);
-                          markLorebookDirty();
-                        }}
-                        className="rounded-xl bg-[var(--secondary)] p-2.5 text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)]"
-                        title="Unlink character"
-                      >
-                        <X size="0.875rem" />
-                      </button>
+                  <div className="grid max-h-44 gap-1 overflow-y-auto rounded-xl bg-[var(--secondary)] p-2 ring-1 ring-[var(--border)] sm:grid-cols-2">
+                    {characters.length === 0 ? (
+                      <div className="px-2 py-1.5 text-xs text-[var(--muted-foreground)]">No characters available</div>
+                    ) : (
+                      characters.map((c) => {
+                        const checked = formCharacterIds.includes(c.id);
+                        return (
+                          <label
+                            key={c.id}
+                            className="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-[var(--accent)]"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setFormCharacterIds((current) =>
+                                  checked ? current.filter((id) => id !== c.id) : [...current, c.id],
+                                );
+                                markLorebookDirty();
+                              }}
+                              className="h-4 w-4 shrink-0 accent-amber-400"
+                            />
+                            <span className="truncate">{c.name}</span>
+                          </label>
+                        );
+                      })
                     )}
                   </div>
+                  {formCharacterIds.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setFormCharacterIds([]);
+                        markLorebookDirty();
+                      }}
+                      className="mt-2 inline-flex items-center gap-1 rounded-lg bg-[var(--secondary)] px-2 py-1 text-xs text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)]"
+                    >
+                      <X size="0.75rem" />
+                      Clear characters
+                    </button>
+                  )}
                 </div>
 
-                {/* Persona Link */}
+                {/* Persona Links */}
                 <div>
                   <label className="mb-1.5 flex items-center gap-1 text-xs font-medium">
-                    Linked Persona{" "}
-                    <HelpTooltip text="When linked to a persona, this lorebook will only activate in chats that use that persona." />
+                    Linked Personas{" "}
+                    <HelpTooltip text="When linked to personas, this lorebook activates in chats that use any selected persona." />
                   </label>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={formPersonaId ?? ""}
-                      onChange={(e) => {
-                        const nextPersonaId = e.target.value || null;
-                        setFormPersonaId(nextPersonaId);
-                        if (nextPersonaId) setFormCharacterId(null);
-                        markLorebookDirty();
-                      }}
-                      className="flex-1 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-                    >
-                      <option value="">None</option>
-                      {personas.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.comment ? `${p.name} — ${p.comment}` : p.name}
-                        </option>
-                      ))}
-                    </select>
-                    {formPersonaId && (
-                      <button
-                        onClick={() => {
-                          setFormPersonaId(null);
-                          markLorebookDirty();
-                        }}
-                        className="rounded-xl bg-[var(--secondary)] p-2.5 text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)]"
-                        title="Unlink persona"
-                      >
-                        <X size="0.875rem" />
-                      </button>
+                  <div className="grid max-h-44 gap-1 overflow-y-auto rounded-xl bg-[var(--secondary)] p-2 ring-1 ring-[var(--border)] sm:grid-cols-2">
+                    {personas.length === 0 ? (
+                      <div className="px-2 py-1.5 text-xs text-[var(--muted-foreground)]">No personas available</div>
+                    ) : (
+                      personas.map((p) => {
+                        const checked = formPersonaIds.includes(p.id);
+                        const label = p.comment ? `${p.name} - ${p.comment}` : p.name;
+                        return (
+                          <label
+                            key={p.id}
+                            className="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-[var(--accent)]"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setFormPersonaIds((current) =>
+                                  checked ? current.filter((id) => id !== p.id) : [...current, p.id],
+                                );
+                                markLorebookDirty();
+                              }}
+                              className="h-4 w-4 shrink-0 accent-amber-400"
+                            />
+                            <span className="truncate">{label}</span>
+                          </label>
+                        );
+                      })
                     )}
                   </div>
+                  {formPersonaIds.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setFormPersonaIds([]);
+                        markLorebookDirty();
+                      }}
+                      className="mt-2 inline-flex items-center gap-1 rounded-lg bg-[var(--secondary)] px-2 py-1 text-xs text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)]"
+                    >
+                      <X size="0.75rem" />
+                      Clear personas
+                    </button>
+                  )}
                 </div>
 
                 {/* Enabled toggle */}

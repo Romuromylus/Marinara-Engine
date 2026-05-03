@@ -1,5 +1,6 @@
 import type { AgentContext } from "@marinara-engine/shared";
 import { createLorebooksStorage } from "../../services/storage/lorebooks.storage.js";
+import { isLorebookRelevantForFilters } from "../../services/lorebook/filters.js";
 
 export interface LorebookKeeperSettings {
   targetLorebookId: string | null;
@@ -75,18 +76,26 @@ export async function resolveLorebookKeeperTarget(args: {
     name?: string | null;
     enabled?: unknown;
     characterId?: string | null;
+    characterIds?: string[] | null;
     personaId?: string | null;
+    personaIds?: string[] | null;
     chatId?: string | null;
   }>;
 
   const relevantBooks = allBooks.filter((book) => {
     if (preferredTargetLorebookId && book.id === preferredTargetLorebookId) return true;
     if (!isEnabledLorebook(book.enabled)) return false;
-    if (activeLorebookIds.includes(book.id)) return true;
-    if (book.characterId && characterIds.includes(book.characterId)) return true;
-    if (book.personaId && book.personaId === personaId) return true;
-    if (book.chatId && book.chatId === chatId) return true;
-    return false;
+    return isLorebookRelevantForFilters(
+      {
+        id: book.id,
+        characterId: book.characterId ?? null,
+        characterIds: Array.isArray(book.characterIds) ? book.characterIds : [],
+        personaId: book.personaId ?? null,
+        personaIds: Array.isArray(book.personaIds) ? book.personaIds : [],
+        chatId: book.chatId ?? null,
+      },
+      { chatId, characterIds, personaId, activeLorebookIds },
+    );
   });
 
   const uniqueBooks = [...new Map(relevantBooks.map((book) => [book.id, book])).values()];

@@ -13,7 +13,9 @@ export const lorebooks = sqliteTable("lorebooks", {
   recursiveScanning: text("recursive_scanning").notNull().default("false"),
   maxRecursionDepth: integer("max_recursion_depth").notNull().default(3),
   characterId: text("character_id"),
+  characterIds: text("character_ids").notNull().default("[]"),
   personaId: text("persona_id"),
+  personaIds: text("persona_ids").notNull().default("[]"),
   chatId: text("chat_id"),
   enabled: text("enabled").notNull().default("true"),
   /** Tags for organizing/filtering lorebooks (JSON array of strings) */

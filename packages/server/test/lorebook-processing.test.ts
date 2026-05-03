@@ -19,7 +19,9 @@ function makeLorebook(overrides: Partial<Lorebook> = {}): Lorebook {
     recursiveScanning: false,
     maxRecursionDepth: 3,
     characterId: null,
+    characterIds: [],
     personaId: null,
+    personaIds: [],
     chatId: null,
     enabled: true,
     tags: [],
@@ -94,20 +96,94 @@ test("entries inherit their lorebook scan depth when no per-entry override is se
   assert.equal(entries[0]?.scanDepth, 2);
 });
 
-test("persona-linked lorebooks activate only for the active persona", () => {
+test("lorebook scope filtering includes global books plus matching scoped books", () => {
+  const globalBook = makeLorebook({ id: "global-book" });
   const personaBook = makeLorebook({ id: "persona-book", personaId: "persona-1" });
   const otherPersonaBook = makeLorebook({ id: "other-persona-book", personaId: "persona-2" });
   const characterBook = makeLorebook({ id: "character-book", characterId: "character-1" });
+  const chatBook = makeLorebook({ id: "chat-book", chatId: "chat-1" });
+  const otherChatBook = makeLorebook({ id: "other-chat-book", chatId: "chat-2" });
 
-  const relevant = filterRelevantLorebooks([personaBook, otherPersonaBook, characterBook], {
-    characterIds: [],
+  const relevant = filterRelevantLorebooks(
+    [globalBook, personaBook, otherPersonaBook, characterBook, chatBook, otherChatBook],
+    {
+      chatId: "chat-1",
+      characterIds: ["character-1"],
+      personaId: "persona-1",
+      activeLorebookIds: [],
+    },
+  );
+
+  assert.deepEqual(
+    relevant.map((book) => book.id),
+    ["global-book", "persona-book", "character-book", "chat-book"],
+  );
+});
+
+test("active lorebook IDs are additive regardless of scope", () => {
+  const globalBook = makeLorebook({ id: "global-book" });
+  const otherPersonaBook = makeLorebook({ id: "other-persona-book", personaId: "persona-2" });
+  const otherCharacterBook = makeLorebook({ id: "other-character-book", characterId: "character-2" });
+
+  const relevant = filterRelevantLorebooks([globalBook, otherPersonaBook, otherCharacterBook], {
+    characterIds: ["character-1"],
     personaId: "persona-1",
+    activeLorebookIds: ["other-character-book"],
+  });
+
+  assert.deepEqual(
+    relevant.map((book) => book.id),
+    ["global-book", "other-character-book"],
+  );
+});
+
+test("multi-character and multi-persona lorebooks match any linked entity", () => {
+  const multiCharacterBook = makeLorebook({
+    id: "multi-character-book",
+    characterId: "character-2",
+    characterIds: ["character-2", "character-3"],
+  });
+  const multiPersonaBook = makeLorebook({
+    id: "multi-persona-book",
+    personaId: "persona-2",
+    personaIds: ["persona-2", "persona-3"],
+  });
+  const otherMultiPersonaBook = makeLorebook({
+    id: "other-multi-persona-book",
+    personaId: "persona-4",
+    personaIds: ["persona-4", "persona-5"],
+  });
+
+  const relevant = filterRelevantLorebooks([multiCharacterBook, multiPersonaBook, otherMultiPersonaBook], {
+    characterIds: ["character-1", "character-3"],
+    personaId: "persona-3",
     activeLorebookIds: [],
   });
 
   assert.deepEqual(
     relevant.map((book) => book.id),
-    ["persona-book"],
+    ["multi-character-book", "multi-persona-book"],
+  );
+});
+
+test("disabled lorebooks are excluded even when global or active", () => {
+  const disabledGlobalBook = makeLorebook({ id: "disabled-global-book", enabled: false });
+  const disabledActiveBook = makeLorebook({
+    id: "disabled-active-book",
+    characterId: "character-2",
+    enabled: false,
+  });
+  const enabledGlobalBook = makeLorebook({ id: "enabled-global-book" });
+
+  const relevant = filterRelevantLorebooks([disabledGlobalBook, disabledActiveBook, enabledGlobalBook], {
+    characterIds: ["character-1"],
+    personaId: "persona-1",
+    activeLorebookIds: ["disabled-active-book"],
+  });
+
+  assert.deepEqual(
+    relevant.map((book) => book.id),
+    ["enabled-global-book"],
   );
 });
 

@@ -27,8 +27,12 @@ export interface Lorebook {
   maxRecursionDepth: number;
   /** ID of the character this lorebook is linked to (character books) */
   characterId: string | null;
+  /** IDs of all characters this lorebook is linked to */
+  characterIds: string[];
   /** ID of the persona this lorebook is linked to (persona books) */
   personaId: string | null;
+  /** IDs of all personas this lorebook is linked to */
+  personaIds: string[];
   /** ID of the chat this lorebook is scoped to (if any) */
   chatId: string | null;
   /** Whether this lorebook is globally active */
