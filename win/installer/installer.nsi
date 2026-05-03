@@ -9,6 +9,8 @@
 !include "FileFunc.nsh"
 !include "WinMessages.nsh"
 
+!insertmacro GetParent
+
 ; ── App metadata ──
 !define APP_NAME "Marinara Engine"
 !define APP_VERSION "1.5.6"
@@ -97,7 +99,10 @@ Var NODE_OK
 Var PNPM_OK
 Var PNPM_RUNNER
 Var CLONE_DIR
+Var CLONE_DIR_CREATED
 Var STAGE_DIR
+Var STAGE_DIR_CREATED
+Var STAGE_PARENT
 
 Function LaunchApp
   ExecShell "" "$INSTDIR\start.bat"
@@ -330,24 +335,77 @@ Please restart your computer and run this installer again."
     DetailPrint "Cloning ${APP_NAME} repository..."
     DetailPrint "This may take 2-5 minutes depending on your internet speed."
     DetailPrint ""
-    ; Stage fresh clones outside $INSTDIR so robocopy never moves a child
-    ; directory into its own parent. Publish through a sibling staging directory
-    ; so failed copies never leave a half-populated checkout in $INSTDIR.
-    StrCpy $CLONE_DIR "$TEMP\MarinaraEngine-repo-temp"
-    StrCpy $STAGE_DIR "$INSTDIR.__stage"
-    RMDir /r "$CLONE_DIR"
-    RMDir /r "$STAGE_DIR"
+    ; Reserve unique per-run paths so cleanup only targets directories this
+    ; installer instance created.
+    StrCpy $CLONE_DIR_CREATED "0"
+    StrCpy $STAGE_DIR_CREATED "0"
+    ClearErrors
+    GetTempFileName $CLONE_DIR "$TEMP"
+    ${If} ${Errors}
+      MessageBox MB_OK|MB_ICONSTOP "Failed to create a temporary download path.$\r$\n$\r$\nPlease check folder permissions and run the installer again."
+      Abort
+    ${EndIf}
+    ClearErrors
+    Delete "$CLONE_DIR"
+    ${If} ${Errors}
+      MessageBox MB_OK|MB_ICONSTOP "Failed to prepare a temporary download path.$\r$\n$\r$\nPlease check folder permissions and run the installer again."
+      Abort
+    ${EndIf}
+    ClearErrors
+    CreateDirectory "$CLONE_DIR"
+    ${If} ${Errors}
+      MessageBox MB_OK|MB_ICONSTOP "Failed to create a temporary download directory.$\r$\n$\r$\nPlease check folder permissions and run the installer again."
+      Abort
+    ${EndIf}
+    StrCpy $CLONE_DIR_CREATED "1"
+
+    ${GetParent} "$INSTDIR" $STAGE_PARENT
+    ClearErrors
+    GetTempFileName $STAGE_DIR "$STAGE_PARENT"
+    ${If} ${Errors}
+      ${If} $CLONE_DIR_CREATED == "1"
+        RMDir /r "$CLONE_DIR"
+      ${EndIf}
+      MessageBox MB_OK|MB_ICONSTOP "Failed to create a temporary staging path.$\r$\n$\r$\nPlease check folder permissions and run the installer again."
+      Abort
+    ${EndIf}
+    ClearErrors
+    Delete "$STAGE_DIR"
+    ${If} ${Errors}
+      ${If} $CLONE_DIR_CREATED == "1"
+        RMDir /r "$CLONE_DIR"
+      ${EndIf}
+      MessageBox MB_OK|MB_ICONSTOP "Failed to prepare a temporary staging path.$\r$\n$\r$\nPlease check folder permissions and run the installer again."
+      Abort
+    ${EndIf}
+    ClearErrors
+    CreateDirectory "$STAGE_DIR"
+    ${If} ${Errors}
+      ${If} $CLONE_DIR_CREATED == "1"
+        RMDir /r "$CLONE_DIR"
+      ${EndIf}
+      MessageBox MB_OK|MB_ICONSTOP "Failed to create a temporary staging directory.$\r$\n$\r$\nPlease check folder permissions and run the installer again."
+      Abort
+    ${EndIf}
+    StrCpy $STAGE_DIR_CREATED "1"
     ; Clone with --depth 1 for faster initial download, then unshallow
     nsExec::ExecToLog 'git clone --depth 1 "${REPO_URL}" "$CLONE_DIR"'
     Pop $0
     ${If} $0 != 0
       ; Retry without depth limit in case shallow clone failed
       DetailPrint "Shallow clone failed, trying full clone..."
-      RMDir /r "$CLONE_DIR"
+      ${If} $CLONE_DIR_CREATED == "1"
+        RMDir /r "$CLONE_DIR"
+      ${EndIf}
       nsExec::ExecToLog 'git clone "${REPO_URL}" "$CLONE_DIR"'
       Pop $0
       ${If} $0 != 0
-        RMDir /r "$CLONE_DIR"
+        ${If} $CLONE_DIR_CREATED == "1"
+          RMDir /r "$CLONE_DIR"
+        ${EndIf}
+        ${If} $STAGE_DIR_CREATED == "1"
+          RMDir /r "$STAGE_DIR"
+        ${EndIf}
         MessageBox MB_OK|MB_ICONSTOP "\
 Failed to download ${APP_NAME}.$\r$\n$\r$\n\
 Please check your internet connection and try again.$\r$\n\
@@ -361,34 +419,50 @@ ${APP_URL}"
     nsExec::ExecToLog 'robocopy "$CLONE_DIR" "$STAGE_DIR" /E /MOVE /NFL /NDL /NJH /NJS'
     Pop $0
     ${If} $0 == "error"
-      RMDir /r "$CLONE_DIR"
-      RMDir /r "$STAGE_DIR"
+      ${If} $CLONE_DIR_CREATED == "1"
+        RMDir /r "$CLONE_DIR"
+      ${EndIf}
+      ${If} $STAGE_DIR_CREATED == "1"
+        RMDir /r "$STAGE_DIR"
+      ${EndIf}
       MessageBox MB_OK|MB_ICONSTOP "Failed to move downloaded files into the installation directory.$\r$\n$\r$\nPlease choose an empty folder and run the installer again."
       Abort
     ${EndIf}
     ${If} $0 >= 8
-      RMDir /r "$CLONE_DIR"
-      RMDir /r "$STAGE_DIR"
+      ${If} $CLONE_DIR_CREATED == "1"
+        RMDir /r "$CLONE_DIR"
+      ${EndIf}
+      ${If} $STAGE_DIR_CREATED == "1"
+        RMDir /r "$STAGE_DIR"
+      ${EndIf}
       MessageBox MB_OK|MB_ICONSTOP "Failed to move downloaded files into the installation directory.$\r$\n$\r$\nPlease choose an empty folder and run the installer again."
       Abort
     ${EndIf}
-    RMDir /r "$CLONE_DIR"
+    ${If} $CLONE_DIR_CREATED == "1"
+      RMDir /r "$CLONE_DIR"
+      StrCpy $CLONE_DIR_CREATED "0"
+    ${EndIf}
     DetailPrint "Publishing files into place..."
     SetOutPath "$TEMP"
     ClearErrors
     RMDir "$INSTDIR"
     ${If} ${Errors}
-      RMDir /r "$STAGE_DIR"
+      ${If} $STAGE_DIR_CREATED == "1"
+        RMDir /r "$STAGE_DIR"
+      ${EndIf}
       MessageBox MB_OK|MB_ICONSTOP "The installation directory is not empty.$\r$\n$\r$\nPlease choose an empty folder and run the installer again."
       Abort
     ${EndIf}
     ClearErrors
     Rename "$STAGE_DIR" "$INSTDIR"
     ${If} ${Errors}
-      RMDir /r "$STAGE_DIR"
+      ${If} $STAGE_DIR_CREATED == "1"
+        RMDir /r "$STAGE_DIR"
+      ${EndIf}
       MessageBox MB_OK|MB_ICONSTOP "Failed to move downloaded files into the installation directory.$\r$\n$\r$\nPlease choose an empty folder and run the installer again."
       Abort
     ${EndIf}
+    StrCpy $STAGE_DIR_CREATED "0"
     SetOutPath "$INSTDIR"
     ; Unshallow so future git pull works
     nsExec::ExecToLog 'git fetch --unshallow'
