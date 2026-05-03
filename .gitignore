@@ -47,3 +47,6 @@ release-artifacts/
 # Installer artifacts are published on GitHub Releases, not tracked in source
 installer/*.exe
 win/installer/*.exe
+AGENTS.md
+marinara workflow.md
+teststart.bat
