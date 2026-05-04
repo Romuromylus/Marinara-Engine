@@ -158,6 +158,56 @@ test("file-native storage repairs existing snapshots that missed legacy chats", 
   }
 });
 
+test("file-native storage retries old empty repair markers from unavailable readers", async () => {
+  const root = mkdtempSync(join(tmpdir(), "marinara-file-stale-repair-"));
+  try {
+    const storageDir = join(root, "storage");
+    const tablesDir = join(storageDir, "tables");
+    const legacyDb = join(root, "legacy.db");
+    mkdirSync(tablesDir, { recursive: true });
+    writeFileSync(
+      join(storageDir, "manifest.json"),
+      JSON.stringify({
+        version: 2,
+        savedAt: "2026-05-03T00:00:00.000Z",
+        backend: "file-native",
+        migratedFromSqlite: {
+          path: legacyDb,
+          importedAt: "2026-05-03T00:00:00.000Z",
+        },
+        legacyRepair: {
+          paths: [legacyDb],
+          repairedAt: "2026-05-03T00:00:00.000Z",
+          tables: {},
+        },
+        tables: { chats: 0 },
+      }),
+    );
+    writeFileSync(join(tablesDir, "chats.json"), "[]");
+    await writeLegacyDb(legacyDb, [
+      { id: "retry-recovered-chat", name: "Retry Recovered Chat", updatedAt: "2026-05-03T00:00:00.000Z" },
+    ]);
+
+    await withFileStorageDir(storageDir, async () => {
+      const db = await createFileNativeDB([legacyDb]);
+      try {
+        const rows = await db.select().from(chats);
+        assert.equal(
+          rows.some((row) => row.id === "retry-recovered-chat"),
+          true,
+        );
+      } finally {
+        await db._fileStore.close();
+      }
+    });
+
+    const manifest = JSON.parse(readFileSync(join(storageDir, "manifest.json"), "utf8"));
+    assert.equal(manifest.legacyRepair.tables.chats, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("file-native storage supports lorebook folders", async () => {
   const root = mkdtempSync(join(tmpdir(), "marinara-file-folders-"));
   try {

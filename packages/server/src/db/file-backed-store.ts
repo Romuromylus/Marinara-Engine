@@ -67,6 +67,8 @@ type JoinSpec = {
   condition: Condition;
 };
 
+type LegacyReader = "libsql" | "node:sqlite";
+
 type TableSnapshotManifest = {
   version: 2;
   savedAt: string;
@@ -80,6 +82,7 @@ type TableSnapshotManifest = {
     paths: string[];
     repairedAt: string;
     tables: Record<string, number>;
+    reader?: LegacyReader;
   };
   tables: Record<string, number>;
 };
@@ -210,6 +213,7 @@ const columnMetasByObject = new WeakMap<object, ColumnMeta>();
 const tableMetasByName = new Map<string, TableMeta>();
 let skipLibsqlLegacyReader = false;
 let skipNodeSqliteLegacyReader = false;
+let legacyReaderUsed: LegacyReader | null = null;
 
 function symbolValue<T>(target: object, symbolName: string): T | undefined {
   const symbol = Object.getOwnPropertySymbols(target).find((entry) => String(entry) === symbolName);
@@ -659,7 +663,9 @@ async function readLegacyRowsWithNodeSqlite(dbPath: string, table: string) {
 async function readLegacyRows(dbPath: string, table: string) {
   if (!skipLibsqlLegacyReader && process.env.MARINARA_DISABLE_LIBSQL_LEGACY_READER !== "true") {
     try {
-      return await readLegacyRowsWithLibsql(dbPath, table);
+      const rows = await readLegacyRowsWithLibsql(dbPath, table);
+      legacyReaderUsed = "libsql";
+      return rows;
     } catch (libsqlErr) {
       skipLibsqlLegacyReader = true;
       logger.warn({ err: libsqlErr }, "[file-storage] libSQL unavailable for legacy import; falling back");
@@ -668,7 +674,9 @@ async function readLegacyRows(dbPath: string, table: string) {
 
   if (!skipNodeSqliteLegacyReader) {
     try {
-      return await readLegacyRowsWithNodeSqlite(dbPath, table);
+      const rows = await readLegacyRowsWithNodeSqlite(dbPath, table);
+      legacyReaderUsed = "node:sqlite";
+      return rows;
     } catch (nodeSqliteErr) {
       skipNodeSqliteLegacyReader = true;
       logger.warn(
@@ -974,8 +982,9 @@ class FileTableStore {
   private async repairLegacyImportIfNeeded() {
     const existingPaths = [...new Set(this.legacyDbPaths.filter((path) => existsSync(path)))];
     if (existingPaths.length === 0) return;
-    if (this.legacyRepair) return;
+    if (this.isLegacyRepairComplete()) return;
 
+    legacyReaderUsed = null;
     const repairedCounts: Record<string, number> = {};
     let repairedRows = 0;
 
@@ -1016,16 +1025,25 @@ class FileTableStore {
     }
 
     if (repairedRows === 0) {
+      if (!legacyReaderUsed) {
+        logger.warn(
+          { sources: existingPaths },
+          "[file-storage] Legacy SQLite data could not be read; will retry repair on next startup",
+        );
+        return;
+      }
       this.legacyRepair = {
         paths: existingPaths,
         repairedAt: new Date().toISOString(),
         tables: {},
+        reader: legacyReaderUsed,
       };
     } else {
       this.legacyRepair = {
         paths: existingPaths,
         repairedAt: new Date().toISOString(),
         tables: repairedCounts,
+        reader: legacyReaderUsed ?? undefined,
       };
       this.dirty = true;
       logger.info(
@@ -1035,6 +1053,12 @@ class FileTableStore {
     }
 
     await this.flush(true);
+  }
+
+  private isLegacyRepairComplete() {
+    if (!this.legacyRepair) return false;
+    if (this.legacyRepair.reader) return true;
+    return Object.values(this.legacyRepair.tables ?? {}).some((count) => count > 0);
   }
 
   private saveFileSnapshots() {
