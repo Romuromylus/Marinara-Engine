@@ -356,7 +356,6 @@ const CHAT_HTML_ALLOWED_TAGS = [
 
 const CHAT_HTML_ALLOWED_ATTR = [
   "alt",
-  "class",
   "color",
   "colspan",
   "data-spk",
