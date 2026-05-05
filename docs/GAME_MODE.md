@@ -265,7 +265,9 @@ Post-processes each GM turn through a separate **sidecar connection** that produ
 - Sprite expression updates for NPCs in scene
 - HUD widget state updates, when widgets were defined in the world-gen blueprint
 
-The sidecar prompt is **not** seen by the main GM model, and the main GM does **not** see what the sidecar produces — they run in parallel pipelines. This means a small/fast model on the sidecar connection won't drag down main GM quality, and vice versa.
+The sidecar prompt is **not** seen by the main GM model, and most of what the sidecar produces — background prompts, music cues, sprite expressions — stays in the sidecar pipeline and is consumed by the UI rather than fed back to the GM. They run in parallel pipelines, so a small/fast model on the sidecar connection won't drag down main GM quality, and vice versa.
+
+**One exception: HUD widget values.** Widget updates emitted by Scene Analysis are written to persistent game state, and the per-turn GM prompt re-reads each widget's current value on every turn (listed under "HUD widget state" in [Phase 2 above](#phase-2-gameplay-turn-by-turn)). So if Scene Analysis updates `Kingdom Wealth` from 50 → 47 after turn N, the GM sees 47 when its prompt is assembled for turn N+1. This is true regardless of which side wrote the update — when Scene Analysis is off, the GM emits widget commands itself, and the same state-rehydration loop carries the new values forward.
 
 If you've downloaded Marinara's local sidecar model, you can route Scene Analysis through it (the wizard exposes a "use local" toggle for the scene model), avoiding API costs entirely.
 
