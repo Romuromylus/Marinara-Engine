@@ -50,6 +50,7 @@ import { audioManager } from "../../lib/game-audio";
 import {
   parseGmTags,
   parseSegmentInventoryUpdates,
+  stripGmTags,
   type CombatEncounterTag,
   type ElementAttackTag,
   type CombatStatusTag,
@@ -740,7 +741,13 @@ const SpriteOverlay = lazy(async () => {
 });
 
 import { Modal } from "../ui/Modal";
-import type { Chat, SessionSummary, Combatant, Message } from "@marinara-engine/shared";
+import type {
+  Chat,
+  SessionSummary,
+  Combatant,
+  Message,
+  GameCombatStateSnapshot,
+} from "@marinara-engine/shared";
 import type { CharacterMap, PersonaInfo } from "../chat/chat-area.types";
 
 /** Typewriter component for the intro screen — reveals text character-by-character. */
@@ -1678,6 +1685,15 @@ export function GameSurface({
   // now voices party members inline via the `[Name] [main] ...` format.
   const [partyChatMessageId, setPartyChatMessageId] = useState<string | null>(null);
   const [narrationDone, setNarrationDone] = useState(false);
+  // Tags `narrationDone` to a specific assistant message ID. Used to defeat the stale-state race
+  // where a freshly-arrived assistant message hasn't yet had time to push narrationDone=false
+  // through the typewriter, so encounter-trigger gates would otherwise see narrationDone=true
+  // left over from the previous turn and open combat before the player can read the prose.
+  const narrationDoneMsgIdRef = useRef<string | null>(null);
+  const handleNarrationComplete = useCallback((complete: boolean, messageId: string | null) => {
+    narrationDoneMsgIdRef.current = complete ? messageId : null;
+    setNarrationDone(complete);
+  }, []);
   const [directionsPlaying, setDirectionsPlaying] = useState(false);
   const [pendingSegmentEffects, setPendingSegmentEffects] = useState<SceneSegmentEffect[]>([]);
   const [pendingInventorySegmentUpdates, setPendingInventorySegmentUpdates] = useState<
@@ -2356,6 +2372,16 @@ export function GameSurface({
     [latestAssistantMsg?.content],
   );
 
+  // The GM prose that triggered combat, used as the opening combat-log entry so the
+  // player can read what set up the fight without having to open the Logs modal.
+  const combatStartNarration = useMemo(() => {
+    if (!combatStartMessageId) return null;
+    const triggerMsg = messages.find((m) => m.id === combatStartMessageId);
+    if (!triggerMsg?.content) return null;
+    const cleaned = stripGmTags(triggerMsg.content).trim();
+    return cleaned.length > 0 ? cleaned : null;
+  }, [combatStartMessageId, messages]);
+
   const combatLogEntries = useMemo(
     () =>
       messages
@@ -2632,6 +2658,64 @@ export function GameSurface({
       }
     };
   }, [activeChatId]);
+
+  // ── Restore in-progress combat state from chat metadata on page load ──
+  // Without this, refreshing during a fight drops the user back into prose narration even
+  // though gameActiveState is still "combat", because the live party/enemy snapshot only
+  // lived in component-local React state.
+  const combatRestoredRef = useRef(false);
+  useEffect(() => {
+    if (combatRestoredRef.current || isMessagesLoading) return;
+    const snapshot = chatMeta.gameCombatState as GameCombatStateSnapshot | null | undefined;
+    combatRestoredRef.current = true;
+    if (!snapshot || !snapshot.party?.length || !snapshot.enemies?.length) return;
+    if (chatMeta.gameActiveState !== "combat") {
+      // Stale snapshot — combat ended but the metadata write didn't land. Clear it.
+      api.patch(`/chats/${activeChatId}/metadata`, { gameCombatState: null }).catch(() => {});
+      return;
+    }
+    setCombatParty(snapshot.party as Combatant[]);
+    setCombatEnemies(snapshot.enemies as Combatant[]);
+    setCombatItemEffects(Array.isArray(snapshot.itemEffects) ? snapshot.itemEffects : []);
+    setCombatMechanics(Array.isArray(snapshot.mechanics) ? snapshot.mechanics : []);
+    setCombatDialogueCues(Array.isArray(snapshot.dialogueCues) ? snapshot.dialogueCues : []);
+    if (snapshot.startMessageId) setCombatStartMessageId(snapshot.startMessageId);
+    useGameModeStore.getState().setGameState("combat");
+  }, [activeChatId, chatMeta.gameCombatState, chatMeta.gameActiveState, isMessagesLoading]);
+
+  // ── Persist live combat snapshot to chat metadata (debounced) ──
+  // Mirrors the scene-asset persistence above but only fires while combat is active.
+  // The snapshot doesn't include per-round transient state (animations, log entries) —
+  // those reset on restore and combat resumes from the start of the round.
+  const combatPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!combatRestoredRef.current) return;
+    if (!combatParty || !combatEnemies || gameState !== "combat") return;
+    if (combatPersistTimer.current) clearTimeout(combatPersistTimer.current);
+    const snapshot: GameCombatStateSnapshot = {
+      party: combatParty,
+      enemies: combatEnemies,
+      itemEffects: combatItemEffects,
+      mechanics: combatMechanics,
+      dialogueCues: combatDialogueCues,
+      startMessageId: combatStartMessageId,
+    };
+    combatPersistTimer.current = setTimeout(() => {
+      api.patch(`/chats/${activeChatId}/metadata`, { gameCombatState: snapshot }).catch(() => {});
+    }, 800);
+    return () => {
+      if (combatPersistTimer.current) clearTimeout(combatPersistTimer.current);
+    };
+  }, [
+    activeChatId,
+    combatParty,
+    combatEnemies,
+    combatItemEffects,
+    combatMechanics,
+    combatDialogueCues,
+    combatStartMessageId,
+    gameState,
+  ]);
 
   // ── Persist narration segment index (localStorage for instant reads + server for durability) ──
   const segmentStorageKey = `narration-idx:${activeChatId}`;
@@ -4469,7 +4553,9 @@ export function GameSurface({
     if (queuedEncounter.messageId !== latestAssistantMsg.id) return;
     if (pendingEncounter || combatUiActive) return;
     if (isStreaming || scenePreparing || pendingAssetGeneration || directionsPlaying) return;
-    if (latestNarrationText && !narrationDone) return;
+    // narrationDone left over from the previous turn must not unblock combat for a new message.
+    const narrationDoneForCurrent = narrationDone && narrationDoneMsgIdRef.current === latestAssistantMsg.id;
+    if (latestNarrationText && !narrationDoneForCurrent) return;
 
     useGameModeStore.getState().setGameState("combat");
     transitionGameState.mutate({ chatId: activeChatId, newState: "combat" });
@@ -4496,7 +4582,8 @@ export function GameSurface({
     if (queuedCombatGeneration.messageId !== latestAssistantMsg.id) return;
     if (pendingEncounter || combatUiActive || combatGenerationPending) return;
     if (isStreaming || scenePreparing || pendingAssetGeneration || directionsPlaying) return;
-    if (latestNarrationText && !narrationDone) return;
+    const narrationDoneForCurrent = narrationDone && narrationDoneMsgIdRef.current === latestAssistantMsg.id;
+    if (latestNarrationText && !narrationDoneForCurrent) return;
 
     setCombatGenerationPending(true);
     api
@@ -4581,7 +4668,8 @@ export function GameSurface({
     if (queuedQte.messageId !== latestAssistantMsg.id) return;
     if (activeQte) return;
     if (isStreaming || scenePreparing || pendingAssetGeneration || directionsPlaying) return;
-    if (latestNarrationText && !narrationDone) return;
+    const narrationDoneForCurrent = narrationDone && narrationDoneMsgIdRef.current === latestAssistantMsg.id;
+    if (latestNarrationText && !narrationDoneForCurrent) return;
 
     setActiveQte(queuedQte.qte);
     setQueuedQte(null);
@@ -5604,6 +5692,10 @@ export function GameSurface({
       useGameModeStore.getState().setGameState("exploration");
       if (activeChatId) {
         transitionGameState.mutate({ chatId: activeChatId, newState: "exploration" });
+        // Clear the persisted combat snapshot so a future page refresh doesn't try to
+        // re-enter the fight that just ended.
+        if (combatPersistTimer.current) clearTimeout(combatPersistTimer.current);
+        api.patch(`/chats/${activeChatId}/metadata`, { gameCombatState: null }).catch(() => {});
       }
 
       // Build a compact, model-friendly recap so the GM can narrate the aftermath.
@@ -6750,7 +6842,7 @@ export function GameSurface({
                           onCustomInstruction={handleCombatCustomInstruction}
                           onSpriteSuggestionChange={setCombatSpriteSuggestion}
                           _isStreaming={isStreaming}
-                          narration="Combat starts!"
+                          narration={combatStartNarration ?? "Combat starts!"}
                           combatDialogue={combatDialogueLines}
                           combatDialogueCues={combatDialogueCues}
                           combatItemEffects={combatItemEffects}
@@ -6788,7 +6880,7 @@ export function GameSurface({
                           hasStoredNarrationPosition={restoredNarrationState.hasStoredPosition}
                           restoredSegmentIndex={restoredSegmentIndex}
                           onSegmentChange={handleSegmentChange}
-                          onNarrationComplete={setNarrationDone}
+                          onNarrationComplete={handleNarrationComplete}
                           onReadable={handleReadable}
                           onNpcPortraitClick={handleNpcPortraitClick}
                           autoPlayBlocked={narrationAutoPlayBlocked}
@@ -6858,7 +6950,7 @@ export function GameSurface({
                       hasStoredNarrationPosition={restoredNarrationState.hasStoredPosition}
                       restoredSegmentIndex={restoredSegmentIndex}
                       onSegmentChange={handleSegmentChange}
-                      onNarrationComplete={setNarrationDone}
+                      onNarrationComplete={handleNarrationComplete}
                       onReadable={handleReadable}
                       onNpcPortraitClick={handleNpcPortraitClick}
                       autoPlayBlocked={narrationAutoPlayBlocked}
