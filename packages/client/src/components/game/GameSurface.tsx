@@ -148,6 +148,43 @@ function getConfiguredGameAssetImageSizes(): NonNullable<GameAssetGenerationPayl
   };
 }
 
+const GAME_ASSET_GENERATION_TIMEOUT_MS = 240_000;
+const GAME_ASSET_PREVIEW_TIMEOUT_MS = 180_000;
+const GAME_ASSET_PROMPT_REVIEW_TIMEOUT_MS = 180_000;
+const IMAGE_PROMPT_REVIEW_TIMED_OUT = Symbol("IMAGE_PROMPT_REVIEW_TIMED_OUT");
+
+class TimeoutError extends Error {
+  constructor(ms: number) {
+    super(`Operation timed out after ${ms / 1000} seconds`);
+    this.name = "TimeoutError";
+  }
+}
+
+function isTimeoutError(error: unknown): error is TimeoutError {
+  return error instanceof TimeoutError;
+}
+
+function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
+  const controller = new AbortController();
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+      onTimeout?.();
+      reject(new TimeoutError(ms));
+    }, ms);
+
+    run(controller.signal)
+      .then((value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
+}
+
 type GameTimeMeta = {
   day?: number;
   hour?: number;
@@ -2539,7 +2576,9 @@ export function GameSurface({
   // Track which message has had its scene effects prepared so narration
   // isn't displayed until backgrounds/music/etc. are ready.
   const sceneReadyMsgIdRef = useRef<string | undefined>(undefined);
-  const applySceneResultRef = useRef<((result: import("@marinara-engine/shared").SceneAnalysis) => void) | null>(null);
+  const applySceneResultRef = useRef<((result: import("@marinara-engine/shared").SceneAnalysis) => void | Promise<void>) | null>(
+    null,
+  );
   const [sceneReadyTick, setSceneReadyTick] = useState(0);
   void sceneReadyTick; // used only to trigger re-renders
 
@@ -3231,6 +3270,10 @@ export function GameSurface({
             onComplete();
             setSceneAnalysisFailed(true);
             applyInlineTags(tags, assets, msg);
+            if (sceneReadyMsgIdRef.current !== msg.id) {
+              sceneReadyMsgIdRef.current = msg.id;
+              setSceneReadyTick((t) => t + 1);
+            }
           },
         },
       );
@@ -3252,6 +3295,10 @@ export function GameSurface({
             console.warn("[scene-wrapup] scene-wrap failed:", err);
             setSceneAnalysisFailed(true);
             applyInlineTags(tags, assets, msg);
+            if (sceneReadyMsgIdRef.current !== msg.id) {
+              sceneReadyMsgIdRef.current = msg.id;
+              setSceneReadyTick((t) => t + 1);
+            }
           },
         },
       );
@@ -3269,6 +3316,10 @@ export function GameSurface({
         console.warn("[scene-wrapup] Scene analysis timed out after 120s, falling back to inline tags");
         setSceneAnalysisFailed(true);
         applyInlineTags(tags, assets, msg);
+        if (sceneReadyMsgIdRef.current !== msg.id) {
+          sceneReadyMsgIdRef.current = msg.id;
+          setSceneReadyTick((t) => t + 1);
+        }
       }
     }, 120_000);
   };
@@ -3332,23 +3383,22 @@ export function GameSurface({
   }
 
   const installGeneratedIllustration = useCallback(
-    (illustration: { tag: string; segment?: number }) => {
+    async (illustration: { tag: string; segment?: number }) => {
       void queryClient.invalidateQueries({ queryKey: ["gallery", activeChatId] });
-      fetchManifest().then(() => {
-        if (illustration.segment !== undefined && illustration.segment > 0) {
-          setPendingSegmentEffects((previous) => {
-            const existingIndex = previous.findIndex((effect) => effect.segment === illustration.segment);
-            if (existingIndex >= 0) {
-              return previous.map((effect, index) =>
-                index === existingIndex ? { ...effect, background: illustration.tag } : effect,
-              );
-            }
-            return [...previous, { segment: illustration.segment!, background: illustration.tag }];
-          });
-          return;
-        }
-        useGameAssetStore.getState().setCurrentBackground(illustration.tag);
-      });
+      await fetchManifest();
+      if (illustration.segment !== undefined && illustration.segment > 0) {
+        setPendingSegmentEffects((previous) => {
+          const existingIndex = previous.findIndex((effect) => effect.segment === illustration.segment);
+          if (existingIndex >= 0) {
+            return previous.map((effect, index) =>
+              index === existingIndex ? { ...effect, background: illustration.tag } : effect,
+            );
+          }
+          return [...previous, { segment: illustration.segment!, background: illustration.tag }];
+        });
+        return;
+      }
+      useGameAssetStore.getState().setCurrentBackground(illustration.tag);
     },
     [activeChatId, fetchManifest, queryClient],
   );
@@ -3388,32 +3438,69 @@ export function GameSurface({
       };
 
       if (useUIStore.getState().reviewImagePromptsBeforeSend) {
-        const preview = await api.post<{ items: GameImagePromptReviewItem[] }>(
-          "/game/generate-assets/preview",
-          payload,
-        );
+        let preview: { items: GameImagePromptReviewItem[] } | undefined;
+        try {
+          preview = await withTimeout(
+            (signal) => api.post<{ items: GameImagePromptReviewItem[] }>("/game/generate-assets/preview", payload, { signal }),
+            GAME_ASSET_PREVIEW_TIMEOUT_MS,
+            () => {
+              toast.error("Image prompt preview timed out. Continuing with the default prompts.");
+            },
+          );
+        } catch (error) {
+          if (isTimeoutError(error)) {
+            preview = { items: [] };
+          } else {
+            throw error;
+          }
+        }
+
         if (preview.items.length > 0) {
-          const overrides = await openImagePromptReview(preview.items);
-          if (!overrides) return null;
-          setImagePromptReviewSubmitting(true);
-          payload.promptOverrides = overrides;
+          let overrides: GameImagePromptOverride[] | null | typeof IMAGE_PROMPT_REVIEW_TIMED_OUT | undefined;
+          try {
+            overrides = await withTimeout(
+              () => openImagePromptReview(preview.items),
+              GAME_ASSET_PROMPT_REVIEW_TIMEOUT_MS,
+              () => {
+                closeImagePromptReview(null);
+                toast.error("Image prompt review timed out. Continuing with the default prompts.");
+              },
+            );
+          } catch (error) {
+            if (isTimeoutError(error)) {
+              overrides = IMAGE_PROMPT_REVIEW_TIMED_OUT;
+            } else {
+              throw error;
+            }
+          }
+
+          if (overrides === null || overrides === undefined) return null;
+          if (overrides !== IMAGE_PROMPT_REVIEW_TIMED_OUT) {
+            setImagePromptReviewSubmitting(true);
+            payload.promptOverrides = overrides;
+          }
         }
       }
 
-      return api.post<GameAssetGenerationResult>("/game/generate-assets", payload);
+      return await withTimeout(
+        (signal) => api.post<GameAssetGenerationResult>("/game/generate-assets", payload, { signal }),
+        GAME_ASSET_GENERATION_TIMEOUT_MS,
+        () => {
+          toast.error("Image generation timed out. The scene will continue without generated assets.");
+        },
+      );
     },
-    [openImagePromptReview],
+    [closeImagePromptReview, openImagePromptReview],
   );
 
   const applyGeneratedAssets = useCallback(
-    (res: GameAssetGenerationResult) => {
+    async (res: GameAssetGenerationResult) => {
       if (res.generatedBackground) {
-        fetchManifest().then(() => {
-          useGameAssetStore.getState().setCurrentBackground(res.generatedBackground!);
-        });
+        await fetchManifest();
+        useGameAssetStore.getState().setCurrentBackground(res.generatedBackground!);
       }
       if (res.generatedIllustration) {
-        installGeneratedIllustration(res.generatedIllustration);
+        await installGeneratedIllustration(res.generatedIllustration);
       }
       if (res.generatedNpcAvatars?.length) {
         useGameModeStore.getState().patchNpcAvatars(res.generatedNpcAvatars);
@@ -3422,7 +3509,7 @@ export function GameSurface({
     [fetchManifest, installGeneratedIllustration],
   );
 
-  function applySceneResult(result: import("@marinara-engine/shared").SceneAnalysis, msg: { id: string }) {
+  async function applySceneResult(result: import("@marinara-engine/shared").SceneAnalysis, msg: { id: string }) {
     console.log("[scene-analysis] Result from model:", JSON.stringify(result, null, 2));
     setSceneAnalysisFailed(false);
     // NOTE: Game state transitions are owned exclusively by the GM model via [state: ...] tags.
@@ -3533,10 +3620,10 @@ export function GameSurface({
       result.segmentEffects?.some((fx) => fx.background?.startsWith("backgrounds:generated:")) ||
       result.background?.startsWith("backgrounds:generated:");
     if (hasGeneratedBg) {
-      fetchManifest();
+      await fetchManifest();
     }
     if (result.generatedIllustration) {
-      installGeneratedIllustration(result.generatedIllustration);
+      await installGeneratedIllustration(result.generatedIllustration);
     }
     if (result.generatedNpcAvatars?.length) {
       useGameModeStore.getState().patchNpcAvatars(result.generatedNpcAvatars);
@@ -3570,16 +3657,20 @@ export function GameSurface({
         setPendingAssetGeneration(assetPayload);
         setAssetGenerationFailed(false);
         runGameAssetGeneration(assetPayload)
-          .then((res) => {
-            setPendingAssetGeneration(null);
-            if (res) applyGeneratedAssets(res);
-            // Ungate narration after assets are ready
+          .then(async (res) => {
+            if (res) {
+              await applyGeneratedAssets(res);
+              setPendingAssetGeneration(null);
+            } else {
+              setPendingAssetGeneration(null);
+            }
+            // Ungate narration after assets are installed
             sceneReadyMsgIdRef.current = msg.id;
             setSceneReadyTick((t) => t + 1);
           })
           .catch(() => {
             setAssetGenerationFailed(true);
-            // Still ungate on failure so the user can interact
+            // Keep pendingAssetGeneration so retry UI/button remain visible
             sceneReadyMsgIdRef.current = msg.id;
             setSceneReadyTick((t) => t + 1);
           });
@@ -3626,7 +3717,7 @@ export function GameSurface({
 
         setPendingAssetGeneration(null);
         if (!res) return null;
-        applyGeneratedAssets(res);
+        await applyGeneratedAssets(res);
         if (
           options?.showSuccessToast &&
           (res.generatedBackground || res.generatedIllustration || res.generatedNpcAvatars?.length)
