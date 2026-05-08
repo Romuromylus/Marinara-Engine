@@ -6,7 +6,7 @@ import { drizzle } from "drizzle-orm/libsql";
 import { eq } from "drizzle-orm";
 import type { DB } from "../src/db/connection.js";
 import { runMigrations } from "../src/db/migrate.js";
-import { apiConnections, chats, memoryChunks, messages } from "../src/db/schema/index.js";
+import { apiConnections, chats, memoryChunks, messages, messageSwipes } from "../src/db/schema/index.js";
 import { chatsRoutes } from "../src/routes/chats.routes.js";
 import { chunkAndEmbedMessages, recallMemories } from "../src/services/memory-recall.js";
 import { resolveMemoryRecallEmbeddingSource } from "../src/services/memory-recall-embedding.js";
@@ -72,13 +72,16 @@ test("editing a message invalidates stale memory chunks and refresh rebuilds fro
 
     const app = Fastify({ logger: false });
     app.decorate("db", db);
-    await app.register(chatsRoutes, { prefix: "/api/chats" });
-    await app.ready();
+    try {
+      await app.register(chatsRoutes, { prefix: "/api/chats" });
+      await app.ready();
 
-    const res = await app.inject({ method: "POST", url: "/api/chats/chat-445/memories/refresh" });
-    assert.equal(res.statusCode, 200);
-    assert.deepEqual(res.json(), { rebuilt: 1 });
-    await app.close();
+      const res = await app.inject({ method: "POST", url: "/api/chats/chat-445/memories/refresh" });
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.json(), { rebuilt: 1 });
+    } finally {
+      await app.close();
+    }
 
     const rebuiltChunks = await db.select().from(memoryChunks).where(eq(memoryChunks.chatId, "chat-445"));
 
@@ -254,6 +257,14 @@ test("rerolling a message invalidates stale memory chunks and refresh rebuilds f
       extra: "{}",
       createdAt: "2026-05-08T00:05:00.000Z",
     });
+    await db.insert(messageSwipes).values({
+      id: "swipe-548-reroll-0",
+      messageId: "message-548-reroll",
+      index: 0,
+      content: "The discarded response says the vault code is onion.",
+      extra: "{}",
+      createdAt: "2026-05-08T00:05:00.000Z",
+    });
 
     await db.insert(memoryChunks).values({
       id: "chunk-548",
@@ -274,13 +285,16 @@ test("rerolling a message invalidates stale memory chunks and refresh rebuilds f
 
     const app = Fastify({ logger: false });
     app.decorate("db", db);
-    await app.register(chatsRoutes, { prefix: "/api/chats" });
-    await app.ready();
+    try {
+      await app.register(chatsRoutes, { prefix: "/api/chats" });
+      await app.ready();
 
-    const res = await app.inject({ method: "POST", url: "/api/chats/chat-548/memories/refresh" });
-    assert.equal(res.statusCode, 200);
-    assert.deepEqual(res.json(), { rebuilt: 1 });
-    await app.close();
+      const res = await app.inject({ method: "POST", url: "/api/chats/chat-548/memories/refresh" });
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.json(), { rebuilt: 1 });
+    } finally {
+      await app.close();
+    }
 
     const rebuiltChunks = await db.select().from(memoryChunks).where(eq(memoryChunks.chatId, "chat-548"));
 
