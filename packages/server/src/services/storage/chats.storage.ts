@@ -497,6 +497,19 @@ export function createChatsStorage(db: DB) {
       });
     },
 
+    /**
+     * Bulk-set hiddenFromAI on many messages at once.
+     * Reuses the proven updateMessageExtra() for each message (read-parse-merge-write + swipe sync).
+     * Returns the number of messages updated.
+     */
+    async bulkSetHiddenFromAI(chatId: string, messageIds: string[], hidden: boolean): Promise<number> {
+      if (messageIds.length === 0) return 0;
+      for (const id of messageIds) {
+        await this.updateMessageExtra(id, { hiddenFromAI: hidden });
+      }
+      return messageIds.length;
+    },
+
     /** Atomically append an attachment to a message's extra JSON field. */
     async appendMessageAttachment(id: string, attachment: Record<string, unknown>) {
       return withPatchQueue(messageExtraPatchQueues, id, async () => {
