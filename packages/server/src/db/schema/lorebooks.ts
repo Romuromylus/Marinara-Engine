@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Schema: Lorebooks, Folders & Entries
 // ──────────────────────────────────────────────
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const lorebooks = sqliteTable("lorebooks", {
   id: text("id").primaryKey(),
@@ -25,23 +25,38 @@ export const lorebooks = sqliteTable("lorebooks", {
   updatedAt: text("updated_at").notNull(),
 });
 
-export const lorebookCharacterLinks = sqliteTable("lorebook_character_links", {
-  id: text("id").primaryKey(),
-  lorebookId: text("lorebook_id")
-    .notNull()
-    .references(() => lorebooks.id, { onDelete: "cascade" }),
-  characterId: text("character_id").notNull(),
-  createdAt: text("created_at").notNull(),
-});
+export const lorebookCharacterLinks = sqliteTable(
+  "lorebook_character_links",
+  {
+    id: text("id").primaryKey(),
+    lorebookId: text("lorebook_id")
+      .notNull()
+      .references(() => lorebooks.id, { onDelete: "cascade" }),
+    characterId: text("character_id").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    lorebookCharacterUnique: uniqueIndex("uniq_lorebook_character_links_pair").on(
+      table.lorebookId,
+      table.characterId,
+    ),
+  }),
+);
 
-export const lorebookPersonaLinks = sqliteTable("lorebook_persona_links", {
-  id: text("id").primaryKey(),
-  lorebookId: text("lorebook_id")
-    .notNull()
-    .references(() => lorebooks.id, { onDelete: "cascade" }),
-  personaId: text("persona_id").notNull(),
-  createdAt: text("created_at").notNull(),
-});
+export const lorebookPersonaLinks = sqliteTable(
+  "lorebook_persona_links",
+  {
+    id: text("id").primaryKey(),
+    lorebookId: text("lorebook_id")
+      .notNull()
+      .references(() => lorebooks.id, { onDelete: "cascade" }),
+    personaId: text("persona_id").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    lorebookPersonaUnique: uniqueIndex("uniq_lorebook_persona_links_pair").on(table.lorebookId, table.personaId),
+  }),
+);
 
 /**
  * Lorebook folders — collapsible containers that group entries to reduce

@@ -121,13 +121,15 @@ const CREATE_TABLES: string[] = [
     id TEXT PRIMARY KEY NOT NULL,
     lorebook_id TEXT NOT NULL REFERENCES lorebooks(id) ON DELETE CASCADE,
     character_id TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE(lorebook_id, character_id)
   )`,
   `CREATE TABLE IF NOT EXISTS lorebook_persona_links (
     id TEXT PRIMARY KEY NOT NULL,
     lorebook_id TEXT NOT NULL REFERENCES lorebooks(id) ON DELETE CASCADE,
     persona_id TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE(lorebook_id, persona_id)
   )`,
   `CREATE TABLE IF NOT EXISTS lorebook_folders (
     id TEXT PRIMARY KEY NOT NULL,
@@ -699,8 +701,38 @@ export async function runMigrations(db: DB) {
   await db.run(
     sql.raw(`CREATE INDEX IF NOT EXISTS idx_lorebook_character_links_character ON lorebook_character_links(character_id)`),
   );
+  await db.run(
+    sql.raw(`
+      DELETE FROM lorebook_character_links
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM lorebook_character_links
+        GROUP BY lorebook_id, character_id
+      )
+    `),
+  );
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_lorebook_character_links_pair ON lorebook_character_links(lorebook_id, character_id)`,
+    ),
+  );
   await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_lorebook_persona_links_book ON lorebook_persona_links(lorebook_id)`));
   await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_lorebook_persona_links_persona ON lorebook_persona_links(persona_id)`));
+  await db.run(
+    sql.raw(`
+      DELETE FROM lorebook_persona_links
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM lorebook_persona_links
+        GROUP BY lorebook_id, persona_id
+      )
+    `),
+  );
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_lorebook_persona_links_pair ON lorebook_persona_links(lorebook_id, persona_id)`,
+    ),
+  );
 
   await db.run(
     sql.raw(`
