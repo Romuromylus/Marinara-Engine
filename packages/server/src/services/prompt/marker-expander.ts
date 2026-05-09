@@ -261,9 +261,11 @@ async function expandLorebook(config: MarkerConfig, ctx: MarkerContext): Promise
   // Collect updated per-chat entry state overrides for the caller to persist
   if (result.updatedEntryStateOverrides) {
     ctx.updatedEntryStateOverrides = result.updatedEntryStateOverrides;
+    ctx.entryStateOverrides = result.updatedEntryStateOverrides;
   }
   if (result.updatedEntryTimingStates !== undefined) {
     ctx.updatedEntryTimingStates = result.updatedEntryTimingStates;
+    ctx.entryTimingStates = result.updatedEntryTimingStates;
   }
 
   // Collect depth entries for the assembler to inject later
