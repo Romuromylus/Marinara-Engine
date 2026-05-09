@@ -266,6 +266,7 @@ export function createLorebooksStorage(db: DB) {
       const shouldUpdateCharacterLinks = input.characterIds !== undefined || input.characterId !== undefined;
       const shouldUpdatePersonaLinks = input.personaIds !== undefined || input.personaId !== undefined;
       const current = shouldUpdateCharacterLinks || shouldUpdatePersonaLinks ? ((await this.getById(id)) as any) : null;
+      if ((shouldUpdateCharacterLinks || shouldUpdatePersonaLinks) && !current) return null;
       const nextCharacterIds = shouldUpdateCharacterLinks
         ? resolveLinkIds(input.characterIds, input.characterId)
         : ((current?.characterIds as string[] | undefined) ?? []);
@@ -282,8 +283,8 @@ export function createLorebooksStorage(db: DB) {
       if (input.sourceAgentId !== undefined) updates.sourceAgentId = input.sourceAgentId;
 
       await db.transaction(async (tx) => {
-        await tx.update(lorebooks).set(updates).where(eq(lorebooks.id, id));
-        if (shouldUpdateCharacterLinks || shouldUpdatePersonaLinks) {
+        const updatedRows = await tx.update(lorebooks).set(updates).where(eq(lorebooks.id, id)).returning({ id: lorebooks.id });
+        if (updatedRows.length > 0 && (shouldUpdateCharacterLinks || shouldUpdatePersonaLinks)) {
           await syncLorebookLinks(tx, id, nextCharacterIds, nextPersonaIds);
         }
       });
