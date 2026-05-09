@@ -1075,6 +1075,17 @@ export async function generateRoutes(app: FastifyInstance) {
       const chatActiveLorebookIds: string[] = Array.isArray(chatMeta.activeLorebookIds)
         ? (chatMeta.activeLorebookIds as string[])
         : [];
+      let presetHandledLorebooks = false;
+      const presetHasLorebookMarker = (sections: Array<{ isMarker: string; markerConfig: string | null }>) =>
+        sections.some((section) => {
+          if (section.isMarker !== "true" || !section.markerConfig) return false;
+          try {
+            const markerType = (JSON.parse(section.markerConfig) as { type?: unknown }).type;
+            return markerType === "lorebook" || markerType === "world_info_before" || markerType === "world_info_after";
+          } catch {
+            return false;
+          }
+        });
       const manualPromptTargetCharId =
         (chatMeta.groupResponseOrder as string) === "manual" &&
         typeof input.forCharacterId === "string" &&
@@ -1210,6 +1221,11 @@ export async function generateRoutes(app: FastifyInstance) {
           };
 
           const assembled = await assemblePrompt(assemblerInput);
+          presetHandledLorebooks =
+            presetHasLorebookMarker(sections) ||
+            assembled.lorebookDepthEntriesCount > 0 ||
+            !!assembled.updatedEntryStateOverrides ||
+            assembled.updatedEntryTimingStates !== undefined;
           finalMessages = assembled.messages;
           temperature = assembled.parameters.temperature;
           maxTokens = assembled.parameters.maxTokens;
@@ -3346,7 +3362,7 @@ export async function generateRoutes(app: FastifyInstance) {
         }
 
         // ── Lorebook injection for game mode ──
-        {
+        if (!presetHandledLorebooks) {
           sendProgress("lorebooks");
           const scanMessages = mappedMessages.map((m) => ({
             role: m.role as "user" | "assistant" | "system",
