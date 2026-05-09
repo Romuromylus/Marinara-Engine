@@ -417,6 +417,15 @@ async function persistLorebookRuntimeState(args: {
 }
 
 async function resolveLatestGameStateForLorebooks(db: any, chatId: string): Promise<Record<string, unknown> | null> {
+  const latestRows = await db
+    .select()
+    .from(gameStateSnapshotsTable)
+    .where(eq(gameStateSnapshotsTable.chatId, chatId))
+    .orderBy(desc(gameStateSnapshotsTable.createdAt))
+    .limit(1);
+  const latest = latestRows[0];
+  if (latest) return parseGameStateRow(latest as Record<string, unknown>) as unknown as Record<string, unknown>;
+
   const committedRows = await db
     .select()
     .from(gameStateSnapshotsTable)
@@ -425,15 +434,7 @@ async function resolveLatestGameStateForLorebooks(db: any, chatId: string): Prom
     .limit(1);
   const committed = committedRows[0];
   if (committed) return parseGameStateRow(committed as Record<string, unknown>) as unknown as Record<string, unknown>;
-
-  const latestRows = await db
-    .select()
-    .from(gameStateSnapshotsTable)
-    .where(eq(gameStateSnapshotsTable.chatId, chatId))
-    .orderBy(desc(gameStateSnapshotsTable.createdAt))
-    .limit(1);
-  const latest = latestRows[0];
-  return latest ? (parseGameStateRow(latest as Record<string, unknown>) as unknown as Record<string, unknown>) : null;
+  return null;
 }
 
 /** Read a character's avatar from disk as base64, or return undefined if unavailable. */
