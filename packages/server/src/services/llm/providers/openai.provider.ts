@@ -428,7 +428,8 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   private shouldSendGLMEnableThinking(model: string): boolean {
-    return !this.isGenericCustomProvider() && this.isGLMModel(model) && this.isNativeGLMEndpoint();
+    if (this.isGenericCustomProvider() || !this.isGLMModel(model)) return false;
+    return this.isNativeGLMEndpoint() || this.providerKind === "nanogpt";
   }
 
   private hasActiveReasoningEffort(reasoningEffort?: string | null): boolean {

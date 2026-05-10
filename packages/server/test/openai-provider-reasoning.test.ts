@@ -168,6 +168,32 @@ test("GLM models on native Z.AI endpoints still use enable_thinking for provider
   assert.equal("reasoning_effort" in body, false);
 });
 
+test("NanoGPT GLM models explicitly disable thinking when reasoning is off", async () => {
+  const provider = createLLMProvider("nanogpt", "https://nano-gpt.com/api/v1", "test-key");
+  const body = await captureChatRequestBody(
+    "glm-5.1",
+    { reasoningEffort: undefined },
+    "https://nano-gpt.com/api/v1",
+    provider,
+  );
+
+  assert.equal(body.enable_thinking, false);
+  assert.equal("reasoning_effort" in body, false);
+});
+
+test("NanoGPT GLM chatComplete requests explicitly disable thinking when reasoning is off", async () => {
+  const provider = createLLMProvider("nanogpt", "https://nano-gpt.com/api/v1", "test-key");
+  const body = await captureChatCompleteRequestBody(
+    "glm-5.1",
+    { reasoningEffort: undefined },
+    "https://nano-gpt.com/api/v1",
+    provider,
+  );
+
+  assert.equal(body.enable_thinking, false);
+  assert.equal("reasoning_effort" in body, false);
+});
+
 test("custom compatible endpoints omit enable_thinking even on native Z.AI URLs", async () => {
   const provider = createLLMProvider("custom", "https://api.z.ai/api/paas/v4", "test-key");
   const body = await captureChatRequestBody("glm-4.5", {}, "https://api.z.ai/api/paas/v4", provider);

@@ -6017,6 +6017,7 @@ export async function generateRoutes(app: FastifyInstance) {
           const promotableThinking = providerThinking.trim() || fullThinking.trim();
           // Some OpenAI-compatible providers misplace the actual assistant text
           // in reasoning/thinking fields even when reasoning was not requested.
+          const isGlmModel = conn.model.toLowerCase().includes("glm");
           if (
             chatMode === "conversation" &&
             !fullResponse.trim() &&
@@ -6024,16 +6025,25 @@ export async function generateRoutes(app: FastifyInstance) {
             !enableThinking &&
             !resolvedEffort
           ) {
-            logger.warn(
-              "[generate] Promoting thinking-only response to visible text for chat %s (char: %s, model: %s)",
-              input.chatId,
-              targetCharId,
-              conn.model,
-            );
-            fullResponse = promotableThinking;
-            fullThinking = "";
-            providerThinking = "";
-            contentReplaced = true;
+            if (isGlmModel) {
+              logger.warn(
+                "[generate] Refusing to promote GLM thinking-only response for chat %s (char: %s, model: %s)",
+                input.chatId,
+                targetCharId,
+                conn.model,
+              );
+            } else {
+              logger.warn(
+                "[generate] Promoting thinking-only response to visible text for chat %s (char: %s, model: %s)",
+                input.chatId,
+                targetCharId,
+                conn.model,
+              );
+              fullResponse = promotableThinking;
+              fullThinking = "";
+              providerThinking = "";
+              contentReplaced = true;
+            }
           }
           if (conversationCommandsEnabled && !input.impersonate) {
             const parsed = parseCharacterCommands(fullResponse);
