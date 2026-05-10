@@ -10,6 +10,7 @@ import { useEncounterStore } from "../stores/encounter.store";
 import { useUIStore } from "../stores/ui.store";
 import { clearBrowserRuntimeCaches } from "../lib/browser-runtime";
 import { ApiError } from "../lib/api-client";
+import { lorebookKeys } from "./use-lorebooks";
 import type {
   Chat,
   ChatMemoryChunk,
@@ -326,6 +327,7 @@ export function useUpdateChatMetadata() {
         qc.invalidateQueries({ queryKey: chatKeys.detail(vars.id) });
       }
       qc.invalidateQueries({ queryKey: chatKeys.list() });
+      qc.invalidateQueries({ queryKey: lorebookKeys.active(vars.id) });
     },
   });
 }
@@ -370,6 +372,7 @@ export function useCreateMessage(chatId: string | null) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.list() });
+        qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       }
     },
   });
@@ -383,6 +386,7 @@ export function useDeleteMessage(chatId: string | null) {
       if (chatId) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
+        qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       }
     },
   });
@@ -396,6 +400,7 @@ export function useDeleteMessages(chatId: string | null) {
       if (chatId) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
+        qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       }
     },
   });
@@ -436,6 +441,7 @@ export function useUpdateMessage(chatId: string | null) {
         const { streamingChatId, isStreaming } = useChatStore.getState();
         if (isStreaming && streamingChatId === chatId) return;
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+        qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       }
     },
   });
@@ -482,9 +488,27 @@ export function useUpdateMessageExtra(chatId: string | null) {
     onSettled: () => {
       if (chatId) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+        qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       }
     },
   });
+}
+
+function replaceCachedMessage(
+  old: InfiniteData<Message[]> | undefined,
+  messageId: string,
+  updater: (message: Message) => Message,
+): InfiniteData<Message[]> | undefined {
+  if (!old?.pages) return old;
+  let changed = false;
+  const pages = old.pages.map((page) =>
+    page.map((msg) => {
+      if (msg.id !== messageId) return msg;
+      changed = true;
+      return updater(msg);
+    }),
+  );
+  return changed ? { ...old, pages } : old;
 }
 
 /** Peek at the assembled prompt for a chat */
@@ -604,9 +628,32 @@ export function useSetActiveSwipe(chatId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ messageId, index }: { messageId: string; index: number }) =>
-      api.put<Message>(`/chats/${chatId}/messages/${messageId}/active-swipe`, { index }),
-    onSuccess: () => {
-      if (chatId) qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+      api.put<Message | null>(`/chats/${chatId}/messages/${messageId}/active-swipe`, { index }),
+    onMutate: async ({ messageId, index }) => {
+      if (!chatId) return;
+      await qc.cancelQueries({ queryKey: chatKeys.messages(chatId), exact: true });
+      const previous = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId));
+      qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) =>
+        replaceCachedMessage(old, messageId, (msg) => ({ ...msg, activeSwipeIndex: index })),
+      );
+      return { previous };
+    },
+    onSuccess: (updated, { messageId }) => {
+      if (!chatId) return;
+      if (!updated) {
+        qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+        qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
+        return;
+      }
+      qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) =>
+        replaceCachedMessage(old, messageId, (msg) => ({ ...msg, ...updated })),
+      );
+      qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
+    },
+    onError: (_err, _vars, context) => {
+      if (chatId && context?.previous) {
+        qc.setQueryData(chatKeys.messages(chatId), context.previous);
+      }
     },
   });
 }
@@ -620,6 +667,7 @@ export function useDeleteSwipe(chatId: string | null) {
     onSuccess: (_data, { messageId }) => {
       if (!chatId) return;
       qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+      qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       qc.invalidateQueries({ queryKey: [...chatKeys.all, "swipes", messageId] });
     },
   });

@@ -4,14 +4,11 @@
 // Chunks conversation messages into groups, embeds them, and provides
 // semantic recall: given a query, find the most relevant past
 // conversation fragments from specified chats.
-import { PROVIDERS } from "@marinara-engine/shared";
 import { eq, desc, and, gt, inArray, isNotNull } from "drizzle-orm";
 import type { DB } from "../db/connection.js";
 import { messages, memoryChunks } from "../db/schema/index.js";
 import { newId, now } from "../utils/id-generator.js";
 import { localEmbed } from "./local-embedder.js";
-import type { BaseLLMProvider } from "./llm/base-provider.js";
-import { createLLMProvider } from "./llm/provider-registry.js";
 import { logger } from "../lib/logger.js";
 const isLite = process.env.MARINARA_LITE === "true" || process.env.MARINARA_LITE === "1";
 
@@ -23,8 +20,6 @@ const SIMILARITY_THRESHOLD = 0.25;
 
 /** Maximum number of recalled memories per generation. */
 const DEFAULT_TOP_K = 8;
-
-let testLocalEmbedOverride: ((texts: string[]) => Promise<number[][] | null>) | null = null;
 
 // ── Cosine similarity ──
 
@@ -52,126 +47,36 @@ export interface RecalledMemory {
   lastMessageAt: string;
 }
 
-export interface MemoryRecallEmbeddingContext {
-  provider: BaseLLMProvider;
-  model: string;
-  source: string;
+export interface MemoryRecallEmbeddingSource {
+  label: string;
+  embed(texts: string[]): Promise<number[][] | null>;
 }
 
-export interface MemoryRecallConnection {
-  id: string;
-  provider: string;
-  baseUrl: string | null;
-  apiKey: string;
-  embeddingModel?: string | null;
-  embeddingBaseUrl?: string | null;
-  embeddingConnectionId?: string | null;
-  maxContext?: number | null;
-  openrouterProvider?: string | null;
-  maxTokensOverride?: number | null;
-  claudeFastMode?: string | boolean | null;
+export interface MemoryRecallEmbeddingOptions {
+  embeddingSource?: MemoryRecallEmbeddingSource | null;
+  localEmbedder?: (texts: string[]) => Promise<number[][] | null>;
 }
 
-export interface MemoryRecallConnectionStorage {
-  getWithKey(id: string): Promise<MemoryRecallConnection | null>;
-}
-
-function resolveMemoryRecallConnectionBaseUrl(connection: MemoryRecallConnection): string {
-  if (connection.baseUrl) return connection.baseUrl.replace(/\/+$/, "");
-  if (connection.provider === "claude_subscription") return "claude-agent-sdk://local";
-  const providerDef = PROVIDERS[connection.provider as keyof typeof PROVIDERS];
-  return providerDef?.defaultBaseUrl ?? "";
-}
-
-export async function resolveMemoryRecallEmbeddingContext(args: {
-  connections: MemoryRecallConnectionStorage;
-  conn: MemoryRecallConnection | null;
-  baseUrl: string;
-  chatMeta: Record<string, unknown>;
-}): Promise<MemoryRecallEmbeddingContext | null> {
-  const { connections, conn, baseUrl, chatMeta } = args;
-  if (!conn) return null;
-
-  const embeddingConnId =
-    (chatMeta.embeddingConnectionId as string | undefined) || (conn.embeddingConnectionId as string | undefined);
-  let embedConn = conn;
-  let embedBaseUrl = baseUrl || resolveMemoryRecallConnectionBaseUrl(conn);
-  if (embeddingConnId) {
-    const dedicatedConnection = await connections.getWithKey(embeddingConnId);
-    if (dedicatedConnection) {
-      embedConn = dedicatedConnection;
-      embedBaseUrl = resolveMemoryRecallConnectionBaseUrl(dedicatedConnection);
-    }
-  }
-
-  if (embedConn.embeddingBaseUrl) {
-    embedBaseUrl = embedConn.embeddingBaseUrl.replace(/\/+$/, "");
-  }
-
-  // Match connection settings semantics: a dedicated embedding connection may supply
-  // credentials/base URL while inheriting the parent connection's embedding model.
-  const embeddingModel = embedConn.embeddingModel || conn.embeddingModel;
-  if (!embeddingModel || !embedBaseUrl) return null;
-
-  return {
-    provider: createLLMProvider(
-      embedConn.provider,
-      embedBaseUrl,
-      embedConn.apiKey,
-      embedConn.maxContext,
-      embedConn.openrouterProvider,
-      embedConn.maxTokensOverride,
-      embedConn.claudeFastMode === true || embedConn.claudeFastMode === "true",
-    ),
-    model: embeddingModel,
-    source: embeddingConnId ? `connection ${embeddingConnId}` : `chat connection ${embedConn.id}`,
-  };
-}
-
-async function embedTexts(
+export async function embedMemoryRecallTexts(
   texts: string[],
-  purpose: "chunk" | "query",
-  embeddingContext?: MemoryRecallEmbeddingContext | null,
-): Promise<number[][] | null> {
-  const localEmbeddings = testLocalEmbedOverride ? await testLocalEmbedOverride(texts) : await localEmbed(texts);
+  options: MemoryRecallEmbeddingOptions = {},
+): Promise<number[][]> {
+  const localEmbedder = options.localEmbedder ?? localEmbed;
+  const localEmbeddings = await localEmbedder(texts);
   if (localEmbeddings) return localEmbeddings;
 
-  if (!embeddingContext?.model) {
-    logger.warn(
-      "[memory-recall] Local embeddings are unavailable and no embedding connection is configured for %s embeddings",
-      purpose,
-    );
-    return null;
+  if (!options.embeddingSource) {
+    logger.warn("[memory-recall] Local embeddings are unavailable and no embedding connection is configured");
+    return [];
   }
 
-  try {
-    const embeddings = await embeddingContext.provider.embed(texts, embeddingContext.model);
-    logger.info(
-      "[memory-recall] Used %s embedding fallback (%s) for %d %s text(s)",
-      embeddingContext.source,
-      embeddingContext.model,
-      texts.length,
-      purpose,
-    );
-    return embeddings;
-  } catch (err) {
-    logger.warn(
-      err,
-      "[memory-recall] Embedding fallback %s failed for %s embeddings",
-      embeddingContext.source,
-      purpose,
-    );
-    return null;
+  const fallbackEmbeddings = await options.embeddingSource.embed(texts);
+  if (fallbackEmbeddings) {
+    logger.debug("[memory-recall] Used configured embedding source %s", options.embeddingSource.label);
+    return fallbackEmbeddings;
   }
-}
 
-export function setMemoryRecallLocalEmbedOverrideForTests(
-  override: ((texts: string[]) => Promise<number[][] | null>) | null,
-): void {
-  if (process.env.NODE_ENV !== "test") {
-    throw new Error("Memory recall local embed override is only available in tests.");
-  }
-  testLocalEmbedOverride = override;
+  return [];
 }
 
 /**
@@ -183,7 +88,7 @@ export async function chunkAndEmbedMessages(
   chatId: string,
   /** Map from role → display name. Used to format "Name: content" lines. */
   nameMap: { userName: string; characterNames: Record<string, string> },
-  embeddingContext?: MemoryRecallEmbeddingContext | null,
+  options: MemoryRecallEmbeddingOptions = {},
 ): Promise<void> {
   if (isLite) return;
   // Find the last chunk for this chat to know where to start
@@ -246,9 +151,9 @@ export async function chunkAndEmbedMessages(
 
   if (chunksToCreate.length === 0) return;
 
-  // Embed all chunks through embedTexts, which is local-first with configured fallback.
+  // Embed all chunks using local model
   const texts = chunksToCreate.map((c) => c.content);
-  const embeddings = (await embedTexts(texts, "chunk", embeddingContext)) ?? [];
+  const embeddings = await embedMemoryRecallTexts(texts, options);
 
   // Store chunks
   const timestamp = now();
@@ -276,12 +181,12 @@ export async function rebuildMemoryChunks(
   db: DB,
   chatId: string,
   nameMap: { userName: string; characterNames: Record<string, string> },
-  embeddingContext?: MemoryRecallEmbeddingContext | null,
+  options: MemoryRecallEmbeddingOptions = {},
 ): Promise<number> {
   if (isLite) return 0;
 
   await db.delete(memoryChunks).where(eq(memoryChunks.chatId, chatId));
-  await chunkAndEmbedMessages(db, chatId, nameMap, embeddingContext);
+  await chunkAndEmbedMessages(db, chatId, nameMap, options);
 
   const rebuilt = await db
     .select({ id: memoryChunks.id })
@@ -298,14 +203,13 @@ export async function recallMemories(
   db: DB,
   query: string,
   chatIds: string[],
-  topK: number = DEFAULT_TOP_K,
-  embeddingContext?: MemoryRecallEmbeddingContext | null,
+  options: MemoryRecallEmbeddingOptions & { topK?: number } = {},
 ): Promise<RecalledMemory[]> {
   if (isLite) return [];
   if (chatIds.length === 0) return [];
 
-  // Embed the query through embedTexts, which is local-first with configured fallback.
-  const queryEmbeddings = await embedTexts([query], "query", embeddingContext);
+  // Embed the query using local model
+  const queryEmbeddings = await embedMemoryRecallTexts([query], options);
   if (!queryEmbeddings || queryEmbeddings.length === 0) return [];
   const queryEmbedding = queryEmbeddings[0]!;
   if (queryEmbedding.length === 0) return [];
@@ -354,7 +258,7 @@ export async function recallMemories(
     })
     .filter((s) => s.similarity >= SIMILARITY_THRESHOLD)
     .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, topK);
+    .slice(0, options.topK ?? DEFAULT_TOP_K);
 
   return scored;
 }

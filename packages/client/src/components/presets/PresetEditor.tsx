@@ -7,6 +7,8 @@ import { createPortal } from "react-dom";
 import { useUIStore } from "../../stores/ui.store";
 import { toast } from "sonner";
 import { showConfirmDialog } from "../../lib/app-dialogs";
+import { useChatStore } from "../../stores/chat.store";
+import { useChat } from "../../hooks/use-chats";
 import {
   usePresetFull,
   useUpdatePreset,
@@ -47,6 +49,7 @@ import {
   User,
   Bot,
   X,
+  AlertTriangle,
   Maximize2,
   BookOpen,
   ListChecks,
@@ -97,15 +100,19 @@ const ROLE_ICONS: Record<string, FC<{ size: string | number; className?: string 
 
 const MARKER_LABELS: Record<MarkerType, string> = {
   character: "Character Info",
-  lorebook: "Lorebook (All)",
+  lorebook: "Lorebook Marker (All)",
   persona: "Persona",
   chat_history: "Chat History",
   chat_summary: "Chat Summary",
-  world_info_before: "World Info (Before)",
-  world_info_after: "World Info (After)",
+  world_info_before: "Lorebook Marker (Before)",
+  world_info_after: "Lorebook Marker (After)",
   dialogue_examples: "Dialogue Examples",
   agent_data: "Agent Data",
 };
+
+function lorebookWarningDismissalKey(presetId: string) {
+  return `preset:loreWarning:dismissed:${presetId}`;
+}
 
 function reorderIdsByOffset(items: Array<{ id: string }>, index: number, offset: number): string[] | null {
   const targetIndex = index + offset;
@@ -124,8 +131,10 @@ function reorderIdsByOffset(items: Array<{ id: string }>, index: number, offset:
 export function PresetEditor() {
   const presetDetailId = useUIStore((s) => s.presetDetailId);
   const closePresetDetail = useUIStore((s) => s.closePresetDetail);
+  const activeChatId = useChatStore((s) => s.activeChatId);
 
   const { data, isLoading } = usePresetFull(presetDetailId);
+  const { data: activeChat } = useChat(activeChatId);
   const updatePreset = useUpdatePreset();
   const deletePreset = useDeletePreset();
   const createSection = useCreateSection();
@@ -233,6 +242,34 @@ export function PresetEditor() {
     const map = new Map((data.sections as any[]).map((s) => [s.id, s]));
     return sectionOrder.map((id: string) => map.get(id)).filter(Boolean) as any[];
   }, [data?.sections, sectionOrder]);
+
+  const sectionHasLorebookMarker = useMemo(() => {
+    return orderedSections.some((section: any) => {
+      if (section.enabled !== "true" && section.enabled !== true) return false;
+      if (section.isMarker !== "true" && section.isMarker !== true) return false;
+      try {
+        const config = typeof section.markerConfig === "string" ? JSON.parse(section.markerConfig) : section.markerConfig;
+        return (
+          config?.type === "lorebook" ||
+          config?.type === "world_info_before" ||
+          config?.type === "world_info_after"
+        );
+      } catch {
+        return false;
+      }
+    });
+  }, [orderedSections]);
+  const parentChatHasLorebook = useMemo(() => {
+    try {
+      const metadata =
+        typeof activeChat?.metadata === "string"
+          ? JSON.parse(activeChat.metadata)
+          : ((activeChat?.metadata ?? {}) as any);
+      return Array.isArray(metadata.activeLorebookIds) && metadata.activeLorebookIds.length > 0;
+    } catch {
+      return false;
+    }
+  }, [activeChat?.metadata]);
 
   const groupMap = useMemo(() => {
     if (!data?.groups) return new Map<string, any>();
@@ -438,6 +475,8 @@ export function PresetEditor() {
                 onUpdateVariable={updateVariable}
                 onDeleteVariable={deleteVariable}
                 onReorderVariables={reorderVariables}
+                hasLorebookMarker={sectionHasLorebookMarker}
+                parentChatHasLorebook={parentChatHasLorebook}
               />
             )}
 
@@ -576,6 +615,8 @@ function SectionsTab({
   onUpdateVariable,
   onDeleteVariable,
   onReorderVariables,
+  hasLorebookMarker,
+  parentChatHasLorebook,
 }: {
   presetId: string;
   sections: any[];
@@ -593,6 +634,8 @@ function SectionsTab({
   onUpdateVariable: any;
   onDeleteVariable: any;
   onReorderVariables: any;
+  hasLorebookMarker: boolean;
+  parentChatHasLorebook: boolean;
 }) {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -601,6 +644,30 @@ function SectionsTab({
   const [dragReady, setDragReady] = useState<number | null>(null); // index of section ready to drag (grip held)
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
+  const [lorebookWarningDismissed, setLorebookWarningDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(lorebookWarningDismissalKey(presetId)) === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      setLorebookWarningDismissed(localStorage.getItem(lorebookWarningDismissalKey(presetId)) === "true");
+    } catch {
+      setLorebookWarningDismissed(false);
+    }
+  }, [presetId]);
+
+  const dismissLorebookWarning = useCallback(() => {
+    try {
+      localStorage.setItem(lorebookWarningDismissalKey(presetId), "true");
+    } catch {
+      /* Ignore storage failures; the in-memory dismissal still helps this session. */
+    }
+    setLorebookWarningDismissed(true);
+  }, [presetId]);
 
   // Fetch agent configs and filter to those with injectAsSection enabled
   const { data: agentConfigs } = useAgentConfigs();
@@ -810,6 +877,21 @@ function SectionsTab({
         >
           <FolderOpen size="0.8125rem" /> Groups ({groupMap.size})
         </button>
+        {!hasLorebookMarker && parentChatHasLorebook && !lorebookWarningDismissed && (
+          <div className="flex items-center gap-1.5 rounded-lg bg-amber-400/10 px-2.5 py-1.5 text-[0.6875rem] text-amber-200 ring-1 ring-amber-400/25">
+            <AlertTriangle size="0.75rem" className="shrink-0" />
+            <span>Add a lorebook marker when this preset should receive active lorebook entries.</span>
+            <button
+              type="button"
+              onClick={dismissLorebookWarning}
+              className="ml-0.5 rounded-md p-0.5 text-amber-200/75 transition-colors hover:bg-amber-400/15 hover:text-amber-100"
+              title="Dismiss warning"
+              aria-label="Dismiss warning"
+            >
+              <X size="0.6875rem" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── Groups Management Panel ── */}
@@ -1116,8 +1198,13 @@ function SectionsTab({
                             <div className="rounded-lg bg-violet-400/5 p-3 text-xs text-violet-300">
                               Marker type: <strong>{MARKER_LABELS[mc.type as MarkerType] ?? "Unknown"}</strong>
                               <p className="mt-1 text-[var(--muted-foreground)]">
-                                Content is auto-generated at assembly time from your characters, lorebook, etc.
+                                Content is auto-generated at assembly time from your characters, lorebooks, etc.
                               </p>
+                              {["lorebook", "world_info_before", "world_info_after"].includes(mc.type) && (
+                                <p className="mt-1 text-amber-200">
+                                  This is where active lorebook entries are inserted.
+                                </p>
+                              )}
                             </div>
                           );
                         })()}
@@ -1490,6 +1577,11 @@ function VariableCard({
         <span className="shrink-0 rounded bg-amber-400/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-amber-400">
           {opts.length} options
         </span>
+        {opts.length === 1 && !isMultiSelect && (
+          <span className="shrink-0 rounded bg-purple-400/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-purple-400">
+            boolean
+          </span>
+        )}
         {isMultiSelect && (
           <span className="shrink-0 rounded bg-purple-400/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-purple-400">
             {isRandomPick ? "random" : "multi"}
@@ -1537,7 +1629,19 @@ function VariableCard({
             <VariableQuestionInput value={question} onCommit={(v) => update({ question: v })} />
           </div>
 
-          {/* Multi-Select & Random Pick */}
+          {/* Multi-Select & Random Pick (not shown for single-option/boolean variables) */}
+          {opts.length === 1 && !isMultiSelect ? (
+            <div className="space-y-1.5 rounded-lg bg-[var(--secondary)] p-2.5 ring-1 ring-[var(--border)]">
+              <div className="flex items-center gap-1.5">
+                <Shuffle size="0.75rem" className="text-purple-400" />
+                <span className="text-[0.625rem] font-medium text-purple-400">Boolean Toggle</span>
+              </div>
+              <p className="text-[0.5625rem] text-[var(--muted-foreground)]">
+                This variable has only one option, so it behaves as a Boolean toggle. Users can switch it on or off in the
+                Configure Preset Variables wizard.
+              </p>
+            </div>
+          ) : (
           <div className="space-y-2 rounded-lg bg-[var(--secondary)] p-2.5 ring-1 ring-[var(--border)]">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5">
@@ -1613,55 +1717,73 @@ function VariableCard({
               </div>
             )}
           </div>
+          )}
 
           {/* Options */}
           <div className="space-y-1.5">
             <label className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Options</label>
-            {opts.map((opt, oi) => (
-              <div
-                key={opt.id}
-                className="flex items-center gap-2 rounded-lg bg-[var(--secondary)] px-2.5 py-1.5 ring-1 ring-[var(--border)]"
-              >
-                <span className="shrink-0 text-[0.625rem] font-medium text-amber-400">{oi + 1}.</span>
-                <OptionFieldInput
-                  value={opt.label}
-                  onCommit={(v) => {
-                    const next = [...opts];
-                    next[oi] = { ...next[oi], label: v };
-                    updateOpts(next);
-                  }}
-                  className="flex-1 rounded bg-[var(--background)] px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400/50"
-                  placeholder="Label…"
-                />
-                <OptionFieldInput
-                  value={opt.value}
-                  onCommit={(v) => {
-                    const next = [...opts];
-                    next[oi] = { ...next[oi], value: v };
-                    updateOpts(next);
-                  }}
-                  className="flex-1 rounded bg-[var(--background)] px-1.5 py-0.5 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-amber-400/50"
-                  placeholder="Value…"
-                />
-                <button
-                  onClick={() => setExpandedOptIdx(oi)}
-                  className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                  title="Expand value editor"
+            {opts.map((opt, oi) => {
+              const valueBlank = !opt.value || !opt.value.trim();
+              return (
+              <div key={opt.id}>
+                <div
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg px-2.5 py-1.5 ring-1",
+                    valueBlank
+                      ? "bg-[var(--destructive)]/5 ring-[var(--destructive)]/30"
+                      : "bg-[var(--secondary)] ring-[var(--border)]",
+                  )}
                 >
-                  <Maximize2 size="0.625rem" />
-                </button>
-                <button
-                  onClick={() => {
-                    if (opts.length <= 2) return toast.error("A variable needs at least 2 options.");
-                    updateOpts(opts.filter((_, i) => i !== oi));
-                  }}
-                  className="shrink-0 rounded p-0.5 hover:bg-[var(--destructive)]/15"
-                  title="Remove option"
-                >
-                  <X size="0.625rem" className="text-[var(--destructive)]" />
-                </button>
+                  <span className="shrink-0 text-[0.625rem] font-medium text-amber-400">{oi + 1}.</span>
+                  <OptionFieldInput
+                    value={opt.label}
+                    onCommit={(v) => {
+                      const next = [...opts];
+                      next[oi] = { ...next[oi], label: v };
+                      updateOpts(next);
+                    }}
+                    className="flex-1 rounded bg-[var(--background)] px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400/50"
+                    placeholder="Label…"
+                  />
+                  <OptionFieldInput
+                    value={opt.value}
+                    onCommit={(v) => {
+                      const next = [...opts];
+                      next[oi] = { ...next[oi], value: v };
+                      updateOpts(next);
+                    }}
+                    className={cn(
+                      "flex-1 rounded px-1.5 py-0.5 font-mono text-xs focus:outline-none focus:ring-1",
+                      valueBlank
+                        ? "bg-[var(--destructive)]/10 ring-1 ring-[var(--destructive)]/30 placeholder:text-[var(--destructive)]/40"
+                        : "bg-[var(--background)] focus:ring-amber-400/50",
+                    )}
+                    placeholder="Value…"
+                  />
+                  <button
+                    onClick={() => setExpandedOptIdx(oi)}
+                    className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    title="Expand value editor"
+                  >
+                    <Maximize2 size="0.625rem" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (opts.length <= 1) return toast.error("A variable needs at least 1 option.");
+                      updateOpts(opts.filter((_, i) => i !== oi));
+                    }}
+                    className="shrink-0 rounded p-0.5 hover:bg-[var(--destructive)]/15"
+                    title="Remove option"
+                  >
+                    <X size="0.625rem" className="text-[var(--destructive)]" />
+                  </button>
+                </div>
+                {valueBlank && (
+                  <p className="mt-1 pl-6 text-[0.5625rem] text-[var(--destructive)]">Value cannot be empty.</p>
+                )}
               </div>
-            ))}
+            );
+            })}
             <button
               onClick={() => {
                 const newOpt = {

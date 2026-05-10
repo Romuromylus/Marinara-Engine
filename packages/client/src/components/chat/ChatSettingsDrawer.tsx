@@ -2,7 +2,7 @@
 // Chat: Settings Drawer — per-chat configuration
 // ──────────────────────────────────────────────
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { useQueryClient, useQueries } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
 import {
   X,
   Users,
@@ -50,6 +50,7 @@ import {
   StickyNote,
   Drama,
   RotateCcw,
+  Music2,
 } from "lucide-react";
 import { cn, getAvatarCropStyle, type AvatarCrop } from "../../lib/utils";
 import { showAlertDialog, showConfirmDialog, showPromptDialog } from "../../lib/app-dialogs";
@@ -87,6 +88,7 @@ import {
   chatKeys,
 } from "../../hooks/use-chats";
 import { api } from "../../lib/api-client";
+import { getChatDisplayName } from "../../lib/chat-display";
 import {
   getAgentRunIntervalMeta,
   getCadenceInputValue,
@@ -123,6 +125,7 @@ import {
   DEFAULT_IMPERSONATE_PROMPT,
   DEFAULT_AGENT_MAX_TOKENS,
   DEFAULT_AGENT_PROMPTS,
+  LIMITS,
   MAX_AGENT_MAX_TOKENS,
   MIN_AGENT_MAX_TOKENS,
   estimateAgentLoadCost,
@@ -130,7 +133,7 @@ import {
   AGENT_COST_HIGH_TOKENS,
   getDefaultBuiltInAgentSettings,
 } from "@marinara-engine/shared";
-import type { Chat, CharacterGroup } from "@marinara-engine/shared";
+import type { Chat, CharacterGroup, Lorebook } from "@marinara-engine/shared";
 import {
   isCustomToolSelectable,
   useCustomToolCapabilities,
@@ -158,6 +161,19 @@ const HIDDEN_ROLEPLAY_AGENTS = new Set([
   "autonomous-messenger",
 ]);
 
+type GameSpotifySourceType = "liked" | "playlist" | "artist" | "any";
+
+const GAME_SPOTIFY_SOURCE_OPTIONS: Array<{ id: GameSpotifySourceType; label: string; description: string }> = [
+  { id: "liked", label: "Liked Songs", description: "Pick from the user's saved tracks first." },
+  { id: "playlist", label: "Playlist", description: "Keep choices inside one Spotify playlist." },
+  { id: "artist", label: "Artist", description: "Search only around a named artist, like HOYO-MiX." },
+  { id: "any", label: "Any Spotify", description: "Let the DJ use Spotify search when it fits." },
+];
+
+function normalizeGameSpotifySourceType(value: unknown): GameSpotifySourceType {
+  return value === "playlist" || value === "artist" || value === "any" ? value : "liked";
+}
+
 const MODE_INTROS: Record<ChatMode, string> = {
   conversation:
     "Plain chat — no roleplay or game systems built in; autonomous messaging and other tools are optional below.",
@@ -175,6 +191,13 @@ type AvailableAgent = {
   category: string;
   phase: AgentPhase;
   builtIn: boolean;
+};
+
+type LorebookActiveReason = "Global" | "Character" | "Persona" | "Chat";
+
+type ActiveLorebookView = Lorebook & {
+  activeReasons: LorebookActiveReason[];
+  isPinned: boolean;
 };
 
 type AgentAddPreview = {
@@ -230,7 +253,8 @@ function normalizeNonNegativeInteger(value: unknown, fallback: number, max: numb
 
 function getChatActiveAgentIds(chat: Chat): string[] {
   const metadata = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
-  const activeIds = metadata && typeof metadata === "object" ? (metadata as { activeAgentIds?: unknown }).activeAgentIds : [];
+  const activeIds =
+    metadata && typeof metadata === "object" ? (metadata as { activeAgentIds?: unknown }).activeAgentIds : [];
   return Array.isArray(activeIds) ? activeIds.filter((id): id is string => typeof id === "string") : [];
 }
 
@@ -313,14 +337,40 @@ export function ChatSettingsDrawer({
     () => (Array.isArray(metadata.activeLorebookIds) ? metadata.activeLorebookIds : []),
     [metadata.activeLorebookIds],
   );
-  const existingActiveLorebooks = useMemo(() => {
-    const lorebookList = (lorebooks ?? []) as Array<{ id: string; name: string }>;
-    const lorebookById = new Map(lorebookList.map((lorebook) => [lorebook.id, lorebook]));
-    return activeLorebookIds.flatMap((lorebookId) => {
-      const lorebook = lorebookById.get(lorebookId);
-      return lorebook ? [lorebook] : [];
+  const activeLorebooks = useMemo<ActiveLorebookView[]>(() => {
+    const pinnedIds = new Set(activeLorebookIds);
+    const lorebookList = (lorebooks ?? []) as Lorebook[];
+
+    return lorebookList.flatMap((lorebook) => {
+      const reasons: LorebookActiveReason[] = [];
+      const isPinned = pinnedIds.has(lorebook.id);
+
+      if (lorebook.enabled !== false) {
+        if (isPinned) reasons.push("Chat");
+        if (lorebook.isGlobal) reasons.push("Global");
+        if (
+          lorebook.characterIds?.some((id) => chatCharIds.includes(id)) ||
+          (lorebook.characterId && chatCharIds.includes(lorebook.characterId))
+        ) {
+          reasons.push("Character");
+        }
+        if (
+          chat.personaId &&
+          (lorebook.personaIds?.includes(chat.personaId) || lorebook.personaId === chat.personaId)
+        ) {
+          reasons.push("Persona");
+        }
+        if (lorebook.chatId === chat.id && !reasons.includes("Chat")) reasons.push("Chat");
+      }
+
+      return reasons.length > 0 ? [{ ...lorebook, activeReasons: reasons, isPinned }] : [];
     });
-  }, [activeLorebookIds, lorebooks]);
+  }, [activeLorebookIds, chat.id, chat.personaId, chatCharIds, lorebooks]);
+  const activeLorebookIdSet = useMemo(() => new Set(activeLorebooks.map((lorebook) => lorebook.id)), [activeLorebooks]);
+  const lorebookTokenBudget =
+    typeof metadata.lorebookTokenBudget === "number" && Number.isFinite(metadata.lorebookTokenBudget)
+      ? Math.max(0, Math.floor(metadata.lorebookTokenBudget))
+      : LIMITS.DEFAULT_LOREBOOK_TOKEN_BUDGET;
   const activeAgentIds = useMemo<string[]>(() => metadata.activeAgentIds ?? [], [metadata.activeAgentIds]);
   const activeToolIds: string[] = metadata.activeToolIds ?? [];
   const gameLorebookKeeperEnabled = metadata.gameLorebookKeeperEnabled === true;
@@ -331,7 +381,13 @@ export function ChatSettingsDrawer({
         (book) => book.id === gameLorebookKeeperLorebookId,
       )
     : null;
-  const gameAgentFeatureCount = (metadata.enableAgents ? 1 : 0) + (gameLorebookKeeperEnabled ? 1 : 0);
+  const gameUseSpotifyMusic = metadata.gameUseSpotifyMusic === true;
+  const gameSpotifySourceType = normalizeGameSpotifySourceType(metadata.gameSpotifySourceType);
+  const gameSpotifyPlaylistId =
+    typeof metadata.gameSpotifyPlaylistId === "string" ? metadata.gameSpotifyPlaylistId : "";
+  const gameSpotifyArtist = typeof metadata.gameSpotifyArtist === "string" ? metadata.gameSpotifyArtist : "";
+  const gameAgentFeatureCount =
+    (metadata.enableAgents ? 1 : 0) + (gameLorebookKeeperEnabled ? 1 : 0) + (gameUseSpotifyMusic ? 1 : 0);
   const spriteCharacterIds: string[] = Array.isArray(metadata.spriteCharacterIds) ? metadata.spriteCharacterIds : [];
   const spritePosition: "left" | "right" = metadata.spritePosition === "right" ? "right" : "left";
   const spriteScale = normalizeSpriteDisplayValue(metadata.spriteScale, 1, 0.5, 1.75);
@@ -339,6 +395,16 @@ export function ChatSettingsDrawer({
   const [spriteScalePercent, setSpriteScalePercent] = useState(() => Math.round(spriteScale * 100));
   const [spriteOpacityPercent, setSpriteOpacityPercent] = useState(() => Math.round(spriteOpacity * 100));
   const hasCustomSpritePlacements = Object.keys(normalizeSpritePlacements(metadata.spritePlacements)).length > 0;
+  const spotifyPlaylistsQuery = useQuery({
+    queryKey: ["spotify", "playlists", 50],
+    queryFn: () =>
+      api.get<{ playlists: Array<{ id: string; name: string; uri: string; trackCount: number }> }>(
+        "/spotify/playlists?limit=50",
+      ),
+    enabled: open && isGame && gameUseSpotifyMusic && gameSpotifySourceType === "playlist",
+    staleTime: 60_000,
+    retry: false,
+  });
 
   useEffect(() => {
     setSpriteScalePercent(Math.round(spriteScale * 100));
@@ -355,6 +421,15 @@ export function ChatSettingsDrawer({
     }
     return map;
   }, [agentConfigs]);
+  const conversationSpotifyCommandsEnabled = metadata.conversationSpotifyCommandsEnabled === true;
+  const spotifyConnectionQuery = useQuery({
+    queryKey: ["spotify", "player", "conversation-settings"],
+    queryFn: () => api.get<{ connected: boolean }>("/spotify/player"),
+    enabled: open && isConversation,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const spotifyConnected = spotifyConnectionQuery.data?.connected === true;
 
   // Build the available agent list: built-in + custom agents from DB
   // In roleplay mode, hide agents that are either automatic or handled internally.
@@ -740,6 +815,11 @@ export function ChatSettingsDrawer({
     updateMeta.mutate({ id: chat.id, activeLorebookIds: current });
   };
 
+  const pinLorebookToChat = (lbId: string) => {
+    if (activeLorebookIds.includes(lbId)) return;
+    updateMeta.mutate({ id: chat.id, activeLorebookIds: [...activeLorebookIds, lbId] });
+  };
+
   const hasSecretPlotMemory = (memory: Record<string, unknown> | null | undefined) => {
     if (!memory) return false;
     const arc = memory.overarchingArc;
@@ -758,11 +838,10 @@ export function ChatSettingsDrawer({
     const sceneDirections = memory.sceneDirections;
     if (
       Array.isArray(sceneDirections) &&
-      sceneDirections.some(
-        (entry) =>
-          typeof entry === "string"
-            ? entry.trim()
-            : !!(entry && typeof entry === "object" && String((entry as Record<string, unknown>).direction ?? "").trim()),
+      sceneDirections.some((entry) =>
+        typeof entry === "string"
+          ? entry.trim()
+          : !!(entry && typeof entry === "object" && String((entry as Record<string, unknown>).direction ?? "").trim()),
       )
     ) {
       return true;
@@ -826,10 +905,7 @@ export function ChatSettingsDrawer({
       }
       await showAlertDialog({
         title: isRemoving ? "Couldn't Remove Agent" : "Couldn't Add Agent",
-        message:
-          error instanceof Error
-            ? error.message
-            : "The agent list could not be updated. Please try again.",
+        message: error instanceof Error ? error.message : "The agent list could not be updated. Please try again.",
       });
     }
   };
@@ -847,6 +923,50 @@ export function ChatSettingsDrawer({
   };
 
   const currentPromptPresetHasVariables = (currentPromptPresetFull?.choiceBlocks?.length ?? 0) > 0;
+  const currentPromptPresetHasLorebookMarker = useMemo(() => {
+    const sections = currentPromptPresetFull?.sections ?? [];
+    return sections.some((section) => {
+      const enabled = (section as { enabled?: boolean | string }).enabled;
+      const isMarker = (section as { isMarker?: boolean | string }).isMarker;
+      if (enabled === false || enabled === "false") return false;
+      if (isMarker !== true && isMarker !== "true") return false;
+      try {
+        const config =
+          typeof section.markerConfig === "string" ? JSON.parse(section.markerConfig) : section.markerConfig;
+        return (
+          config?.type === "lorebook" || config?.type === "world_info_before" || config?.type === "world_info_after"
+        );
+      } catch {
+        return false;
+      }
+    });
+  }, [currentPromptPresetFull?.sections]);
+  const hasScopedOrGlobalLorebooks = useMemo(() => {
+    return (
+      (lorebooks ?? []) as Array<{
+        id: string;
+        enabled?: boolean;
+        isGlobal?: boolean;
+        characterId?: string | null;
+        characterIds?: string[];
+        personaId?: string | null;
+        personaIds?: string[];
+        chatId?: string | null;
+      }>
+    ).some(
+      (lorebook) =>
+        lorebook.enabled !== false &&
+        (lorebook.isGlobal ||
+          activeLorebookIds.includes(lorebook.id) ||
+          lorebook.characterIds?.some((id) => chatCharIds.includes(id)) ||
+          (lorebook.characterId && chatCharIds.includes(lorebook.characterId)) ||
+          (chat.personaId && lorebook.personaIds?.includes(chat.personaId)) ||
+          (lorebook.personaId && lorebook.personaId === chat.personaId) ||
+          (lorebook.chatId && lorebook.chatId === chat.id)),
+    );
+  }, [activeLorebookIds, chat.id, chat.personaId, chatCharIds, lorebooks]);
+  const showLorebookMarkerWarning =
+    !!chat.promptPresetId && hasScopedOrGlobalLorebooks && !currentPromptPresetHasLorebookMarker;
 
   const setPreset = (presetId: string | null) => {
     updateChat.mutate(
@@ -936,9 +1056,16 @@ export function ChatSettingsDrawer({
   const [scenePromptDraft, setScenePromptDraft] = useState(metadata.sceneSystemPrompt ?? "");
   const [groupScenarioDraft, setGroupScenarioDraft] = useState((metadata.groupScenarioText as string) ?? "");
   const [groupScenarioExpanded, setGroupScenarioExpanded] = useState(false);
-  const [gameAgentPool] = useState<string[]>(() => Array.from(new Set(activeAgentIds)));
+  const gameAgentPool = useMemo(
+    () => Array.from(new Set(activeAgentIds.filter((id) => id !== "spotify"))),
+    [activeAgentIds],
+  );
   const [extraPromptDraft, setExtraPromptDraft] = useState((metadata.gameExtraPrompt as string) ?? "");
   const [extraPromptExpanded, setExtraPromptExpanded] = useState(false);
+  const [gameImagePromptInstructionsDraft, setGameImagePromptInstructionsDraft] = useState(
+    (metadata.gameImagePromptInstructions as string) ?? "",
+  );
+  const [gameSpotifyArtistDraft, setGameSpotifyArtistDraft] = useState(gameSpotifyArtist);
 
   // ── Chat Settings Presets ──
   const presetMode = (chatMode === "visual_novel" ? "roleplay" : chatMode) as ChatMode;
@@ -969,6 +1096,14 @@ export function ChatSettingsDrawer({
       setAddingAgentToChat(false);
     }
   }, [open]);
+
+  useEffect(() => {
+    setGameImagePromptInstructionsDraft((metadata.gameImagePromptInstructions as string) ?? "");
+  }, [chat.id, metadata.gameImagePromptInstructions]);
+
+  useEffect(() => {
+    setGameSpotifyArtistDraft(gameSpotifyArtist);
+  }, [chat.id, gameSpotifyArtist]);
 
   const openAgentAddModal = (agent: AvailableAgent) => {
     setAgentAddCadenceInputFocused(false);
@@ -1045,6 +1180,63 @@ export function ChatSettingsDrawer({
       setAddingAgentToChat(false);
     }
   };
+
+  const ensureSpotifyAgent = useCallback(async () => {
+    const builtInMeta = BUILT_IN_AGENTS.find((entry) => entry.id === "spotify");
+    if (!builtInMeta) throw new Error("Spotify DJ agent metadata is missing.");
+    const config = agentConfigsByType.get("spotify") ?? null;
+    const nextSettings: Record<string, unknown> = {
+      ...getDefaultBuiltInAgentSettings("spotify"),
+      ...parseAgentSettings(config?.settings),
+      enabledTools: DEFAULT_AGENT_TOOLS.spotify ?? [],
+    };
+
+    if (config) {
+      await updateAgentConfig.mutateAsync({ id: config.id, enabled: true, settings: nextSettings });
+      return;
+    }
+
+    await createAgent.mutateAsync({
+      type: builtInMeta.id,
+      name: builtInMeta.name,
+      description: builtInMeta.description,
+      phase: builtInMeta.phase,
+      enabled: true,
+      connectionId: null,
+      promptTemplate: "",
+      settings: nextSettings,
+    });
+  }, [agentConfigsByType, createAgent, updateAgentConfig]);
+
+  const toggleGameSpotifyMusic = useCallback(async () => {
+    if (gameUseSpotifyMusic) {
+      await updateMeta.mutateAsync({
+        id: chat.id,
+        gameUseSpotifyMusic: false,
+        activeAgentIds: activeAgentIds.filter((id) => id !== "spotify"),
+      });
+      return;
+    }
+
+    try {
+      await ensureSpotifyAgent();
+      await updateMeta.mutateAsync({
+        id: chat.id,
+        enableAgents: true,
+        gameUseSpotifyMusic: true,
+        gameSpotifySourceType,
+        activeAgentIds: Array.from(new Set([...activeAgentIds, "spotify"])),
+      });
+    } catch (error) {
+      await showAlertDialog({
+        title: "Couldn't Enable Spotify DJ",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Spotify DJ could not be enabled for this game. Check the Spotify agent setup and try again.",
+      });
+    }
+  }, [activeAgentIds, chat.id, ensureSpotifyAgent, gameSpotifySourceType, gameUseSpotifyMusic, updateMeta]);
 
   const agentAddIntervalMeta = agentAddPreview
     ? getAgentRunIntervalMeta(agentAddPreview.agent.id, agentAddPreview.agent.builtIn)
@@ -1507,6 +1699,12 @@ export function ChatSettingsDrawer({
                   </button>
                 )}
               </div>
+              {showLorebookMarkerWarning && (
+                <div className="mt-2 flex items-start gap-2 rounded-lg bg-amber-400/10 px-3 py-2 text-[0.6875rem] text-amber-200 ring-1 ring-amber-400/25">
+                  <AlertTriangle size="0.75rem" className="mt-[0.125rem] shrink-0" />
+                  <span>This preset has active lorebooks available, but no lorebook marker.</span>
+                </div>
+              )}
             </Section>
           )}
 
@@ -2410,6 +2608,47 @@ export function ChatSettingsDrawer({
                   </button>
                 )}
 
+                <button
+                  onClick={() => {
+                    updateMeta.mutate({
+                      id: chat.id,
+                      conversationSpotifyCommandsEnabled: !conversationSpotifyCommandsEnabled,
+                    });
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-all",
+                    conversationSpotifyCommandsEnabled
+                      ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30"
+                      : "bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                  )}
+                >
+                  <div className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5 text-xs font-medium">
+                      Spotify Song Commands
+                    </span>
+                    <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                      {spotifyConnected
+                        ? "Characters may pick songs for your active Spotify player"
+                        : spotifyConnectionQuery.isFetching
+                          ? "Checking Spotify connection..."
+                          : "Only works after Spotify is connected in Agents"}
+                    </p>
+                  </div>
+                  <div
+                    className={cn(
+                      "h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                      conversationSpotifyCommandsEnabled ? "bg-[var(--primary)]" : "bg-[var(--muted-foreground)]/50",
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                        conversationSpotifyCommandsEnabled && "translate-x-3.5",
+                      )}
+                    />
+                  </div>
+                </button>
+
                 {/* Conversation schedules toggle */}
                 <button
                   onClick={() => {
@@ -2667,7 +2906,9 @@ export function ChatSettingsDrawer({
                     <div className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30">
                       <ArrowRightLeft size="0.875rem" className="text-[var(--primary)]" />
                       <div className="flex-1 min-w-0">
-                        <span className="truncate text-xs font-medium">{linked?.name ?? "Unknown chat"}</span>
+                        <span className="truncate text-xs font-medium">
+                          {linked ? getChatDisplayName(linked) : "Unknown chat"}
+                        </span>
                         <p className="text-[0.625rem] text-[var(--muted-foreground)]">
                           {linked ? (linked.mode === "roleplay" ? "Roleplay" : linked.mode) : "Deleted"}
                         </p>
@@ -2705,7 +2946,7 @@ export function ChatSettingsDrawer({
                         c.id !== chat.id &&
                         (c.mode === "roleplay" || c.mode === "game") &&
                         !c.connectedChatId &&
-                        c.name.toLowerCase().includes(connectionSearch.toLowerCase()),
+                        getChatDisplayName(c).toLowerCase().includes(connectionSearch.toLowerCase()),
                     )
                     .map((c) => (
                       <button
@@ -2717,7 +2958,7 @@ export function ChatSettingsDrawer({
                         className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--accent)]"
                       >
                         <MessageSquare size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
-                        <span className="truncate">{c.name}</span>
+                        <span className="truncate">{getChatDisplayName(c)}</span>
                       </button>
                     ))}
                 </PickerDropdown>
@@ -2742,7 +2983,9 @@ export function ChatSettingsDrawer({
                       <div className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30">
                         <MessageCircle size="0.875rem" className="text-[var(--primary)]" />
                         <div className="flex-1 min-w-0">
-                          <span className="truncate text-xs font-medium">{linked?.name ?? "Unknown chat"}</span>
+                          <span className="truncate text-xs font-medium">
+                            {linked ? getChatDisplayName(linked) : "Unknown chat"}
+                          </span>
                           <p className="text-[0.625rem] text-[var(--muted-foreground)]">Conversation</p>
                         </div>
                         <button
@@ -2816,7 +3059,9 @@ export function ChatSettingsDrawer({
                   <div className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30">
                     <MessageCircle size="0.875rem" className="text-[var(--primary)]" />
                     <div className="flex-1 min-w-0">
-                      <span className="truncate text-xs font-medium">{linked?.name ?? "Unknown chat"}</span>
+                      <span className="truncate text-xs font-medium">
+                        {linked ? getChatDisplayName(linked) : "Unknown chat"}
+                      </span>
                       <p className="text-[0.625rem] text-[var(--muted-foreground)]">Conversation</p>
                     </div>
                     <button
@@ -2865,7 +3110,7 @@ export function ChatSettingsDrawer({
                         c.id !== chat.id &&
                         c.mode === "conversation" &&
                         !c.connectedChatId &&
-                        c.name.toLowerCase().includes(connectionSearch.toLowerCase()),
+                        getChatDisplayName(c).toLowerCase().includes(connectionSearch.toLowerCase()),
                     )
                     .map((c) => (
                       <button
@@ -2877,7 +3122,7 @@ export function ChatSettingsDrawer({
                         className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--accent)]"
                       >
                         <MessageSquare size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
-                        <span className="truncate">{c.name}</span>
+                        <span className="truncate">{getChatDisplayName(c)}</span>
                       </button>
                     ))}
                 </PickerDropdown>
@@ -2889,29 +3134,70 @@ export function ChatSettingsDrawer({
           <Section
             label="Lorebooks"
             icon={<BookOpen size="0.875rem" />}
-            count={existingActiveLorebooks.length}
+            count={activeLorebooks.length}
             help="Lorebooks contain world info, character backstories, and lore that gets injected into the AI's context when relevant keywords appear."
           >
+            <div className="mb-2 rounded-lg bg-[var(--secondary)]/70 p-3 ring-1 ring-[var(--border)]">
+              <label className="mb-1.5 flex items-center gap-1 text-xs font-medium">
+                Lorebook Token Budget{" "}
+                <HelpTooltip
+                  text={`Context cap for activated lorebook retrievals in this chat. Default: ${LIMITS.DEFAULT_LOREBOOK_TOKEN_BUDGET}. Set to 0 for unlimited.`}
+                />
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={lorebookTokenBudget}
+                onChange={(event) => {
+                  const next = Math.max(0, Math.floor(Number(event.target.value) || 0));
+                  updateMeta.mutate({ id: chat.id, lorebookTokenBudget: next });
+                }}
+                className="w-full rounded-lg bg-[var(--background)] px-3 py-2 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+              />
+            </div>
+
             {/* Active lorebooks */}
-            {existingActiveLorebooks.length === 0 ? (
-              <p className="text-[0.6875rem] text-[var(--muted-foreground)]">No lorebooks added to this chat.</p>
+            {activeLorebooks.length === 0 ? (
+              <p className="text-[0.6875rem] text-[var(--muted-foreground)]">No lorebooks active in this chat.</p>
             ) : (
               <div className="flex flex-col gap-1">
-                {existingActiveLorebooks.map((lb) => {
+                {activeLorebooks.map((lb) => {
                   return (
                     <div
                       key={lb.id}
                       className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
                     >
                       <BookOpen size="0.875rem" className="text-[var(--primary)]" />
-                      <span className="flex-1 truncate text-xs">{lb.name}</span>
-                      <button
-                        onClick={() => toggleLorebook(lb.id)}
-                        className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
-                        title="Remove from chat"
-                      >
-                        <Trash2 size="0.6875rem" />
-                      </button>
+                      <div className="min-w-0 flex-1">
+                        <span className="block truncate text-xs">{lb.name}</span>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {lb.activeReasons.map((reason) => (
+                            <span
+                              key={reason}
+                              className="rounded-full bg-[var(--background)]/70 px-1.5 py-0.5 text-[0.5625rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)]"
+                            >
+                              {reason}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      {lb.isPinned ? (
+                        <button
+                          onClick={() => toggleLorebook(lb.id)}
+                          className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
+                          title="Remove from chat"
+                        >
+                          <Trash2 size="0.6875rem" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => pinLorebookToChat(lb.id)}
+                          className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--primary)]/15 hover:text-[var(--primary)]"
+                          title="Add to chat"
+                        >
+                          <Plus size="0.6875rem" />
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -2937,7 +3223,7 @@ export function ChatSettingsDrawer({
                 placeholder="Search lorebooks…"
               >
                 {((lorebooks ?? []) as Array<{ id: string; name: string }>)
-                  .filter((lb) => !activeLorebookIds.includes(lb.id))
+                  .filter((lb) => !activeLorebookIdSet.has(lb.id))
                   .filter((lb) => lb.name.toLowerCase().includes(lbSearch.toLowerCase()))
                   .map((lb) => (
                     <button
@@ -2954,12 +3240,12 @@ export function ChatSettingsDrawer({
                     </button>
                   ))}
                 {((lorebooks ?? []) as Array<{ id: string; name: string }>)
-                  .filter((lb) => !activeLorebookIds.includes(lb.id))
+                  .filter((lb) => !activeLorebookIdSet.has(lb.id))
                   .filter((lb) => lb.name.toLowerCase().includes(lbSearch.toLowerCase())).length === 0 && (
                   <p className="px-3 py-2 text-[0.6875rem] text-[var(--muted-foreground)]">
-                    {((lorebooks ?? []) as Array<{ id: string }>).filter((lb) => !activeLorebookIds.includes(lb.id))
+                    {((lorebooks ?? []) as Array<{ id: string }>).filter((lb) => !activeLorebookIdSet.has(lb.id))
                       .length === 0
-                      ? "All lorebooks already added."
+                      ? "All available lorebooks are already active here."
                       : "No matches."}
                   </p>
                 )}
@@ -2978,7 +3264,8 @@ export function ChatSettingsDrawer({
               <div className="space-y-2">
                 {isGame && metadata.enableAgents && (
                   <p className="px-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                    Toggle agents for this game session. Only two are allowed to ensure the game's format doesn't break.
+                    Toggle agents for this game session. Only the ones below are allowed to ensure the game's format
+                    doesn't break.
                   </p>
                 )}
                 <button
@@ -3095,6 +3382,147 @@ export function ChatSettingsDrawer({
                       />
                     </div>
                   </button>
+                )}
+
+                {isGame && (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => void toggleGameSpotifyMusic()}
+                      className={cn(
+                        "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-all",
+                        gameUseSpotifyMusic
+                          ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30"
+                          : "bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                      )}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 text-xs font-medium">
+                          <Music2 size="0.75rem" className="text-[var(--primary)]" />
+                          <span>Spotify DJ Music</span>
+                        </div>
+                        <p className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
+                          Use Spotify instead of the built-in Game Mode music library.
+                        </p>
+                      </div>
+                      <div
+                        className={cn(
+                          "h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                          gameUseSpotifyMusic ? "bg-[var(--primary)]" : "bg-[var(--muted-foreground)]/50",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                            gameUseSpotifyMusic && "translate-x-3.5",
+                          )}
+                        />
+                      </div>
+                    </button>
+
+                    {gameUseSpotifyMusic && (
+                      <div className="space-y-2 rounded-lg bg-[var(--background)]/55 p-3 ring-1 ring-[var(--border)]">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                            Music source
+                          </span>
+                          <select
+                            value={gameSpotifySourceType}
+                            onChange={(event) => {
+                              const next = normalizeGameSpotifySourceType(event.target.value);
+                              updateMeta.mutate({
+                                id: chat.id,
+                                gameSpotifySourceType: next,
+                                gameSpotifyPlaylistId: next === "playlist" ? gameSpotifyPlaylistId || null : null,
+                                gameSpotifyPlaylistName:
+                                  next === "playlist" ? (metadata.gameSpotifyPlaylistName as string) || null : null,
+                                gameSpotifyArtist: next === "artist" ? gameSpotifyArtistDraft.trim() || null : null,
+                              });
+                            }}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)]"
+                          >
+                            {GAME_SPOTIFY_SOURCE_OPTIONS.map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="text-[0.5625rem] text-[var(--muted-foreground)]">
+                            {GAME_SPOTIFY_SOURCE_OPTIONS.find((option) => option.id === gameSpotifySourceType)
+                              ?.description ?? ""}
+                          </span>
+                        </label>
+
+                        {gameSpotifySourceType === "playlist" && (
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Playlist</span>
+                            {spotifyPlaylistsQuery.data?.playlists.length ? (
+                              <select
+                                value={gameSpotifyPlaylistId}
+                                onChange={(event) => {
+                                  const playlist = spotifyPlaylistsQuery.data?.playlists.find(
+                                    (entry) => entry.id === event.target.value,
+                                  );
+                                  updateMeta.mutate({
+                                    id: chat.id,
+                                    gameSpotifyPlaylistId: event.target.value || null,
+                                    gameSpotifyPlaylistName: playlist?.name ?? null,
+                                  });
+                                }}
+                                className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)]"
+                              >
+                                <option value="">Choose playlist...</option>
+                                {spotifyPlaylistsQuery.data.playlists.map((playlist) => (
+                                  <option key={playlist.id} value={playlist.id}>
+                                    {playlist.name} ({playlist.trackCount})
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                key={`${chat.id}-${gameSpotifyPlaylistId}`}
+                                defaultValue={gameSpotifyPlaylistId}
+                                onBlur={(event) =>
+                                  updateMeta.mutate({
+                                    id: chat.id,
+                                    gameSpotifyPlaylistId: event.target.value.trim() || null,
+                                    gameSpotifyPlaylistName: null,
+                                  })
+                                }
+                                placeholder={
+                                  spotifyPlaylistsQuery.isFetching ? "Loading playlists..." : "Paste playlist ID"
+                                }
+                                className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]/50"
+                              />
+                            )}
+                            {spotifyPlaylistsQuery.isError && (
+                              <span className="text-[0.5625rem] text-amber-400/90">
+                                Connect Spotify in the Spotify DJ agent to load playlist names.
+                              </span>
+                            )}
+                          </label>
+                        )}
+
+                        {gameSpotifySourceType === "artist" && (
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Artist</span>
+                            <input
+                              value={gameSpotifyArtistDraft}
+                              onChange={(event) => setGameSpotifyArtistDraft(event.target.value)}
+                              onBlur={() =>
+                                updateMeta.mutate({
+                                  id: chat.id,
+                                  gameSpotifyArtist: gameSpotifyArtistDraft.trim() || null,
+                                })
+                              }
+                              placeholder="HOYO-MiX"
+                              className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]/50"
+                            />
+                          </label>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {metadata.enableAgents && !isGame && (
@@ -3482,7 +3910,7 @@ export function ChatSettingsDrawer({
                       </div>
                     </button>
                     {metadata.enableSpriteGeneration && (
-                      <div className="mt-1.5 px-3">
+                      <div className="mt-1.5 space-y-2 px-3">
                         <select
                           value={(metadata.gameImageConnectionId as string) ?? ""}
                           onChange={(e) =>
@@ -3498,6 +3926,28 @@ export function ChatSettingsDrawer({
                             </option>
                           ))}
                         </select>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                            Scene image instructions
+                          </span>
+                          <textarea
+                            value={gameImagePromptInstructionsDraft}
+                            onChange={(e) => setGameImagePromptInstructionsDraft(e.target.value)}
+                            onBlur={() => {
+                              const stored = (metadata.gameImagePromptInstructions as string) ?? "";
+                              if (gameImagePromptInstructionsDraft !== stored) {
+                                updateMeta.mutate({
+                                  id: chat.id,
+                                  gameImagePromptInstructions: gameImagePromptInstructionsDraft.trim() || null,
+                                });
+                              }
+                            }}
+                            placeholder="e.g. Dottore's mask completely covers his eyes; never render visible eyes behind it."
+                            rows={3}
+                            maxLength={1200}
+                            className="min-h-[4.75rem] w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-2 text-xs leading-relaxed text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/50"
+                          />
+                        </label>
                       </div>
                     )}
                   </div>
@@ -3858,7 +4308,7 @@ export function ChatSettingsDrawer({
             <Section
               label="Memory Recall"
               icon={<Brain size="0.875rem" />}
-              help="When enabled, relevant fragments from this chat are automatically recalled and injected into the prompt as memories. Uses local embeddings when available, otherwise falls back to the configured embedding connection."
+              help="When enabled, relevant fragments from this chat are automatically recalled and injected into the prompt as memories. Uses the local embedding model when available, or the configured embedding connection."
             >
               {renderMemoryRecallControls(true)}
             </Section>
@@ -4162,7 +4612,7 @@ export function ChatSettingsDrawer({
             <Section
               label="Memory Recall"
               icon={<Brain size="0.875rem" />}
-              help="When enabled, relevant fragments from this chat are automatically recalled and injected into the prompt as memories. Uses local embeddings when available, otherwise falls back to the configured embedding connection."
+              help="When enabled, relevant fragments from this chat are automatically recalled and injected into the prompt as memories. Uses the local embedding model when available, or the configured embedding connection."
             >
               {renderMemoryRecallControls(metadata.sceneStatus === "active")}
             </Section>
@@ -4895,7 +5345,13 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
                     </div>
                     <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
                       <span>{memory.messageCount} messages</span>
-                      <span>{memory.hasEmbedding ? "Vectorized" : "Waiting for vector"}</span>
+                      <span>
+                        {memory.hasEmbedding
+                          ? "Vectorized"
+                          : memory.embeddingStatus === "unavailable"
+                            ? "Embedding unavailable"
+                            : "Waiting for vector"}
+                      </span>
                       <span>Created {formatMemoryDate(memory.createdAt)}</span>
                     </div>
                   </div>

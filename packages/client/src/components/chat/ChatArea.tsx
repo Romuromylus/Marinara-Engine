@@ -35,6 +35,7 @@ import { useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useConnections } from "../../hooks/use-connections";
 import { usePageActivity } from "../../hooks/use-page-activity";
 import { api } from "../../lib/api-client";
+import { getChatDisplayName, parseChatMetadata } from "../../lib/chat-display";
 import { parseCharacterDisplayData } from "../../lib/character-display";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { useGameStateStore } from "../../stores/game-state.store";
@@ -66,19 +67,6 @@ const normalizeSpriteDisplayValue = (value: unknown, fallback: number, min: numb
   const numeric = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(min, Math.min(max, numeric));
-};
-
-const parseMetadataRecord = (raw: unknown): Record<string, any> => {
-  if (!raw) return {};
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return typeof raw === "object" ? (raw as Record<string, any>) : {};
 };
 
 const INTUITIVE_SWIPE_MIN_DISTANCE = 56;
@@ -353,7 +341,7 @@ export function ChatArea() {
   const chatMeta = useMemo(() => {
     if (!chat) return {};
     const raw = (chat as unknown as { metadata?: string | Record<string, unknown> }).metadata;
-    return parseMetadataRecord(raw);
+    return parseChatMetadata(raw);
   }, [chat]);
   const spriteCharacterIds: string[] = Array.isArray(chatMeta.spriteCharacterIds) ? chatMeta.spriteCharacterIds : [];
   const spritePosition: SpriteSide = chatMeta.spritePosition === "right" ? "right" : "left";
@@ -434,10 +422,17 @@ export function ChatArea() {
   // only set on truthy values, leaving the global chatBackground stale when
   // switching to a chat whose metadata has been cleared, which made a removed
   // background re-appear after a chat switch round-trip.
+  const restoredChatBackgroundRef = useRef<{ chatId: string | null; url: string | null; isSyncing: boolean }>({
+    chatId: null,
+    url: null,
+    isSyncing: false,
+  });
   useEffect(() => {
     if (!chat?.id) return;
     const bg = chatMeta.background as string | null | undefined;
-    useUIStore.getState().setChatBackground(bg ? `/api/backgrounds/file/${encodeURIComponent(bg)}` : null);
+    const restoredUrl = bg ? `/api/backgrounds/file/${encodeURIComponent(bg)}` : null;
+    restoredChatBackgroundRef.current = { chatId: chat.id, url: restoredUrl, isSyncing: true };
+    useUIStore.getState().setChatBackground(restoredUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat?.id]);
 
@@ -452,6 +447,14 @@ export function ChatArea() {
   useEffect(() => {
     if (!chat?.id) return;
     const savedFilename = (chatMeta.background as string | null | undefined) ?? null;
+    const restoredBackground = restoredChatBackgroundRef.current;
+
+    if (restoredBackground.isSyncing && (restoredBackground.chatId !== chat.id || chatBackground !== restoredBackground.url)) {
+      return;
+    }
+    if (restoredBackground.isSyncing) {
+      restoredBackground.isSyncing = false;
+    }
 
     if (!chatBackground) {
       if (savedFilename === null) return;
@@ -772,7 +775,7 @@ export function ChatArea() {
         {
           onSuccess: () => {
             // Refetch game state so the HUD shows trackers for the active swipe
-            if (activeChatId) {
+            if (isGameChat && activeChatId) {
               api
                 .get<import("@marinara-engine/shared").GameState | null>(`/chats/${activeChatId}/game-state`)
                 .then((gs) => {
@@ -784,7 +787,7 @@ export function ChatArea() {
         },
       );
     },
-    [setActiveSwipe, activeChatId],
+    [setActiveSwipe, isGameChat, activeChatId],
   );
 
   const handleEdit = useCallback(
@@ -1408,17 +1411,21 @@ export function ChatArea() {
   const chatList =
     (allChats as Array<{ id: string; name: string; metadata?: string | Record<string, unknown> }> | undefined) ?? [];
   const connectedChatName = chat?.connectedChatId
-    ? chatList.find((item) => item.id === chat.connectedChatId)?.name
+    ? getChatDisplayName(chatList.find((item) => item.id === chat.connectedChatId))
     : undefined;
   const activeSceneChat = chatMeta.activeSceneChatId
     ? chatList.find((item) => item.id === chatMeta.activeSceneChatId)
     : undefined;
-  const activeSceneMeta = parseMetadataRecord(activeSceneChat?.metadata);
+  const activeSceneMeta = parseChatMetadata(activeSceneChat?.metadata);
   const hasActiveLinkedScene = activeSceneChat && activeSceneMeta.sceneStatus === "active";
   const isSceneChat = chatMeta.sceneStatus === "active" || Boolean(chatMeta.sceneOriginChatId);
   const conversationSceneInfo =
     chatMeta.activeSceneChatId && hasActiveLinkedScene
-      ? { variant: "origin" as const, sceneChatId: chatMeta.activeSceneChatId, sceneChatName: activeSceneChat.name }
+      ? {
+          variant: "origin" as const,
+          sceneChatId: chatMeta.activeSceneChatId,
+          sceneChatName: getChatDisplayName(activeSceneChat),
+        }
       : chatMeta.sceneStatus === "active"
         ? {
             variant: "scene" as const,

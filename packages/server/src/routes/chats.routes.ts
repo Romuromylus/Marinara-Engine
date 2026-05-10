@@ -12,7 +12,7 @@ import {
   resolveMacros,
   summariesPatchSchema,
 } from "@marinara-engine/shared";
-import type { CharacterData, ChatMemoryChunk } from "@marinara-engine/shared";
+import type { CharacterData, ChatMemoryChunk, LorebookEntryTimingState } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
@@ -20,7 +20,7 @@ import { createRegexScriptsStorage } from "../services/storage/regex-scripts.sto
 import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../services/llm/local-sidecar.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { generateMissingConversationSummaries } from "../services/conversation/auto-summary.service.js";
-import { rebuildMemoryChunks, resolveMemoryRecallEmbeddingContext } from "../services/memory-recall.js";
+import { rebuildMemoryChunks } from "../services/memory-recall.js";
 import { wrapContent } from "../services/prompt/format-engine.js";
 import { newId } from "../utils/id-generator.js";
 import { characters, gameStateSnapshots, memoryChunks } from "../db/schema/index.js";
@@ -30,6 +30,10 @@ import { join } from "path";
 import { DATA_DIR } from "../utils/data-dir.js";
 import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
 import { findLastIndex, parseExtra, shouldEnableAgentsForGeneration } from "./generate/generate-route-utils.js";
+import {
+  isMemoryRecallVectorizerAvailable,
+  resolveMemoryRecallEmbeddingSource,
+} from "../services/memory-recall-embedding.js";
 
 type TrackerWrapFormat = "xml" | "markdown" | "none";
 type EntryStateOverrides = Record<string, { ephemeral?: number | null; enabled?: boolean }>;
@@ -176,23 +180,6 @@ function formatPeekTrackerContextBlock(args: {
     return `<context>\n${trackerParts.map((part) => "    " + part.replace(/\n/g, "\n    ")).join("\n")}\n</context>`;
   }
   return `# Context\n*(Established state as of the last message. Do not re-describe — advance from here.)*\n${trackerParts.join("\n")}`;
-}
-
-async function resolveChatMemoryRecallEmbeddingContext(
-  app: FastifyInstance,
-  chat: { connectionId?: string | null; metadata?: unknown },
-): Promise<Awaited<ReturnType<typeof resolveMemoryRecallEmbeddingContext>>> {
-  const storage = createConnectionsStorage(app.db);
-  const chatMeta = parseExtra(chat.metadata) as Record<string, unknown>;
-  const defaultConnection = chat.connectionId ? null : await storage.getDefault();
-  const connId = chat.connectionId ?? defaultConnection?.id;
-  const conn = connId ? await storage.getWithKey(connId) : null;
-  return resolveMemoryRecallEmbeddingContext({
-    connections: storage,
-    conn,
-    baseUrl: conn?.baseUrl?.replace(/\/+$/, "") ?? "",
-    chatMeta,
-  });
 }
 
 function resolveLorebookGenerationTriggers(mode: unknown): string[] {
@@ -582,6 +569,10 @@ export async function chatsRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/:id/memories", async (req, reply) => {
     const chat = await storage.getById(req.params.id);
     if (!chat) return reply.status(404).send({ error: "Chat not found" });
+    const vectorizerAvailable = await isMemoryRecallVectorizerAvailable(app.db, {
+      chatMetadata: chat.metadata,
+      connectionId: chat.connectionId,
+    });
 
     const chunks = await app.db
       .select({
@@ -603,6 +594,7 @@ export async function chatsRoutes(app: FastifyInstance) {
         ({
           ...chunk,
           hasEmbedding: !!embedding,
+          embeddingStatus: embedding ? "vectorized" : vectorizerAvailable ? "pending" : "unavailable",
         }) satisfies ChatMemoryChunk,
     );
   });
@@ -636,8 +628,11 @@ export async function chatsRoutes(app: FastifyInstance) {
       personas.find((candidate) => candidate.isActive === "true");
     const userName = persona?.name ?? "User";
 
-    const embeddingContext = await resolveChatMemoryRecallEmbeddingContext(app, chat);
-    const rebuilt = await rebuildMemoryChunks(app.db, req.params.id, { userName, characterNames }, embeddingContext);
+    const embeddingSource = await resolveMemoryRecallEmbeddingSource(app.db, {
+      chatMetadata: chat.metadata,
+      connectionId: chat.connectionId,
+    });
+    const rebuilt = await rebuildMemoryChunks(app.db, req.params.id, { userName, characterNames }, { embeddingSource });
     return { rebuilt };
   });
 
@@ -716,6 +711,22 @@ export async function chatsRoutes(app: FastifyInstance) {
         await storage.updateSwipeExtra(req.params.messageId, updated.activeSwipeIndex, partial);
       }
       return updated;
+    },
+  );
+
+  // Bulk-set hiddenFromAI on many messages (iterates per message through the storage layer)
+  app.patch<{ Params: { chatId: string }; Body: { messageIds: string[]; hidden: boolean } }>(
+    "/:chatId/messages/bulk-hidden",
+    async (req, reply) => {
+      const { messageIds, hidden } = req.body;
+      if (!Array.isArray(messageIds) || messageIds.length === 0) {
+        return reply.status(400).send({ error: "messageIds must be a non-empty array" });
+      }
+      if (typeof hidden !== "boolean") {
+        return reply.status(400).send({ error: "hidden must be a boolean" });
+      }
+      const count = await storage.bulkSetHiddenFromAI(req.params.chatId, messageIds, hidden);
+      return { updated: count };
     },
   );
 
@@ -1126,8 +1137,32 @@ export async function chatsRoutes(app: FastifyInstance) {
             activeLorebookIds: Array.isArray(chatMeta.activeLorebookIds)
               ? (chatMeta.activeLorebookIds as string[])
               : [],
-            entryStateOverrides,
-            generationTriggers: resolveLorebookGenerationTriggers(chat.mode),
+            entryStateOverrides:
+              ((chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) &&
+              typeof (chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) === "object")
+                ? ((chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) as Record<
+                    string,
+                    { ephemeral?: number | null; enabled?: boolean }
+                  >)
+                : undefined,
+            entryTimingStates:
+              ((chatMeta.entryTimingStates ?? chatMeta.lorebookEntryTimingStates) &&
+              typeof (chatMeta.entryTimingStates ?? chatMeta.lorebookEntryTimingStates) === "object")
+                ? ((chatMeta.entryTimingStates ?? chatMeta.lorebookEntryTimingStates) as Record<
+                    string,
+                    LorebookEntryTimingState
+                  >)
+                : undefined,
+            generationTriggers:
+              ((chatMeta.generationTriggers ?? chatMeta.lorebookGenerationTriggers) &&
+              Array.isArray(chatMeta.generationTriggers ?? chatMeta.lorebookGenerationTriggers))
+                ? ((chatMeta.generationTriggers ?? chatMeta.lorebookGenerationTriggers) as string[])
+                : undefined,
+            lorebookTokenBudget:
+              typeof (chatMeta.lorebookTokenBudget ?? chatMeta.generationLorebookTokenBudget) === "number"
+                ? ((chatMeta.lorebookTokenBudget ?? chatMeta.generationLorebookTokenBudget) as number)
+                : undefined,
+            previewOnly: true,
             groupScenarioOverrideText:
               typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
                 ? (chatMeta.groupScenarioText as string).trim()

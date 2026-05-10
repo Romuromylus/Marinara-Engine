@@ -10,6 +10,7 @@ import {
   createLorebookFolderSchema,
   updateLorebookFolderSchema,
   type CreateLorebookEntryInput,
+  type LorebookEntryTimingState,
   type LorebookEntry,
 } from "@marinara-engine/shared";
 import type { ExportEnvelope } from "@marinara-engine/shared";
@@ -18,6 +19,10 @@ import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { processLorebooks } from "../services/lorebook/index.js";
+import {
+  syncCharacterBookFromLorebook,
+  clearCharacterEmbeddedLorebook,
+} from "../services/lorebook/character-book-sync.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import type { APIProvider } from "@marinara-engine/shared";
 import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
@@ -194,13 +199,26 @@ export async function lorebooksRoutes(app: FastifyInstance) {
     const input = updateLorebookSchema.parse(req.body);
     const updated = await storage.update(req.params.id, input);
     if (!updated) return reply.status(404).send({ error: "Lorebook not found" });
+    await syncCharacterBookFromLorebook(app.db, req.params.id);
     return updated;
   });
 
   app.delete<{ Params: { id: string } }>("/:id", async (req, reply) => {
+    // Capture the linked characterId BEFORE removal — once the row is gone
+    // we can no longer recover it, and the character still holds a stale
+    // pointer at extensions.importMetadata.embeddedLorebook that needs
+    // clearing alongside the V2 character_book mirror.
+    const lorebook = (await storage.getById(req.params.id)) as Record<string, unknown> | null;
+    const linkedCharacterId =
+      lorebook && typeof lorebook.characterId === "string" ? lorebook.characterId : null;
+
     const chatsStorage = createChatsStorage(app.db);
     await chatsStorage.removeLorebookFromChatMetadata(req.params.id);
     await storage.remove(req.params.id);
+
+    if (linkedCharacterId) {
+      await clearCharacterEmbeddedLorebook(app.db, linkedCharacterId, req.params.id);
+    }
     return reply.status(204).send();
   });
 
@@ -299,7 +317,9 @@ export async function lorebooksRoutes(app: FastifyInstance) {
       lorebookId: req.params.id,
     });
     try {
-      return await storage.createEntry(input);
+      const created = await storage.createEntry(input);
+      await syncCharacterBookFromLorebook(app.db, req.params.id);
+      return created;
     } catch (err) {
       if (err instanceof Error && err.message === "folderId does not belong to this lorebook") {
         return reply.status(400).send({ error: err.message });
@@ -313,6 +333,7 @@ export async function lorebooksRoutes(app: FastifyInstance) {
     try {
       const updated = await storage.updateEntry(req.params.entryId, input);
       if (!updated) return reply.status(404).send({ error: "Entry not found" });
+      await syncCharacterBookFromLorebook(app.db, req.params.id);
       return updated;
     } catch (err) {
       if (err instanceof Error && err.message === "folderId does not belong to this lorebook") {
@@ -326,6 +347,7 @@ export async function lorebooksRoutes(app: FastifyInstance) {
     "/:lorebookId/entries/:entryId",
     async (req, reply) => {
       await storage.removeEntry(req.params.entryId);
+      await syncCharacterBookFromLorebook(app.db, req.params.lorebookId);
       return reply.status(204).send();
     },
   );
@@ -341,7 +363,9 @@ export async function lorebooksRoutes(app: FastifyInstance) {
       });
       return rest;
     });
-    return storage.bulkCreateEntries(req.params.id, entries);
+    const result = await storage.bulkCreateEntries(req.params.id, entries);
+    await syncCharacterBookFromLorebook(app.db, req.params.id);
+    return result;
   });
 
   app.post<{ Params: { id: string } }>("/:id/entries/transfer", async (req, reply) => {
@@ -395,7 +419,9 @@ export async function lorebooksRoutes(app: FastifyInstance) {
       for (const entry of sourceEntries) {
         await storage.removeEntry(entry.id);
       }
+      await syncCharacterBookFromLorebook(app.db, req.params.id);
     }
+    await syncCharacterBookFromLorebook(app.db, targetLorebookId);
 
     return {
       operation,
@@ -500,6 +526,7 @@ export async function lorebooksRoutes(app: FastifyInstance) {
     let characterIds: string[] = [];
     let personaId: string | null = null;
     let activeLorebookIds: string[] = [];
+    let chatMeta: Record<string, unknown> = {};
     if (chat) {
       personaId = typeof chat.personaId === "string" ? chat.personaId : null;
       if (!personaId && chat.mode !== "game") {
@@ -520,11 +547,11 @@ export async function lorebooksRoutes(app: FastifyInstance) {
         /* ignore */
       }
       try {
-        const meta =
+        chatMeta =
           typeof chat.metadata === "string"
             ? JSON.parse(chat.metadata)
             : ((chat.metadata as Record<string, unknown>) ?? {});
-        activeLorebookIds = Array.isArray(meta.activeLorebookIds) ? meta.activeLorebookIds : [];
+        activeLorebookIds = Array.isArray(chatMeta.activeLorebookIds) ? chatMeta.activeLorebookIds : [];
       } catch {
         /* ignore */
       }
@@ -540,6 +567,24 @@ export async function lorebooksRoutes(app: FastifyInstance) {
       characterIds,
       personaId,
       activeLorebookIds,
+      tokenBudget: typeof chatMeta.lorebookTokenBudget === "number" ? chatMeta.lorebookTokenBudget : undefined,
+      entryStateOverrides:
+        ((chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) &&
+        typeof (chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) === "object")
+          ? ((chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) as Record<
+              string,
+              { ephemeral?: number | null; enabled?: boolean }
+            >)
+          : undefined,
+      entryTimingStates:
+        ((chatMeta.entryTimingStates ?? chatMeta.lorebookEntryTimingStates) &&
+        typeof (chatMeta.entryTimingStates ?? chatMeta.lorebookEntryTimingStates) === "object")
+          ? ((chatMeta.entryTimingStates ?? chatMeta.lorebookEntryTimingStates) as Record<
+              string,
+              LorebookEntryTimingState
+            >)
+          : undefined,
+      previewOnly: true,
       generationTriggers: resolveScanGenerationTriggers(chat?.mode),
     });
 

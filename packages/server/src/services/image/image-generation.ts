@@ -12,17 +12,20 @@ import { newId } from "../../utils/id-generator.js";
 import {
   DEFAULT_AUTOMATIC1111_DEFAULTS,
   DEFAULT_COMFYUI_DEFAULTS,
+  DEFAULT_NOVELAI_DEFAULTS,
   mergeNegativePrompt,
   mergePromptPrefix,
   inferImageSource,
   type Automatic1111Defaults,
   type ComfyUiDefaults,
   type ImageGenerationDefaultsProfile,
+  type NovelAiDefaults,
 } from "@marinara-engine/shared";
 import { isImageLocalUrlsEnabled } from "../../config/runtime-config.js";
 import { normalizeLoopbackUrl, safeFetch, validateOutboundUrl } from "../../utils/security.js";
 
 const GALLERY_DIR = join(DATA_DIR, "gallery");
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** Strip HTML tags and collapse whitespace — keeps error messages readable when APIs return HTML error pages. */
 function sanitizeErrorText(text: string): string {
@@ -50,6 +53,8 @@ export interface ImageGenRequest {
   referenceImage?: string;
   /** Optional array of base64-encoded reference images (avatars). Providers that support multiple refs use all; others use the first. */
   referenceImages?: string[];
+  /** Request a transparent image background when the provider/model supports it. */
+  transparentBackground?: boolean;
 }
 
 export interface ImageGenResult {
@@ -203,6 +208,13 @@ function isOpenAIGptImageModel(model?: string): boolean {
   return !!model && /^gpt-image-(?:1|1\.5|2)(?:$|-)/i.test(model.trim());
 }
 
+function supportsOpenAITransparentBackground(model?: string): boolean {
+  const m = model?.trim().toLowerCase() ?? "";
+  // OpenAI documents transparent backgrounds for GPT Image output generally,
+  // but explicitly excludes GPT Image 2 from background: "transparent".
+  return /^gpt-image-(?:1|1\.5)(?:$|-)/i.test(m);
+}
+
 function openAIImageSize(request: ImageGenRequest): string {
   const width = request.width ?? 1024;
   const height = request.height ?? 1024;
@@ -254,6 +266,35 @@ function detectImageMimeType(base64: string): string {
   return "image/png";
 }
 
+function imageExtensionFromMimeType(mimeType: string): string {
+  if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return "jpg";
+  if (mimeType.includes("webp")) return "webp";
+  if (mimeType.includes("gif")) return "gif";
+  return "png";
+}
+
+function decodeImageDataUrl(imageUrl: string): ImageGenResult {
+  const match = imageUrl.trim().match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,([\s\S]+)$/i);
+  if (!match) {
+    throw new Error("Generated image data URL was not a supported image format");
+  }
+
+  const declaredMimeType = match[1]!.toLowerCase().replace("image/jpg", "image/jpeg");
+  const encoded = match[2]!.replace(/\s+/g, "");
+  if (!encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+    throw new Error("Generated image data URL was not valid base64 image data");
+  }
+
+  const buffer = Buffer.from(encoded, "base64");
+  if (buffer.byteLength === 0) {
+    throw new Error("Generated image data URL was empty");
+  }
+
+  const base64 = buffer.toString("base64");
+  const mimeType = detectImageMimeType(base64) || declaredMimeType;
+  return { base64, mimeType, ext: imageExtensionFromMimeType(mimeType) };
+}
+
 function nanoGPTImagesUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
   try {
@@ -279,7 +320,92 @@ function nanoGPTImagesUrl(baseUrl: string): string {
   }
 }
 
+function openAIImagesUrl(baseUrl: string, endpoint: "generations" | "edits"): string {
+  const trimmed = baseUrl.replace(/\/+$/, "");
+  const targetPath = `/images/${endpoint}`;
+  try {
+    const parsed = new URL(trimmed);
+    const path = parsed.pathname.replace(/\/+$/, "");
+    if (/\/images\/(?:generations|edits|variations)$/i.test(path)) {
+      parsed.pathname = path.replace(/\/images\/(?:generations|edits|variations)$/i, targetPath);
+    } else if (path === "" || path === "/") {
+      parsed.pathname = `/v1${targetPath}`;
+    } else if (path.endsWith("/api/v1")) {
+      parsed.pathname = `${path.slice(0, -"/api/v1".length)}/v1${targetPath}`;
+    } else if (path.endsWith("/api")) {
+      parsed.pathname = `${path.slice(0, -"/api".length)}/v1${targetPath}`;
+    } else if (path.endsWith("/v1")) {
+      parsed.pathname = `${path}${targetPath}`;
+    } else {
+      parsed.pathname = `${path}${targetPath}`;
+    }
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return `${trimmed}${targetPath}`;
+  }
+}
+
+function openAIReferenceImages(request: ImageGenRequest): string[] {
+  const references = request.referenceImages?.length
+    ? request.referenceImages
+    : request.referenceImage
+      ? [request.referenceImage]
+      : [];
+  return references.map((reference) => reference.trim()).filter(Boolean).slice(0, 16);
+}
+
+function decodeReferenceImage(reference: string): { base64: string; mimeType: string; ext: string } {
+  const dataUrlMatch = reference
+    .trim()
+    .match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,([\s\S]+)$/i);
+  if (dataUrlMatch) {
+    const mimeType = dataUrlMatch[1]!.toLowerCase().replace("image/jpg", "image/jpeg");
+    const base64 = dataUrlMatch[2]!.replace(/\s+/g, "");
+    return { base64, mimeType, ext: imageExtensionFromMimeType(mimeType) };
+  }
+
+  const base64 = reference.replace(/\s+/g, "");
+  const mimeType = detectImageMimeType(base64);
+  return { base64, mimeType, ext: imageExtensionFromMimeType(mimeType) };
+}
+
+async function readOpenAIImageResult(
+  resp: Response,
+  request: ImageGenRequest,
+  operation: "generation" | "edit",
+): Promise<ImageGenResult> {
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "Unknown error");
+    throw new Error(`OpenAI image ${operation} failed (${resp.status}): ${sanitizeErrorText(errText)}`);
+  }
+
+  const data = (await resp.json()) as {
+    data?: Array<{ b64_json?: string; image_base64?: string; url?: string; revised_prompt?: string }>;
+  };
+  const item = data.data?.[0];
+  const b64 = item?.b64_json ?? item?.image_base64;
+  if (!b64 && item?.url) {
+    return downloadImageUrl(item.url, request.allowLocalUrls);
+  }
+  if (!b64) {
+    const fields = item
+      ? Object.keys(item).join(", ")
+      : data && typeof data === "object"
+        ? Object.keys(data).join(", ")
+        : "none";
+    throw new Error(`No image data in OpenAI response (fields: ${fields || "none"})`);
+  }
+
+  return { base64: b64, mimeType: "image/png", ext: "png" };
+}
+
 async function downloadImageUrl(imageUrl: string, allowLocalUrls = false): Promise<ImageGenResult> {
+  if (imageUrl.trim().startsWith("data:")) {
+    return decodeImageDataUrl(imageUrl);
+  }
+
   const normalizedImageUrl = normalizeImageUrl(imageUrl);
   const imgResp = await imageFetch(
     normalizedImageUrl,
@@ -294,22 +420,59 @@ async function downloadImageUrl(imageUrl: string, allowLocalUrls = false): Promi
   const base64 = Buffer.from(arrayBuffer).toString("base64");
 
   const contentType = imgResp.headers.get("content-type") ?? "";
-  let mimeType = "image/png";
-  let ext = "png";
+  let mimeType = detectImageMimeType(base64);
   if (contentType.includes("jpeg") || contentType.includes("jpg") || normalizedImageUrl.match(/\.jpe?g/i)) {
     mimeType = "image/jpeg";
-    ext = "jpg";
   } else if (contentType.includes("webp") || normalizedImageUrl.match(/\.webp/i)) {
     mimeType = "image/webp";
-    ext = "webp";
+  } else if (contentType.includes("gif") || normalizedImageUrl.match(/\.gif/i)) {
+    mimeType = "image/gif";
   }
 
-  return { base64, mimeType, ext };
+  return { base64, mimeType, ext: imageExtensionFromMimeType(mimeType) };
 }
 
 async function generateOpenAI(baseUrl: string, apiKey: string, request: ImageGenRequest): Promise<ImageGenResult> {
-  const url = `${baseUrl.replace(/\/+$/, "")}/images/generations`;
   const usesGptImageApi = isOpenAIGptImageModel(request.model);
+  const references = openAIReferenceImages(request);
+
+  if (usesGptImageApi && references.length > 0) {
+    const formData = new FormData();
+    formData.append("prompt", request.prompt);
+    formData.append("n", "1");
+    formData.append("size", openAIImageSize(request));
+    formData.append("output_format", "png");
+    if (request.transparentBackground && supportsOpenAITransparentBackground(request.model)) {
+      formData.append("background", "transparent");
+    }
+    if (request.model) formData.append("model", request.model);
+
+    references.forEach((reference, index) => {
+      const decoded = decodeReferenceImage(reference);
+      formData.append(
+        "image[]",
+        new Blob([Buffer.from(decoded.base64, "base64")], { type: decoded.mimeType }),
+        `reference-${index + 1}.${decoded.ext}`,
+      );
+    });
+
+    const resp = await imageFetch(
+      openAIImagesUrl(baseUrl, "edits"),
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: formData,
+        signal: AbortSignal.timeout(IMAGE_GEN_TIMEOUT),
+      },
+      { allowLocal: request.allowLocalUrls },
+    );
+
+    return readOpenAIImageResult(resp, request, "edit");
+  }
+
+  const url = openAIImagesUrl(baseUrl, "generations");
   const body: Record<string, unknown> = {
     prompt: request.prompt,
     n: 1,
@@ -320,6 +483,9 @@ async function generateOpenAI(baseUrl: string, apiKey: string, request: ImageGen
     // GPT Image models return base64 image data from the Images API without the
     // legacy DALL-E `response_format` toggle. `output_format` controls PNG/JPEG/WebP.
     body.output_format = "png";
+    if (request.transparentBackground && supportsOpenAITransparentBackground(request.model)) {
+      body.background = "transparent";
+    }
   } else {
     body.response_format = "b64_json";
   }
@@ -338,16 +504,7 @@ async function generateOpenAI(baseUrl: string, apiKey: string, request: ImageGen
     { allowLocal: request.allowLocalUrls },
   );
 
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => "Unknown error");
-    throw new Error(`OpenAI image generation failed (${resp.status}): ${sanitizeErrorText(errText)}`);
-  }
-
-  const data = (await resp.json()) as { data: Array<{ b64_json: string }> };
-  const b64 = data.data?.[0]?.b64_json;
-  if (!b64) throw new Error("No image data in OpenAI response");
-
-  return { base64: b64, mimeType: "image/png", ext: "png" };
+  return readOpenAIImageResult(resp, request, "generation");
 }
 
 async function generateNanoGPT(baseUrl: string, apiKey: string, request: ImageGenRequest): Promise<ImageGenResult> {
@@ -654,28 +811,38 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
   const url = `${baseUrl.replace(/\/+$/, "")}/ai/generate-image`;
   const model = request.model || "nai-diffusion-4-5-full";
   const isV4 = model.includes("nai-diffusion-4");
+  const defaults = resolveNovelAiDefaults(request);
+  const prompt = mergePromptPrefix(defaults.promptPrefix, request.prompt);
+  const negativePrompt = mergeNegativePrompt(defaults.negativePromptPrefix, request.negativePrompt);
+  const seed = resolveSeed(request.imageDefaults);
 
   const parameters: Record<string, unknown> = {
     width: request.width ?? 832,
     height: request.height ?? 1216,
     n_samples: 1,
-    ucPreset: 0,
-    negative_prompt: request.negativePrompt ?? "",
-    seed: Math.floor(Math.random() * 2 ** 32),
-    scale: 6,
-    steps: 28,
-    sampler: "k_euler_ancestral",
+    ucPreset: defaults.undesiredContentPreset,
+    negative_prompt: negativePrompt,
+    seed,
+    scale: defaults.promptGuidance,
+    steps: defaults.steps,
+    sampler: defaults.sampler,
   };
+  if (defaults.noiseSchedule) {
+    parameters.noise_schedule = defaults.noiseSchedule;
+  }
+  if (isV4) {
+    parameters.cfg_rescale = defaults.promptGuidanceRescale;
+  }
 
   if (isV4) {
     parameters.params_version = 3;
     parameters.v4_prompt = {
-      caption: { base_caption: request.prompt, char_captions: [] },
+      caption: { base_caption: prompt, char_captions: [] },
       use_coords: false,
       use_order: true,
     };
     parameters.v4_negative_prompt = {
-      caption: { base_caption: request.negativePrompt ?? "", char_captions: [] },
+      caption: { base_caption: negativePrompt, char_captions: [] },
       use_coords: false,
       use_order: true,
     };
@@ -695,7 +862,7 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
   }
 
   const body: Record<string, unknown> = {
-    input: isV4 ? "" : request.prompt,
+    input: prompt,
     model,
     action: "generate",
     parameters,
@@ -728,14 +895,16 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const extracted = extractFirstFileFromZip(bytes);
     if (extracted) {
-      const base64 = Buffer.from(extracted).toString("base64");
+      const imageBytes = appendNovelAiGenerationMetadata(Buffer.from(extracted), body);
+      const base64 = imageBytes.toString("base64");
       return { base64, mimeType: "image/png", ext: "png" };
     }
   }
 
   // Check if it's a PNG directly
   if (bytes[0] === 0x89 && bytes[1] === 0x50) {
-    const base64 = Buffer.from(bytes).toString("base64");
+    const imageBytes = appendNovelAiGenerationMetadata(Buffer.from(bytes), body);
+    const base64 = imageBytes.toString("base64");
     return { base64, mimeType: "image/png", ext: "png" };
   }
 
@@ -750,6 +919,78 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
   }
 
   throw new Error("Could not parse NovelAI image response");
+}
+
+function appendNovelAiGenerationMetadata(image: Buffer, body: Record<string, unknown>): Buffer {
+  try {
+    const metadata = JSON.stringify({
+      source: "marinara-engine",
+      provider: "novelai",
+      request: body,
+    });
+    return injectPngTextChunk(image, "marinara_novelai_request", metadata);
+  } catch {
+    return image;
+  }
+}
+
+function injectPngTextChunk(png: Buffer, keyword: string, text: string): Buffer {
+  if (png.subarray(0, 8).compare(PNG_SIGNATURE) !== 0) {
+    throw new Error("Invalid PNG signature");
+  }
+
+  const textChunk = buildPngChunk("iTXt", buildPngInternationalTextData(keyword, text));
+  const parts: Buffer[] = [PNG_SIGNATURE];
+  let offset = 8;
+  let inserted = false;
+
+  while (offset < png.length) {
+    const chunkLen = png.readUInt32BE(offset);
+    const chunkType = png.subarray(offset + 4, offset + 8).toString("ascii");
+    const totalChunkSize = 4 + 4 + chunkLen + 4;
+    const chunkBuf = png.subarray(offset, offset + totalChunkSize);
+
+    if (chunkType === "IDAT" && !inserted) {
+      parts.push(textChunk);
+      inserted = true;
+    }
+    parts.push(chunkBuf);
+    offset += totalChunkSize;
+  }
+
+  if (!inserted) {
+    parts.splice(parts.length - 1, 0, textChunk);
+  }
+
+  return Buffer.concat(parts);
+}
+
+function buildPngInternationalTextData(keyword: string, text: string): Buffer {
+  return Buffer.concat([
+    Buffer.from(keyword, "latin1"),
+    Buffer.from([0, 0, 0, 0, 0]),
+    Buffer.from(text, "utf8"),
+  ]);
+}
+
+function buildPngChunk(type: string, data: Buffer): Buffer {
+  const typeBytes = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])) >>> 0);
+  return Buffer.concat([length, typeBytes, data, crc]);
+}
+
+function crc32(buf: Buffer): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i]!;
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 /**
@@ -870,9 +1111,10 @@ async function generateViaChatCompletions(
   };
   const content = data.choices?.[0]?.message?.content ?? "";
 
-  // Extract image URL from markdown: ![...](url) or plain https:// URL
+  // Extract image URL from markdown, inline data URLs, or plain https:// URLs.
   const mdMatch = content.match(/!\[[^\]]*\]\(([^)]+)\)/);
-  const imageUrl = mdMatch?.[1] ?? content.match(/https?:\/\/\S+\.(png|jpg|jpeg|webp)/i)?.[0];
+  const dataUrlMatch = content.match(/data:image\/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+/i);
+  const imageUrl = mdMatch?.[1] ?? dataUrlMatch?.[0] ?? content.match(/https?:\/\/\S+\.(png|jpg|jpeg|webp|gif)/i)?.[0];
 
   if (!imageUrl) {
     throw new Error(`No image URL found in proxy response: ${content.slice(0, 200)}`);
@@ -934,6 +1176,13 @@ function randomSeed(): number {
 
 function resolveSeed(profile: ImageGenerationDefaultsProfile | null | undefined): number {
   return typeof profile?.seed === "number" && profile.seed >= 0 ? profile.seed : randomSeed();
+}
+
+function resolveNovelAiDefaults(request: ImageGenRequest): NovelAiDefaults {
+  if (request.imageDefaults?.service === "novelai" && request.imageDefaults.novelai) {
+    return request.imageDefaults.novelai;
+  }
+  return DEFAULT_NOVELAI_DEFAULTS;
 }
 
 function resolveAutomatic1111Defaults(request: ImageGenRequest): Automatic1111Defaults {

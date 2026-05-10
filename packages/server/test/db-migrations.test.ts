@@ -72,7 +72,7 @@ test("startup migrations add lorebook folders schema to existing installs", asyn
         character_id, persona_id, chat_id, enabled, generated_by, source_agent_id, tags, created_at, updated_at
       ) VALUES (
         'legacy-book', 'Legacy Lorebook', '', 'uncategorized', 2, 2048, 'false',
-        NULL, NULL, NULL, 'true', NULL, NULL, '[]', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        'legacy-char', 'legacy-persona', NULL, 'true', NULL, NULL, '[]', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
       )`),
     );
     await db.run(
@@ -102,7 +102,83 @@ test("startup migrations add lorebook folders schema to existing installs", asyn
 
     assert.equal(folderTables.length, 1);
     assert.ok(entryColumns.some((column) => column.name === "folder_id"));
+    const lorebookColumns = await db.all<{ name: string }>(sql.raw("PRAGMA table_info(lorebooks)"));
+    const migratedBooks = await db.all<{ id: string; is_global: string }>(
+      sql.raw(`SELECT id, is_global FROM lorebooks WHERE id = 'legacy-book'`),
+    );
+    const characterLinkTables = await db.all<{ name: string }>(
+      sql.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'lorebook_character_links'`),
+    );
+    const personaLinkTables = await db.all<{ name: string }>(
+      sql.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'lorebook_persona_links'`),
+    );
+    const characterLinks = await db.all<{ lorebook_id: string; character_id: string }>(
+      sql.raw(`SELECT lorebook_id, character_id FROM lorebook_character_links WHERE lorebook_id = 'legacy-book'`),
+    );
+    const personaLinks = await db.all<{ lorebook_id: string; persona_id: string }>(
+      sql.raw(`SELECT lorebook_id, persona_id FROM lorebook_persona_links WHERE lorebook_id = 'legacy-book'`),
+    );
+    assert.ok(lorebookColumns.some((column) => column.name === "is_global"));
+    assert.deepEqual(migratedBooks, [{ id: "legacy-book", is_global: "false" }]);
+    assert.equal(characterLinkTables.length, 1);
+    assert.equal(personaLinkTables.length, 1);
+    assert.deepEqual(characterLinks, [{ lorebook_id: "legacy-book", character_id: "legacy-char" }]);
+    assert.deepEqual(personaLinks, [{ lorebook_id: "legacy-book", persona_id: "legacy-persona" }]);
     assert.deepEqual(preservedEntries, [{ id: "legacy-entry", folder_id: null }]);
+  } finally {
+    client.close();
+  }
+});
+
+test("startup migrations add saved persona status options to existing installs", async () => {
+  const client = createClient({ url: "file::memory:" });
+  const db = drizzle(client) as unknown as DB;
+
+  try {
+    await db.run(
+      sql.raw(`CREATE TABLE personas (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        comment TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        personality TEXT NOT NULL DEFAULT '',
+        scenario TEXT NOT NULL DEFAULT '',
+        backstory TEXT NOT NULL DEFAULT '',
+        appearance TEXT NOT NULL DEFAULT '',
+        avatar_path TEXT,
+        is_active TEXT NOT NULL DEFAULT 'false',
+        name_color TEXT NOT NULL DEFAULT '',
+        dialogue_color TEXT NOT NULL DEFAULT '',
+        box_color TEXT NOT NULL DEFAULT '',
+        persona_stats TEXT NOT NULL DEFAULT '',
+        alt_descriptions TEXT NOT NULL DEFAULT '[]',
+        tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`),
+    );
+    await db.run(
+      sql.raw(`INSERT INTO personas (
+        id, name, comment, description, personality, scenario, backstory, appearance,
+        avatar_path, is_active, name_color, dialogue_color, box_color, persona_stats,
+        alt_descriptions, tags, created_at, updated_at
+      ) VALUES (
+        'legacy-persona', 'Legacy Persona', '', '', '', '', '', '',
+        NULL, 'true', '', '', '', '', '[]', '[]',
+        '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+      )`),
+    );
+
+    await runMigrations(db);
+    await runMigrations(db);
+
+    const personaColumns = await db.all<{ name: string }>(sql.raw("PRAGMA table_info(personas)"));
+    const preservedPersonas = await db.all<{ id: string; saved_status_options: string }>(
+      sql.raw(`SELECT id, saved_status_options FROM personas WHERE id = 'legacy-persona'`),
+    );
+
+    assert.ok(personaColumns.some((column) => column.name === "saved_status_options"));
+    assert.deepEqual(preservedPersonas, [{ id: "legacy-persona", saved_status_options: "[]" }]);
   } finally {
     client.close();
   }

@@ -497,6 +497,26 @@ export function createChatsStorage(db: DB) {
       });
     },
 
+    /**
+     * Bulk-set hiddenFromAI on many messages at once.
+     * Reuses updateMessageExtra() for each message (read-parse-merge-write) and
+     * syncs the flag to every swipe row so it survives setActiveSwipe() overwrites.
+     * Returns the number of messages updated.
+     */
+    async bulkSetHiddenFromAI(chatId: string, messageIds: string[], hidden: boolean): Promise<number> {
+      if (messageIds.length === 0) return 0;
+      for (const id of messageIds) {
+        await this.updateMessageExtra(id, { hiddenFromAI: hidden });
+        // Mirror what the single-message /extra route does: propagate the flag
+        // to all swipe rows so setActiveSwipe() cannot clobber it.
+        const swipes = await this.getSwipes(id);
+        for (const swipe of swipes) {
+          await this.updateSwipeExtra(id, swipe.index, { hiddenFromAI: hidden });
+        }
+      }
+      return messageIds.length;
+    },
+
     /** Atomically append an attachment to a message's extra JSON field. */
     async appendMessageAttachment(id: string, attachment: Record<string, unknown>) {
       return withPatchQueue(messageExtraPatchQueues, id, async () => {
@@ -594,6 +614,9 @@ export function createChatsStorage(db: DB) {
           .update(messages)
           .set({ activeSwipeIndex: nextIndex, content, extra: JSON.stringify(clearedExtra) })
           .where(eq(messages.id, messageId));
+        if (msg) {
+          await invalidateMemoryChunksFrom(db, msg.chatId, msg.createdAt);
+        }
       }
       return { id, index: nextIndex };
     },
@@ -626,6 +649,9 @@ export function createChatsStorage(db: DB) {
           extra: JSON.stringify(swipeExtra),
         })
         .where(eq(messages.id, messageId));
+      if (msg) {
+        await invalidateMemoryChunksFrom(db, msg.chatId, msg.createdAt);
+      }
       return this.getMessage(messageId);
     },
 
@@ -640,6 +666,7 @@ export function createChatsStorage(db: DB) {
       const remaining = swipes.filter((s: any) => s.index !== index);
       const currentExtra = typeof msg.extra === "string" ? JSON.parse(msg.extra) : (msg.extra ?? {});
 
+      const activeSwipeRemoved = msg.activeSwipeIndex === index;
       let nextActiveSwipeIndex = msg.activeSwipeIndex;
       let nextContent = msg.content;
       let nextExtra = currentExtra;
@@ -675,6 +702,9 @@ export function createChatsStorage(db: DB) {
           extra: JSON.stringify(nextExtra),
         })
         .where(eq(messages.id, messageId));
+      if (activeSwipeRemoved) {
+        await invalidateMemoryChunksFrom(db, msg.chatId, msg.createdAt);
+      }
 
       return this.getMessage(messageId);
     },

@@ -9,12 +9,7 @@ import {
   type VisualTheme,
 } from "../../stores/ui.store";
 import { cn } from "../../lib/utils";
-import {
-  useExtensions,
-  useCreateExtension,
-  useDeleteExtension,
-  useUpdateExtension,
-} from "../../hooks/use-extensions";
+import { useExtensions, useCreateExtension, useDeleteExtension, useUpdateExtension } from "../../hooks/use-extensions";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ADMIN_SECRET_STORAGE_KEY, api, getAdminSecretHeader } from "../../lib/api-client";
 import { forceRefreshSpa } from "@/lib/browser-runtime";
@@ -331,6 +326,8 @@ function GeneralSettings() {
   const setTrimIncompleteModelOutput = useUIStore((s) => s.setTrimIncompleteModelOutput);
   const speechToTextEnabled = useUIStore((s) => s.speechToTextEnabled);
   const setSpeechToTextEnabled = useUIStore((s) => s.setSpeechToTextEnabled);
+  const spotifyPlayerEnabled = useUIStore((s) => s.spotifyPlayerEnabled);
+  const setSpotifyPlayerEnabled = useUIStore((s) => s.setSpotifyPlayerEnabled);
   const intuitiveSwipeNavigation = useUIStore((s) => s.intuitiveSwipeNavigation);
   const setIntuitiveSwipeNavigation = useUIStore((s) => s.setIntuitiveSwipeNavigation);
   const intuitiveSwipeRerollLatest = useUIStore((s) => s.intuitiveSwipeRerollLatest);
@@ -433,6 +430,13 @@ function GeneralSettings() {
         checked={enableStreaming}
         onChange={setEnableStreaming}
         help="When on, AI responses appear word-by-word as they're generated. When off, the full response appears at once after completion."
+      />
+
+      <ToggleSetting
+        label="Spotify mini player"
+        checked={spotifyPlayerEnabled}
+        onChange={setSpotifyPlayerEnabled}
+        help="Shows a compact Spotify player in the top bar on desktop and as a draggable floating widget on mobile. Requires the Spotify DJ agent to be connected."
       />
 
       {/* Streaming Speed */}
@@ -824,6 +828,8 @@ function AppearanceSettings() {
   const setGameDialogueDisplayMode = useUIStore((s) => s.setGameDialogueDisplayMode);
   const gameAvatarScale = useUIStore((s) => s.gameAvatarScale);
   const setGameAvatarScale = useUIStore((s) => s.setGameAvatarScale);
+  const gameFullBodySpriteScale = useUIStore((s) => s.gameFullBodySpriteScale);
+  const setGameFullBodySpriteScale = useUIStore((s) => s.setGameFullBodySpriteScale);
   const textStrokeWidth = useUIStore((s) => s.textStrokeWidth);
   const setTextStrokeWidth = useUIStore((s) => s.setTextStrokeWidth);
   const textStrokeColor = useUIStore((s) => s.textStrokeColor);
@@ -1200,12 +1206,12 @@ function AppearanceSettings() {
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-1.5">
           <Image size="0.75rem" className="text-[var(--muted-foreground)]" />
-          <span className="text-xs font-medium">Game Avatars</span>
-          <HelpTooltip text="Scales Game mode VN portraits and full-body sprites. The game view clamps oversized art so it still fits on small screens." />
+          <span className="text-xs font-medium">Game VN Art</span>
+          <HelpTooltip text="Scales Game mode dialogue portraits separately from the center full-body sprites. Oversized art is still clamped per viewport." />
         </div>
         <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-16 w-20 shrink-0 items-end justify-center overflow-hidden rounded-md bg-black/30 ring-1 ring-[var(--border)]/70">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="flex h-20 w-full shrink-0 items-end justify-center gap-3 overflow-hidden rounded-md bg-black/30 ring-1 ring-[var(--border)]/70 sm:w-28">
               <div
                 className="mb-1 rounded-lg border border-white/20 bg-gradient-to-b from-sky-300/80 via-cyan-200/65 to-slate-800/90 shadow-lg transition-all"
                 style={{
@@ -1213,24 +1219,50 @@ function AppearanceSettings() {
                   height: `${Math.min(3.9, 2.6 * gameAvatarScale)}rem`,
                 }}
               />
+              <div
+                className="mb-1 rounded-full border border-white/20 bg-gradient-to-b from-rose-200/85 via-fuchsia-200/70 to-slate-900/95 shadow-lg transition-all"
+                style={{
+                  width: `${Math.min(2.2, 0.9 * gameFullBodySpriteScale)}rem`,
+                  height: `${Math.min(4.8, 3.4 * gameFullBodySpriteScale)}rem`,
+                }}
+              />
             </div>
-            <label className="flex min-w-0 flex-1 flex-col gap-1">
-              <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">Avatar and sprite scale</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={0.75}
-                  max={1.75}
-                  step={0.05}
-                  value={gameAvatarScale}
-                  onChange={(e) => setGameAvatarScale(Number(e.target.value))}
-                  className="min-w-0 flex-1 accent-[var(--primary)]"
-                />
-                <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-                  {Math.round(gameAvatarScale * 100)}%
-                </span>
-              </div>
-            </label>
+            <div className="grid min-w-0 flex-1 gap-3">
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">Dialogue portrait scale</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0.75}
+                    max={1.75}
+                    step={0.05}
+                    value={gameAvatarScale}
+                    onChange={(e) => setGameAvatarScale(Number(e.target.value))}
+                    className="min-w-0 flex-1 accent-[var(--primary)]"
+                  />
+                  <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                    {Math.round(gameAvatarScale * 100)}%
+                  </span>
+                </div>
+              </label>
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">Full-body sprite scale</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0.75}
+                    max={2.75}
+                    step={0.05}
+                    value={gameFullBodySpriteScale}
+                    onChange={(e) => setGameFullBodySpriteScale(Number(e.target.value))}
+                    className="min-w-0 flex-1 accent-[var(--primary)]"
+                  />
+                  <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                    {Math.round(gameFullBodySpriteScale * 100)}%
+                  </span>
+                </div>
+              </label>
+            </div>
           </div>
         </div>
       </div>
@@ -2614,6 +2646,9 @@ function AdvancedSettings() {
     releaseNotes: string;
     publishedAt: string;
     installType: "git" | "standalone";
+    applyAvailable?: boolean;
+    updatesApplyEnabled?: boolean;
+    applyUnavailableReason?: "disabled" | "unsupported-install" | null;
   }>({
     queryKey: ["update-check"],
     queryFn: () => api.get("/updates/check"),
@@ -2647,6 +2682,12 @@ function AdvancedSettings() {
   const currentReleaseLabel = `v${health.data?.version ?? updateCheck.data?.currentVersion ?? APP_VERSION}`;
   const currentCommit = health.data?.commit ?? updateCheck.data?.currentCommit ?? null;
   const currentBuildLabel = currentCommit ? `Build: ${currentCommit.slice(0, 7)}` : "Build: unavailable";
+  const commitsBehind = updateCheck.data?.commitsBehind ?? 0;
+  const applyUnavailableReason = updateCheck.data?.applyUnavailableReason ?? null;
+  const applyUnavailableCopy =
+    applyUnavailableReason === "disabled"
+      ? "This install can check for updates, but applying them from the browser is disabled. Relaunch the app if you use the launcher, or update manually. Advanced git installs can enable server-side apply with UPDATES_APPLY_ENABLED=true."
+      : "This install can check for updates, but it cannot apply them from the browser. Relaunch the app if you use the launcher, or update manually for your install type.";
   const isClearing = clearAllData.isPending || expungeData.isPending;
   const isAllScopesSelected = selectedScopes.length === EXPUNGE_SCOPE_OPTIONS.length;
 
@@ -2756,7 +2797,7 @@ function AdvancedSettings() {
               <span className="text-xs font-medium">
                 {updateCheck.data.versionUpdate
                   ? `v${updateCheck.data.latestVersion} available`
-                  : `${updateCheck.data.commitsBehind ?? 1} new update${(updateCheck.data.commitsBehind ?? 1) !== 1 ? "s" : ""} available`}
+                  : `${commitsBehind} commit${commitsBehind !== 1 ? "s" : ""} behind ${updateCheck.data.targetRef ?? "origin/main"}`}
               </span>
               {updateCheck.data.versionUpdate && (
                 <a
@@ -2774,7 +2815,13 @@ function AdvancedSettings() {
                 {updateCheck.data.releaseNotes}
               </p>
             )}
-            {updateCheck.data.installType === "git" ? (
+            {commitsBehind > 0 && (
+              <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                Commit counts compare this build with {updateCheck.data.targetRef ?? "origin/main"} and may include
+                unreleased development commits, not just tagged releases.
+              </p>
+            )}
+            {updateCheck.data.applyAvailable ? (
               <button
                 onClick={() => applyUpdate.mutate()}
                 disabled={applyUpdate.isPending}
@@ -2793,22 +2840,30 @@ function AdvancedSettings() {
                 )}
               </button>
             ) : (
-              <div className="flex flex-col gap-1.5">
-                <a
-                  href={updateCheck.data.releaseUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-all hover:opacity-90 active:scale-95"
-                >
-                  <Download size="0.8125rem" />
-                  Download v{updateCheck.data.latestVersion}
-                </a>
-                <span className="text-[0.625rem] text-[var(--muted-foreground)]">
-                  Docker users:{" "}
-                  <code className="rounded bg-[var(--background)] px-1 py-0.5">
-                    docker compose pull && docker compose up -d
-                  </code>
-                </span>
+              <div className="flex flex-col gap-1.5 rounded-lg bg-[var(--background)]/60 p-2 ring-1 ring-[var(--border)]">
+                <div className="flex items-start gap-1.5">
+                  <AlertTriangle size="0.8125rem" className="mt-0.5 shrink-0 text-amber-500" />
+                  <span className="text-[0.6875rem] text-[var(--muted-foreground)]">{applyUnavailableCopy}</span>
+                </div>
+                {updateCheck.data.versionUpdate && (
+                  <a
+                    href={updateCheck.data.releaseUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-all hover:opacity-90 active:scale-95"
+                  >
+                    <Download size="0.8125rem" />
+                    Download v{updateCheck.data.latestVersion}
+                  </a>
+                )}
+                {applyUnavailableReason === "unsupported-install" && (
+                  <span className="text-[0.625rem] text-[var(--muted-foreground)]">
+                    Docker users:{" "}
+                    <code className="rounded bg-[var(--background)] px-1 py-0.5">
+                      docker compose pull && docker compose up -d
+                    </code>
+                  </span>
+                )}
               </div>
             )}
           </div>

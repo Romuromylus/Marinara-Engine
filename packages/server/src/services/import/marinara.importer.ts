@@ -92,8 +92,25 @@ async function importCharacter(data: unknown, db: DB) {
       : {};
   const existingImportMetadata =
     extensions.importMetadata && typeof extensions.importMetadata === "object"
-      ? (extensions.importMetadata as Record<string, unknown>)
+      ? ({ ...(extensions.importMetadata as Record<string, unknown>) } as Record<string, unknown>)
       : {};
+  // Drop any `lorebookId` carried over from the exporter's database. It
+  // refers to a row in their lorebook table, not ours, so keeping it
+  // leaves an orphan that makes the character editor's "Edit Linked
+  // Lorebook" button open a 404 editor stuck on a permanent shimmer
+  // (`isLoading || !lorebook`). The user can click "Import Embedded
+  // Lorebook" post-import to create a real linked lorebook in this DB.
+  const carriedEmbeddedLorebook =
+    typeof existingImportMetadata.embeddedLorebook === "object" && existingImportMetadata.embeddedLorebook
+      ? (existingImportMetadata.embeddedLorebook as Record<string, unknown>)
+      : null;
+  if (carriedEmbeddedLorebook && "lorebookId" in carriedEmbeddedLorebook) {
+    const { lorebookId: _staleLorebookId, ...sanitized } = carriedEmbeddedLorebook;
+    void _staleLorebookId;
+    existingImportMetadata.embeddedLorebook = sanitized;
+    extensions.importMetadata = existingImportMetadata;
+    charData.extensions = extensions;
+  }
   const cardSpecMetadata =
     typeof d?.spec === "string" || typeof d?.spec_version === "string"
       ? {
@@ -176,8 +193,25 @@ async function importLorebook(data: unknown, db: DB) {
       scanDepth: Number(lb.scanDepth ?? 2),
       tokenBudget: Number(lb.tokenBudget ?? 2048),
       recursiveScanning: Boolean(lb.recursiveScanning),
+      maxRecursionDepth: Number(lb.maxRecursionDepth ?? 3),
+      characterId: typeof lb.characterId === "string" ? lb.characterId : null,
+      characterIds: Array.isArray(lb.characterIds)
+        ? lb.characterIds.filter((value): value is string => typeof value === "string")
+        : typeof lb.characterId === "string"
+          ? [lb.characterId]
+          : [],
+      personaId: typeof lb.personaId === "string" ? lb.personaId : null,
+      personaIds: Array.isArray(lb.personaIds)
+        ? lb.personaIds.filter((value): value is string => typeof value === "string")
+        : typeof lb.personaId === "string"
+          ? [lb.personaId]
+          : [],
+      chatId: typeof lb.chatId === "string" ? lb.chatId : null,
+      isGlobal: lb.isGlobal === true || lb.isGlobal === "true",
       enabled: lb.enabled !== false,
+      tags: Array.isArray(lb.tags) ? lb.tags.map(String) : [],
       generatedBy: "import",
+      sourceAgentId: typeof lb.sourceAgentId === "string" ? lb.sourceAgentId : null,
     },
     readTimestampOverrides(lb),
   )) as Record<string, unknown> | null;
