@@ -318,19 +318,22 @@ export function ColorPicker({ value, onChange, gradient = false, label, helpText
               </div>
 
               {/* Angle */}
-              <div className="flex items-center gap-2">
-                <span className="text-[0.625rem] text-[var(--muted-foreground)]">Angle</span>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[0.625rem] text-[var(--muted-foreground)]">Angle</span>
+                  <span className="min-w-[2.75rem] text-right font-mono text-[0.625rem] tabular-nums text-[var(--muted-foreground)]">
+                    {gradientAngle}°
+                  </span>
+                </div>
                 <input
+                  aria-label="Gradient angle"
                   type="range"
                   min={0}
                   max={360}
                   value={gradientAngle}
                   onChange={(e) => handleAngleChange(parseInt(e.target.value))}
-                  className="flex-1 accent-[var(--primary)]"
+                  className="h-1.5 w-full cursor-pointer accent-[var(--primary)]"
                 />
-                <span className="w-10 text-right font-mono text-[0.625rem] text-[var(--muted-foreground)]">
-                  {gradientAngle}°
-                </span>
               </div>
 
               {/* Gradient presets */}

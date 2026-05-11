@@ -187,7 +187,7 @@ function StatBar({
       </div>
       <div
         className={cn(
-          "relative isolate shrink-0 overflow-hidden bg-[var(--tracker-profile-stat-track)] ring-1 ring-[var(--tracker-profile-stat-track-ring)] shadow-[inset_0_1px_2px_var(--tracker-profile-stat-track-shadow)]",
+          "relative isolate shrink-0 overflow-hidden bg-[image:var(--tracker-profile-stat-track)] ring-1 ring-[var(--tracker-profile-stat-track-ring)] shadow-[inset_0_1px_2px_var(--tracker-profile-stat-track-shadow)] [background-blend-mode:var(--tracker-profile-stat-track-blend)]",
           isRoomy ? "mt-0.5" : "mt-0",
           barClass,
         )}

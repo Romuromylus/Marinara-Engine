@@ -47,10 +47,16 @@ export interface TrackerCardColorConfig {
   mode?: TrackerCardColorMode;
   /** Tracker card display color/gradient. */
   nameColor?: string;
+  /** Tracker card display paint opacity, 0-100. */
+  nameColorOpacity?: number;
   /** Tracker card dialogue/accent color. */
   dialogueColor?: string;
+  /** Tracker card dialogue/accent paint opacity, 0-100. */
+  dialogueColorOpacity?: number;
   /** Tracker card surface tint color. */
   boxColor?: string;
+  /** Tracker card surface paint opacity, 0-100. */
+  boxColorOpacity?: number;
   /** How strongly selected colors wash into the card surface, 0-100. */
   tintIntensity?: number;
   /** How strongly selected colors affect glows, borders, and hairlines, 0-100. */

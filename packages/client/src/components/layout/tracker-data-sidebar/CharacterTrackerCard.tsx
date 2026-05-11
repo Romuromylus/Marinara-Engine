@@ -174,7 +174,7 @@ export function CharacterTrackerCard({
   };
   return (
     <article
-      className="group/character @container relative isolate min-w-0 overflow-hidden rounded-md border border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-frame)] p-0.5 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_5%,transparent)] transition-colors duration-200 hover:border-[var(--primary)]/28"
+      className="group/character @container relative isolate min-w-0 overflow-hidden rounded-md border border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-frame)] p-0.5 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_5%,transparent)] transition-colors duration-200 hover:border-[var(--primary)]/28 [background-blend-mode:var(--tracker-profile-frame-blend)]"
       style={getCharacterAmbienceStyle(character, profileColors)}
     >
       <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(135deg,color-mix(in_srgb,var(--foreground)_4%,transparent),transparent_46%,color-mix(in_srgb,var(--tracker-profile-accent)_6%,transparent))]" />

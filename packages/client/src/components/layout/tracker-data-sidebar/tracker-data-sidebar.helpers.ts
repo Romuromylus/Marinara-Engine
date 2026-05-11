@@ -9,10 +9,12 @@ import type {
 import type { SpriteInfo } from "../../../hooks/use-characters";
 import {
   getTrackerCardFinish,
+  getTrackerCardPaintOpacity,
   getTrackerCardSkinFinish,
   normalizeTrackerCardColorMode,
   parseTrackerCardColorConfig,
   type TrackerCardFinish,
+  type TrackerCardPaintOpacity,
 } from "../../../lib/tracker-card-colors";
 import {
   FEATURED_CHARACTER_PORTRAIT_STAGE_REM,
@@ -451,8 +453,80 @@ function getCssPaintValue(value: string | null | undefined) {
   return text;
 }
 
-function getBackgroundPaintLayer(value: string) {
-  return value.toLowerCase().includes("gradient(") ? value : `linear-gradient(${value}, ${value})`;
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function opacityWeight(value: number) {
+  return clampPercent(value) / 100;
+}
+
+function scalePercent(value: number, opacity: number) {
+  return Math.round(value * opacityWeight(opacity));
+}
+
+function scaleOpacity(value: string, opacity: number) {
+  return (Number(value) * opacityWeight(opacity)).toFixed(3);
+}
+
+function splitCssArgs(value: string) {
+  const args: string[] = [];
+  let current = "";
+  let depth = 0;
+
+  for (const char of value) {
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+
+    if (char === "," && depth === 0) {
+      args.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) args.push(current.trim());
+  return args;
+}
+
+function applyPaintOpacity(value: string, opacity: number) {
+  const paintOpacity = clampPercent(opacity);
+  if (paintOpacity >= 100) return value;
+
+  const gradientMatch = value.match(/^linear-gradient\((.*)\)$/i);
+  if (!gradientMatch) {
+    return `color-mix(in srgb, ${value} ${paintOpacity}%, transparent)`;
+  }
+
+  const args = splitCssArgs(gradientMatch[1] ?? "");
+  if (args.length < 2) return value;
+
+  const [direction, ...stops] = args;
+  const transparentStops = stops.map((stop) => `color-mix(in srgb, ${stop} ${paintOpacity}%, transparent)`);
+  return `linear-gradient(${direction}, ${transparentStops.join(", ")})`;
+}
+
+function getBackgroundPaintLayer(value: string, opacity = 100) {
+  return value.toLowerCase().includes("gradient(")
+    ? applyPaintOpacity(value, opacity)
+    : `linear-gradient(${applyPaintOpacity(value, opacity)}, ${applyPaintOpacity(value, opacity)})`;
+}
+
+function getGradientPaintLayer(value: string | null | undefined, opacity = 100) {
+  const text = getCssPaintValue(value);
+  return text?.toLowerCase().includes("gradient(") ? applyPaintOpacity(text, opacity) : null;
+}
+
+function getPaintedBackground(base: string, layers: Array<string | null | undefined>) {
+  const activeLayers = layers.filter((layer): layer is string => !!layer);
+  return activeLayers.length ? `${activeLayers.join(", ")}, ${base}` : base;
+}
+
+function getBackgroundBlendMode(layers: Array<string | null | undefined>, mode = "soft-light") {
+  const activeLayerCount = layers.filter(Boolean).length;
+  return activeLayerCount ? `${Array.from({ length: activeLayerCount }, () => mode).join(", ")}, normal` : "normal";
 }
 
 function getPaintSolidFallback(value: string | null | undefined) {
@@ -481,11 +555,15 @@ export interface TrackerProfileColors {
 interface TrackerProfilePalette {
   accent: string;
   accentLayer: string;
+  accentGradientLayer: string | null;
   displayLayer: string;
+  displayGradientLayer: string | null;
   displaySolid: string;
   box: string;
   boxLayer: string;
+  boxGradientLayer: string | null;
   finish: TrackerCardFinish;
+  opacity: TrackerCardPaintOpacity;
 }
 
 function getStringValue(value: unknown) {
@@ -499,6 +577,7 @@ function getTrackerProfilePalette(
   const trackerCardColors = profileColors?.trackerCardColors ?? null;
   const mode = normalizeTrackerCardColorMode(trackerCardColors?.mode);
   const finish = getTrackerCardFinish(trackerCardColors, mode);
+  const opacity = getTrackerCardPaintOpacity(trackerCardColors);
   const effectiveColors = mode === "default" ? null : mode === "custom" ? trackerCardColors : profileColors;
   const effectiveFallback = mode === "chat" ? fallbackAccent : DEFAULT_TRACKER_ACCENT;
   const dialoguePaint = getCssPaintValue(effectiveColors?.dialogueColor);
@@ -515,21 +594,42 @@ function getTrackerProfilePalette(
 
   return {
     accent,
-    accentLayer: getBackgroundPaintLayer(dialoguePaint ?? accent),
-    displayLayer: getBackgroundPaintLayer(display ?? displaySolid),
+    accentLayer: getBackgroundPaintLayer(dialoguePaint ?? accent, opacity.dialogueColorOpacity),
+    accentGradientLayer: getGradientPaintLayer(dialoguePaint, opacity.dialogueColorOpacity),
+    displayLayer: getBackgroundPaintLayer(display ?? displaySolid, opacity.nameColorOpacity),
+    displayGradientLayer: getGradientPaintLayer(display, opacity.nameColorOpacity),
     displaySolid,
     box,
-    boxLayer: getBackgroundPaintLayer(boxPaint ?? box),
+    boxLayer: getBackgroundPaintLayer(boxPaint ?? box, opacity.boxColorOpacity),
+    boxGradientLayer: getGradientPaintLayer(boxPaint, opacity.boxColorOpacity),
     finish,
+    opacity,
   };
-}
-
-function getTrackerMix(value: number, scale: number, max: number) {
-  return Math.min(max, Math.round(value * scale));
 }
 
 function withTrackerProfileStyle(palette: TrackerProfilePalette, background: string): CSSProperties {
   const finish = getTrackerCardSkinFinish(palette.finish);
+  const displayOpacity = palette.opacity.nameColorOpacity;
+  const accentOpacity = palette.opacity.dialogueColorOpacity;
+  const boxOpacity = palette.opacity.boxColorOpacity;
+  const borderOpacity = scalePercent(finish.borderOpacity, Math.max(accentOpacity, boxOpacity));
+  const rowRuleOpacity = scalePercent(finish.rowRuleOpacity, Math.max(accentOpacity, boxOpacity));
+  const surfaceBoxMix = scalePercent(finish.surfaceBoxMix, boxOpacity);
+  const surfaceDisplayMix = scalePercent(finish.surfaceDisplayMix, displayOpacity);
+  const panelBoxMix = scalePercent(finish.panelBoxMix, boxOpacity);
+  const panelDisplayMix = scalePercent(finish.panelDisplayMix, displayOpacity);
+  const accentPanelMix = scalePercent(finish.accentPanelMix, accentOpacity);
+  const mutedBoxMix = Math.round(panelBoxMix * 0.55);
+  const mutedDisplayMix = Math.round(panelDisplayMix * 0.45);
+  const statTrackAccentMix = scalePercent(finish.statTrackAccentMix, accentOpacity);
+  const statTrackBoxMix = scalePercent(finish.statTrackBoxMix, boxOpacity);
+  const framePaintLayers = [palette.boxGradientLayer, palette.displayGradientLayer, palette.accentGradientLayer];
+  const mutedPanelPaintLayers = [palette.boxGradientLayer, palette.displayGradientLayer];
+  const panelPaintLayers = [palette.accentGradientLayer, palette.boxGradientLayer, palette.displayGradientLayer];
+  const panelStrongPaintLayers = [palette.displayGradientLayer, palette.accentGradientLayer, palette.boxGradientLayer];
+  const statTrackPaintLayers = [palette.boxGradientLayer, palette.displayGradientLayer, palette.accentGradientLayer];
+  const surfacePaintLayers = [palette.boxGradientLayer, palette.displayGradientLayer, palette.accentGradientLayer];
+  const slotPaintLayers = [palette.boxGradientLayer, palette.displayGradientLayer];
 
   const style: CSSProperties & {
     "--tracker-profile-accent": string;
@@ -543,11 +643,20 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-box": string;
     "--tracker-profile-box-layer": string;
     "--tracker-profile-frame": string;
+    "--tracker-profile-frame-blend": string;
     "--tracker-profile-panel": string;
+    "--tracker-profile-panel-blend": string;
     "--tracker-profile-panel-strong": string;
+    "--tracker-profile-panel-strong-blend": string;
     "--tracker-profile-muted-panel": string;
+    "--tracker-profile-muted-panel-blend": string;
     "--tracker-profile-rule": string;
     "--tracker-profile-surface": string;
+    "--tracker-profile-surface-blend": string;
+    "--tracker-profile-slot-rule": string;
+    "--tracker-profile-slot-shadow": string;
+    "--tracker-profile-slot-surface": string;
+    "--tracker-profile-slot-surface-blend": string;
     "--tracker-profile-tint-opacity": string;
     "--tracker-profile-display-opacity": string;
     "--tracker-profile-contrast-soft-top": string;
@@ -562,6 +671,7 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-stat-fill-glow": string;
     "--tracker-profile-stat-fill-highlight": string;
     "--tracker-profile-stat-track": string;
+    "--tracker-profile-stat-track-blend": string;
     "--tracker-profile-stat-track-ring": string;
     "--tracker-profile-stat-track-shadow": string;
     "--tracker-profile-text": string;
@@ -574,36 +684,60 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-accent": palette.accent,
     "--tracker-profile-accent-layer": palette.accentLayer,
     "--tracker-profile-dialogue": palette.accent,
-    "--tracker-profile-dialogue-border": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 52%, ${palette.accent} 48%) ${finish.borderOpacity}%, transparent)`,
-    "--tracker-profile-dialogue-glow": `color-mix(in srgb, ${palette.accent} ${finish.glowMix}%, transparent)`,
+    "--tracker-profile-dialogue-border": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 52%, ${palette.accent} 48%) ${borderOpacity}%, transparent)`,
+    "--tracker-profile-dialogue-glow": `color-mix(in srgb, ${palette.accent} ${scalePercent(finish.glowMix, accentOpacity)}%, transparent)`,
     "--tracker-profile-display-layer": palette.displayLayer,
     "--tracker-profile-display-solid": palette.displaySolid,
     "--tracker-profile-icon": palette.displaySolid,
     "--tracker-profile-box": palette.box,
     "--tracker-profile-box-layer": palette.boxLayer,
-    "--tracker-profile-frame":
+    "--tracker-profile-frame": getPaintedBackground(
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--card) ${100 - finish.surfaceBoxMix}%, ${palette.box} ${finish.surfaceBoxMix}%), ` +
-      `color-mix(in srgb, var(--background) ${100 - finish.surfaceDisplayMix}%, ${palette.displaySolid} ${finish.surfaceDisplayMix}%))`,
-    "--tracker-profile-panel":
+        `color-mix(in srgb, var(--card) ${100 - surfaceBoxMix}%, ${palette.box} ${surfaceBoxMix}%), ` +
+        `color-mix(in srgb, var(--background) ${100 - surfaceDisplayMix}%, ${palette.displaySolid} ${surfaceDisplayMix}%))`,
+      framePaintLayers,
+    ),
+    "--tracker-profile-frame-blend": getBackgroundBlendMode(framePaintLayers),
+    "--tracker-profile-panel": getPaintedBackground(
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--background) ${100 - finish.panelBoxMix}%, ${palette.box} ${finish.panelBoxMix}%), ` +
-      `color-mix(in srgb, var(--card) ${100 - finish.panelDisplayMix}%, ${palette.displaySolid} ${finish.panelDisplayMix}%))`,
-    "--tracker-profile-panel-strong":
+        `color-mix(in srgb, var(--background) ${100 - panelBoxMix}%, ${palette.box} ${panelBoxMix}%), ` +
+        `color-mix(in srgb, var(--card) ${100 - panelDisplayMix}%, ${palette.displaySolid} ${panelDisplayMix}%))`,
+      panelPaintLayers,
+    ),
+    "--tracker-profile-panel-blend": getBackgroundBlendMode(panelPaintLayers, "overlay"),
+    "--tracker-profile-panel-strong": getPaintedBackground(
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, color-mix(in srgb, var(--background) ${100 - finish.panelBoxMix}%, ${palette.box} ${finish.panelBoxMix}%) ${100 - finish.accentPanelMix}%, ${palette.accent} ${finish.accentPanelMix}%), ` +
-      `color-mix(in srgb, var(--card) ${100 - finish.panelDisplayMix}%, ${palette.displaySolid} ${finish.panelDisplayMix}%))`,
-    "--tracker-profile-muted-panel":
+        `color-mix(in srgb, color-mix(in srgb, var(--background) ${100 - panelBoxMix}%, ${palette.box} ${panelBoxMix}%) ${100 - accentPanelMix}%, ${palette.accent} ${accentPanelMix}%), ` +
+        `color-mix(in srgb, var(--card) ${100 - panelDisplayMix}%, ${palette.displaySolid} ${panelDisplayMix}%))`,
+      panelStrongPaintLayers,
+    ),
+    "--tracker-profile-panel-strong-blend": getBackgroundBlendMode(panelStrongPaintLayers, "overlay"),
+    "--tracker-profile-muted-panel": getPaintedBackground(
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--background) ${100 - Math.round(finish.panelBoxMix * 0.55)}%, ${palette.box} ${Math.round(finish.panelBoxMix * 0.55)}%), ` +
-      `color-mix(in srgb, var(--card) ${100 - Math.round(finish.panelDisplayMix * 0.45)}%, ${palette.displaySolid} ${Math.round(finish.panelDisplayMix * 0.45)}%))`,
-    "--tracker-profile-rule": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 58%, ${palette.accent} 42%) ${finish.borderOpacity}%, transparent)`,
-    "--tracker-profile-surface":
+        `color-mix(in srgb, var(--background) ${100 - mutedBoxMix}%, ${palette.box} ${mutedBoxMix}%), ` +
+        `color-mix(in srgb, var(--card) ${100 - mutedDisplayMix}%, ${palette.displaySolid} ${mutedDisplayMix}%))`,
+      mutedPanelPaintLayers,
+    ),
+    "--tracker-profile-muted-panel-blend": getBackgroundBlendMode(mutedPanelPaintLayers),
+    "--tracker-profile-rule": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 58%, ${palette.accent} 42%) ${borderOpacity}%, transparent)`,
+    "--tracker-profile-surface": getPaintedBackground(
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--card) ${100 - finish.surfaceDisplayMix}%, ${palette.displaySolid} ${finish.surfaceDisplayMix}%), ` +
-      `color-mix(in srgb, var(--background) ${100 - finish.surfaceBoxMix}%, ${palette.box} ${finish.surfaceBoxMix}%))`,
-    "--tracker-profile-tint-opacity": finish.tintOpacity,
-    "--tracker-profile-display-opacity": finish.displayOpacity,
+        `color-mix(in srgb, var(--card) ${100 - surfaceDisplayMix}%, ${palette.displaySolid} ${surfaceDisplayMix}%), ` +
+        `color-mix(in srgb, var(--background) ${100 - surfaceBoxMix}%, ${palette.box} ${surfaceBoxMix}%))`,
+      surfacePaintLayers,
+    ),
+    "--tracker-profile-surface-blend": getBackgroundBlendMode(surfacePaintLayers),
+    "--tracker-profile-slot-rule": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 50%, var(--foreground) 50%) ${finish.slotRuleOpacity}%, transparent)`,
+    "--tracker-profile-slot-shadow": `rgba(0, 0, 0, ${finish.slotShadowOpacity})`,
+    "--tracker-profile-slot-surface": getPaintedBackground(
+      `linear-gradient(180deg, ` +
+        `color-mix(in srgb, var(--background) ${finish.slotBackgroundTopMix}%, var(--card) ${100 - finish.slotBackgroundTopMix}%), ` +
+        `color-mix(in srgb, var(--background) ${finish.slotBackgroundBottomMix}%, var(--card) ${100 - finish.slotBackgroundBottomMix}%))`,
+      slotPaintLayers,
+    ),
+    "--tracker-profile-slot-surface-blend": getBackgroundBlendMode(slotPaintLayers, "soft-light"),
+    "--tracker-profile-tint-opacity": scaleOpacity(finish.tintOpacity, boxOpacity),
+    "--tracker-profile-display-opacity": scaleOpacity(finish.displayOpacity, displayOpacity),
     "--tracker-profile-contrast-soft-top": `${finish.softContrastTop}%`,
     "--tracker-profile-contrast-soft-mid": `${finish.softContrastMid}%`,
     "--tracker-profile-contrast-soft-bottom": `${finish.softContrastBottom}%`,
@@ -612,18 +746,25 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-contrast-strong-bottom": `${finish.strongContrastBottom}%`,
     "--tracker-profile-muted-text": `color-mix(in srgb, var(--foreground) ${finish.mutedTextMix}%, var(--muted-foreground) ${100 - finish.mutedTextMix}%)`,
     "--tracker-profile-number-text": `color-mix(in srgb, var(--foreground) ${finish.numberTextMix}%, var(--muted-foreground) ${100 - finish.numberTextMix}%)`,
-    "--tracker-profile-row-rule": `color-mix(in srgb, var(--foreground) ${finish.rowRuleOpacity}%, transparent)`,
-    "--tracker-profile-stat-fill-glow": `color-mix(in srgb, var(--foreground) ${finish.statFillGlowMix}%, transparent)`,
+    "--tracker-profile-row-rule": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 54%, ${palette.accent} 46%) ${rowRuleOpacity}%, transparent)`,
+    "--tracker-profile-stat-fill-glow": `color-mix(in srgb, color-mix(in srgb, ${palette.accent} 42%, var(--foreground) 58%) ${scalePercent(finish.statFillGlowMix, accentOpacity)}%, transparent)`,
     "--tracker-profile-stat-fill-highlight": `color-mix(in srgb, var(--foreground) ${finish.statFillHighlightMix}%, transparent)`,
-    "--tracker-profile-stat-track": `color-mix(in srgb, var(--background) ${finish.statTrackBackgroundMix}%, var(--secondary) ${100 - finish.statTrackBackgroundMix}%)`,
-    "--tracker-profile-stat-track-ring": `color-mix(in srgb, var(--foreground) ${finish.statTrackRingOpacity}%, transparent)`,
+    "--tracker-profile-stat-track": getPaintedBackground(
+      `linear-gradient(90deg, ` +
+        `color-mix(in srgb, color-mix(in srgb, var(--background) ${finish.statTrackBackgroundMix}%, ${palette.box} ${100 - finish.statTrackBackgroundMix}%) ${100 - statTrackBoxMix}%, ${palette.box} ${statTrackBoxMix}%), ` +
+        `color-mix(in srgb, color-mix(in srgb, var(--secondary) ${finish.statTrackBackgroundMix}%, ${palette.displaySolid} ${100 - finish.statTrackBackgroundMix}%) ${100 - statTrackAccentMix}%, ${palette.accent} ${statTrackAccentMix}%))`,
+      statTrackPaintLayers,
+    ),
+    "--tracker-profile-stat-track-blend": getBackgroundBlendMode(statTrackPaintLayers, "overlay"),
+    "--tracker-profile-stat-track-ring": `color-mix(in srgb, color-mix(in srgb, ${palette.accent} 52%, var(--foreground) 48%) ${scalePercent(finish.statTrackRingOpacity, accentOpacity)}%, transparent)`,
     "--tracker-profile-stat-track-shadow": `rgba(0, 0, 0, ${finish.statTrackShadowOpacity})`,
     "--tracker-profile-text": `color-mix(in srgb, var(--foreground) ${finish.textMix}%, var(--muted-foreground) ${100 - finish.textMix}%)`,
     "--tracker-inline-foreground": "var(--tracker-profile-text)",
     "--tracker-inline-muted": "var(--tracker-profile-muted-text)",
     "--tracker-inline-number": "var(--tracker-profile-number-text)",
     "--tracker-inline-rule": "var(--tracker-profile-row-rule)",
-    background,
+    background: getPaintedBackground(background, framePaintLayers),
+    backgroundBlendMode: getBackgroundBlendMode(framePaintLayers),
   };
 
   if (palette.accent !== DEFAULT_TRACKER_ACCENT) {
@@ -642,17 +783,34 @@ export function getPersonaProfileColors(persona: Persona | null): TrackerProfile
   };
 }
 
-export function getPersonaAmbienceStyle(persona: Persona | null): CSSProperties {
+export function getPersonaAmbienceStyle(
+  persona: Persona | null,
+  options: { paintBackground?: boolean } = {},
+): CSSProperties {
   const palette = getTrackerProfilePalette(getPersonaProfileColors(persona));
-  const displayMix = getTrackerMix(palette.finish.tintIntensity, 0.2, 20);
-  const boxMix = getTrackerMix(palette.finish.tintIntensity, 0.22, 22);
-  const radialMix = getTrackerMix(palette.finish.tintIntensity, 0.18, 18);
-  return withTrackerProfileStyle(
+  const finish = getTrackerCardSkinFinish(palette.finish);
+  const displayMix = scalePercent(
+    Math.min(30, Math.round(finish.surfaceDisplayMix * 0.9)),
+    palette.opacity.nameColorOpacity,
+  );
+  const boxMix = scalePercent(Math.min(34, Math.round(finish.surfaceBoxMix * 0.95)), palette.opacity.boxColorOpacity);
+  const radialMix = scalePercent(
+    Math.min(28, Math.round(finish.surfaceDisplayMix * 0.8)),
+    palette.opacity.nameColorOpacity,
+  );
+  const style = withTrackerProfileStyle(
     palette,
     `radial-gradient(circle at 78% 18%, color-mix(in srgb, ${palette.displaySolid} ${radialMix}%, transparent) 0%, transparent 54%), ` +
       `linear-gradient(135deg, color-mix(in srgb, var(--card) ${100 - boxMix}%, ${palette.box} ${boxMix}%), ` +
       `color-mix(in srgb, var(--background) ${100 - displayMix}%, ${palette.displaySolid} ${displayMix}%))`,
   );
+
+  if (options.paintBackground === false) {
+    delete style.background;
+    delete style.backgroundBlendMode;
+  }
+
+  return style;
 }
 
 export function getPersonaInitial(persona: Persona | null) {
@@ -698,8 +856,12 @@ export function getCharacterAmbienceStyle(
     profileColors,
     getSolidCssColor(character.stats?.find((stat) => stat.color)?.color) ?? DEFAULT_TRACKER_ACCENT,
   );
-  const boxMix = getTrackerMix(palette.finish.tintIntensity, 0.2, 20);
-  const displayMix = getTrackerMix(palette.finish.tintIntensity, 0.18, 18);
+  const finish = getTrackerCardSkinFinish(palette.finish);
+  const boxMix = scalePercent(Math.min(32, Math.round(finish.surfaceBoxMix * 0.9)), palette.opacity.boxColorOpacity);
+  const displayMix = scalePercent(
+    Math.min(28, Math.round(finish.surfaceDisplayMix * 0.85)),
+    palette.opacity.nameColorOpacity,
+  );
   return withTrackerProfileStyle(
     palette,
     `linear-gradient(135deg, color-mix(in srgb, var(--card) ${100 - boxMix}%, ${palette.box} ${boxMix}%), ` +

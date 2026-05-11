@@ -511,9 +511,11 @@ export function TrackerProfileDisplayWash({ className }: { className?: string })
 export function TrackerProfileEdgeHighlight({
   className,
   strength = "soft",
+  showBottom = true,
 }: {
   className?: string;
   strength?: "soft" | "strong";
+  showBottom?: boolean;
 }) {
   return (
     <div className={cn("pointer-events-none absolute inset-0 rounded-[inherit]", className)}>
@@ -527,11 +529,13 @@ export function TrackerProfileEdgeHighlight({
       />
       <div
         className={cn(
-          "absolute inset-x-0 top-0 h-px bg-[image:var(--tracker-profile-display-layer)]",
+          "absolute inset-x-0 top-0 h-px bg-[image:var(--tracker-profile-accent-layer)]",
           strength === "strong" ? "opacity-80" : "opacity-55",
         )}
       />
-      <div className="absolute inset-x-0 bottom-0 h-px bg-[image:var(--tracker-profile-accent-layer)] opacity-35" />
+      {showBottom && (
+        <div className="absolute inset-x-0 bottom-0 h-px bg-[image:var(--tracker-profile-accent-layer)] opacity-35" />
+      )}
     </div>
   );
 }

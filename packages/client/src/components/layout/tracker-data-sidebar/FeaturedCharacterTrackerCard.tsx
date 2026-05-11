@@ -124,7 +124,7 @@ function FeaturedCharacterPortrait({
     <div className="relative min-w-0">
       <div
         className={cn(
-          "relative z-[2] grid min-h-5 overflow-hidden rounded-t-md border border-b-0 border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-panel)] text-[0.625rem] text-[var(--muted-foreground)]",
+          "relative z-[2] grid min-h-5 overflow-hidden rounded-t-md border border-b-0 border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-panel)] text-[0.625rem] text-[var(--muted-foreground)] [background-blend-mode:var(--tracker-profile-panel-blend)]",
           headerAttachmentSide === "left" && "rounded-tl-none",
           headerAttachmentSide === "right" && "rounded-tr-none",
           brainButton
@@ -299,7 +299,7 @@ function FeaturedFieldTile({
       className={cn(
         fillAvailable
           ? cn(
-              "grid min-h-0 min-w-0 items-center gap-1 overflow-hidden rounded-sm border border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-muted-panel)] shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_6%,transparent)]",
+              "grid min-h-0 min-w-0 items-center gap-1 overflow-hidden rounded-sm border border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-muted-panel)] shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_6%,transparent)] [background-blend-mode:var(--tracker-profile-muted-panel-blend)]",
               balancedFill
                 ? "grid-cols-[1.25rem_minmax(0,1fr)] px-1 py-1"
                 : "grid-cols-[1.5rem_minmax(0,1fr)] px-1.5 py-1.5",
@@ -629,7 +629,7 @@ export function FeaturedCharacterTrackerCard({
   return (
     <article
       ref={cardRef}
-      className="group/character relative min-w-0 overflow-hidden rounded-md border border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-frame)] shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_10%,transparent)] transition-colors duration-200 hover:border-[var(--primary)]/34 @min-[380px]:mx-1"
+      className="group/character relative min-w-0 overflow-hidden rounded-md border border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-frame)] shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_10%,transparent)] transition-colors duration-200 hover:border-[var(--primary)]/34 [background-blend-mode:var(--tracker-profile-frame-blend)] @min-[380px]:mx-1"
       style={getCharacterAmbienceStyle(character, profileColors)}
     >
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--tracker-profile-accent)_10%,transparent)_0%,transparent_34%,color-mix(in_srgb,var(--background)_22%,transparent)_100%)]" />
@@ -695,7 +695,7 @@ export function FeaturedCharacterTrackerCard({
           <div ref={statCoreRef} className="relative flex min-w-0 flex-col gap-0">
             <div
               className={cn(
-                "relative min-h-5 overflow-hidden rounded-t-md border border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-panel-strong)] px-1 py-0",
+                "relative min-h-5 overflow-hidden rounded-t-md border border-[var(--tracker-profile-rule)] bg-[image:var(--tracker-profile-panel-strong)] px-1 py-0 [background-blend-mode:var(--tracker-profile-panel-strong-blend)]",
                 trackerPanelSide === "left" ? "rounded-tr-none border-r-0" : "rounded-tl-none border-l-0",
                 hasHeaderControls &&
                   (trackerPanelSide === "left"
