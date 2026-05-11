@@ -8,6 +8,33 @@ export interface TrackerCardFinish {
   contrastIntensity: number;
 }
 
+export interface TrackerCardSkinFinish {
+  accentPanelMix: number;
+  borderOpacity: number;
+  displayOpacity: string;
+  glowMix: number;
+  mutedTextMix: number;
+  numberTextMix: number;
+  panelBoxMix: number;
+  panelDisplayMix: number;
+  rowRuleOpacity: number;
+  softContrastBottom: number;
+  softContrastMid: number;
+  softContrastTop: number;
+  statFillGlowMix: number;
+  statFillHighlightMix: number;
+  statTrackBackgroundMix: number;
+  statTrackRingOpacity: number;
+  statTrackShadowOpacity: string;
+  strongContrastBottom: number;
+  strongContrastMid: number;
+  strongContrastTop: number;
+  surfaceBoxMix: number;
+  surfaceDisplayMix: number;
+  textMix: number;
+  tintOpacity: string;
+}
+
 export const TRACKER_CARD_FINISH_DEFAULTS: Record<TrackerCardColorMode, TrackerCardFinish> = {
   default: {
     tintIntensity: 0,
@@ -105,5 +132,50 @@ export function getTrackerCardFinish(
     tintIntensity: getClampedFinishValue(config?.tintIntensity) ?? defaults.tintIntensity,
     glowIntensity: getClampedFinishValue(config?.glowIntensity) ?? defaults.glowIntensity,
     contrastIntensity: getClampedFinishValue(config?.contrastIntensity) ?? defaults.contrastIntensity,
+  };
+}
+
+function getMix(value: number, scale: number, max: number) {
+  return Math.min(max, Math.round(value * scale));
+}
+
+function getRange(base: number, value: number, scale: number, max: number) {
+  return Math.min(max, Math.round(base + value * scale));
+}
+
+function getOpacity(base: number, value: number, scale: number, max: number) {
+  return Math.min(max, base + value * scale).toFixed(3);
+}
+
+export function getTrackerCardSkinFinish(finish: TrackerCardFinish): TrackerCardSkinFinish {
+  const tint = finish.tintIntensity;
+  const glow = finish.glowIntensity;
+  const contrast = finish.contrastIntensity;
+
+  return {
+    accentPanelMix: getMix(glow, 0.12, 12),
+    borderOpacity: Math.min(76, Math.round(20 + glow * 0.32 + contrast * 0.22)),
+    displayOpacity: getOpacity(0.035, tint + glow, 0.00042, 0.14),
+    glowMix: getRange(12, glow, 0.36, 48),
+    mutedTextMix: getRange(50, contrast, 0.33, 88),
+    numberTextMix: getRange(58, contrast, 0.32, 94),
+    panelBoxMix: getMix(tint, 0.18, 18),
+    panelDisplayMix: getMix(tint, 0.12, 12),
+    rowRuleOpacity: Math.min(50, Math.round(8 + contrast * 0.38 + glow * 0.08)),
+    softContrastBottom: getRange(14, contrast, 0.44, 66),
+    softContrastMid: getRange(10, contrast, 0.32, 48),
+    softContrastTop: getRange(12, contrast, 0.42, 62),
+    statFillGlowMix: Math.min(28, Math.round(5 + contrast * 0.14 + glow * 0.08)),
+    statFillHighlightMix: getRange(8, contrast, 0.18, 28),
+    statTrackBackgroundMix: getRange(58, contrast, 0.28, 88),
+    statTrackRingOpacity: getRange(6, contrast, 0.22, 30),
+    statTrackShadowOpacity: getOpacity(0.16, contrast, 0.0032, 0.48),
+    strongContrastBottom: getRange(20, contrast, 0.52, 78),
+    strongContrastMid: getRange(14, contrast, 0.42, 60),
+    strongContrastTop: getRange(18, contrast, 0.5, 72),
+    surfaceBoxMix: getMix(tint, 0.18, 18),
+    surfaceDisplayMix: getMix(tint, 0.18, 18),
+    textMix: getRange(72, contrast, 0.24, 96),
+    tintOpacity: getOpacity(0.025, tint, 0.00095, 0.12),
   };
 }

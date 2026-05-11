@@ -328,7 +328,7 @@ function FeaturedFieldTile({
           onSave={onSave}
           placeholder={placeholder}
           className={cn(
-            "w-full min-w-0 px-0 py-0 text-[var(--foreground)]/90 hover:bg-[var(--accent)]/25",
+            "w-full min-w-0 px-0 py-0 text-[color:var(--tracker-profile-text)] hover:bg-[var(--accent)]/25",
             fillAvailable
               ? balancedFill
                 ? "min-h-5 text-[0.625rem] leading-[1.08]"
@@ -342,7 +342,7 @@ function FeaturedFieldTile({
       ) : (
         <span
           className={cn(
-            "text-[var(--foreground)]/90",
+            "text-[color:var(--tracker-profile-text)]",
             fillAvailable
               ? balancedFill
                 ? "line-clamp-2 min-h-5 break-words text-[0.625rem] leading-[1.08]"
@@ -736,7 +736,7 @@ export function FeaturedCharacterTrackerCard({
                   value={character.name}
                   onSave={(name) => onUpdate({ ...character, name: name || "Character" })}
                   placeholder="Character"
-                  className="relative z-[1] h-5 w-full min-w-0 overflow-hidden px-0 py-0 text-[0.75rem] font-semibold leading-5 text-[var(--foreground)] @min-[340px]:text-[0.875rem] @min-[340px]:font-bold @min-[380px]:justify-center @min-[380px]:text-center"
+                  className="relative z-[1] h-5 w-full min-w-0 overflow-hidden px-0 py-0 text-[0.75rem] font-semibold leading-5 text-[color:var(--tracker-profile-text)] @min-[340px]:text-[0.875rem] @min-[340px]:font-bold @min-[380px]:justify-center @min-[380px]:text-center"
                   showEditHint={false}
                   fitPreview
                   fitAlign="center"
@@ -744,7 +744,7 @@ export function FeaturedCharacterTrackerCard({
                 />
               ) : (
                 <FittedText
-                  className="relative z-[1] w-full text-[0.75rem] font-semibold leading-5 text-[var(--foreground)] @min-[340px]:text-[0.875rem] @min-[340px]:font-bold"
+                  className="relative z-[1] w-full text-[0.75rem] font-semibold leading-5 text-[color:var(--tracker-profile-text)] @min-[340px]:text-[0.875rem] @min-[340px]:font-bold"
                   title={visibleText(character.name, "Character")}
                   align="center"
                   minScale={0.6}
@@ -816,7 +816,7 @@ export function FeaturedCharacterTrackerCard({
                   scrollOnHover
                 />
               ) : (
-                <span className="truncate font-medium text-[var(--muted-foreground)]">{name}</span>
+                <span className="truncate font-medium text-[color:var(--tracker-profile-muted-text)]">{name}</span>
               )}
               {onUpdate ? (
                 <InlineEdit
@@ -827,7 +827,7 @@ export function FeaturedCharacterTrackerCard({
                   scrollOnHover
                 />
               ) : (
-                <span className="min-w-0 truncate text-[var(--foreground)]">{value}</span>
+                <span className="min-w-0 truncate text-[color:var(--tracker-profile-text)]">{value}</span>
               )}
             </div>
           ))}

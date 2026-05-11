@@ -175,7 +175,7 @@ export function InlineEdit({
         }}
         onBlur={commit}
         className={cn(
-          "min-w-0 rounded-sm border border-[var(--border)] bg-[var(--background)]/50 px-1 py-0.5 text-xs text-[var(--foreground)] outline-none transition-colors focus:border-[var(--primary)]",
+          "min-w-0 rounded-sm border border-[var(--tracker-inline-rule,var(--border))] bg-[var(--background)]/50 px-1 py-0.5 text-xs text-[color:var(--tracker-inline-foreground,var(--foreground))] outline-none transition-colors focus:border-[var(--primary)]",
           className,
         )}
         placeholder={placeholder}
@@ -212,7 +212,12 @@ export function InlineEdit({
         <FittedText
           minScale={fitMinScale}
           align={fitAlign}
-          className={cn("flex-1", currentValue ? "text-[var(--foreground)]" : "italic text-[var(--muted-foreground)]")}
+          className={cn(
+            "flex-1",
+            currentValue
+              ? "text-[color:var(--tracker-inline-foreground,var(--foreground))]"
+              : "italic text-[color:var(--tracker-inline-muted,var(--muted-foreground))]",
+          )}
         >
           {previewText}
         </FittedText>
@@ -230,7 +235,9 @@ export function InlineEdit({
                   : fullPreview
                     ? "whitespace-nowrap leading-tight"
                     : "truncate",
-            currentValue ? "text-[var(--foreground)]" : "italic text-[var(--muted-foreground)]",
+            currentValue
+              ? "text-[color:var(--tracker-inline-foreground,var(--foreground))]"
+              : "italic text-[color:var(--tracker-inline-muted,var(--muted-foreground))]",
           )}
         >
           {useHoverScroll && currentValue && scrollActive ? (
@@ -248,7 +255,7 @@ export function InlineEdit({
       <Pencil
         size="0.5625rem"
         className={cn(
-          "shrink-0 text-[var(--muted-foreground)] opacity-0 transition-opacity group-hover/inline:opacity-60",
+          "shrink-0 text-[color:var(--tracker-inline-muted,var(--muted-foreground))] opacity-0 transition-opacity group-hover/inline:opacity-60",
           (!showEditHint || fullPreview) && "hidden",
           (useHoverScroll || editHintMode === "overlay") &&
             "pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2",
@@ -285,7 +292,7 @@ export function InlineNumber({
       title={title}
       style={{ width }}
       className={cn(
-        "rounded bg-transparent px-1 py-0.5 text-right text-[0.625rem] tabular-nums text-[var(--foreground)]/85 outline-none transition-colors hover:bg-[var(--accent)]/45 focus:bg-[var(--background)] focus:ring-1 focus:ring-[var(--primary)] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+        "rounded bg-transparent px-1 py-0.5 text-right text-[0.625rem] tabular-nums text-[color:var(--tracker-inline-number,var(--tracker-inline-foreground,var(--foreground)))] outline-none transition-colors hover:bg-[var(--accent)]/45 focus:bg-[var(--background)] focus:ring-1 focus:ring-[var(--primary)] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
         className,
       )}
     />
@@ -559,7 +566,7 @@ export function TrackerPortraitStageBackdrop({ media, className }: { media?: str
 
 export function EmptySection({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-sm border border-dashed border-[var(--border)] px-1 py-1 text-center text-[0.6875rem] text-[var(--muted-foreground)]">
+    <div className="rounded-sm border border-dashed border-[var(--tracker-inline-rule,var(--border))] px-1 py-1 text-center text-[0.6875rem] text-[color:var(--tracker-inline-muted,var(--muted-foreground))]">
       {children}
     </div>
   );

@@ -56,7 +56,7 @@ function CompactCharacterField({
   return (
     <div
       className={cn(
-        "grid min-h-3.5 min-w-0 grid-cols-[0.75rem_minmax(0,1fr)] items-center gap-0.5 rounded-[2px] px-0.5 py-px text-[0.5625rem] leading-[0.875rem] text-[var(--muted-foreground)] hover:bg-[var(--accent)]/14 @min-[176px]:min-h-4 @min-[176px]:grid-cols-[0.875rem_minmax(0,1fr)] @min-[176px]:text-[0.625rem] @min-[176px]:leading-4",
+        "grid min-h-3.5 min-w-0 grid-cols-[0.75rem_minmax(0,1fr)] items-center gap-0.5 rounded-[2px] px-0.5 py-px text-[0.5625rem] leading-[0.875rem] text-[color:var(--tracker-profile-muted-text)] hover:bg-[var(--accent)]/14 @min-[176px]:min-h-4 @min-[176px]:grid-cols-[0.875rem_minmax(0,1fr)] @min-[176px]:text-[0.625rem] @min-[176px]:leading-4",
         className,
       )}
     >
@@ -82,7 +82,9 @@ function CompactCharacterField({
           showEditHint={false}
         />
       ) : (
-        <span className="min-w-0 truncate text-[var(--foreground)]/90">{visibleText(value, placeholder)}</span>
+        <span className="min-w-0 truncate text-[color:var(--tracker-profile-text)]">
+          {visibleText(value, placeholder)}
+        </span>
       )}
     </div>
   );
@@ -240,14 +242,14 @@ export function CharacterTrackerCard({
               value={character.name}
               onSave={(name) => onUpdate({ ...character, name: name || "Character" })}
               placeholder="Character"
-              className="h-4 w-full min-w-0 overflow-hidden px-0.5 py-0 text-[0.6875rem] font-semibold leading-4 text-[var(--foreground)] @min-[176px]:h-5 @min-[176px]:text-xs @min-[176px]:leading-5"
+              className="h-4 w-full min-w-0 overflow-hidden px-0.5 py-0 text-[0.6875rem] font-semibold leading-4 text-[color:var(--tracker-profile-text)] @min-[176px]:h-5 @min-[176px]:text-xs @min-[176px]:leading-5"
               showEditHint={false}
               fitPreview
               fitMinScale={0.58}
             />
           ) : (
             <FittedText
-              className="w-full text-[0.6875rem] font-semibold leading-4 text-[var(--foreground)] @min-[176px]:text-xs @min-[176px]:leading-5"
+              className="w-full text-[0.6875rem] font-semibold leading-4 text-[color:var(--tracker-profile-text)] @min-[176px]:text-xs @min-[176px]:leading-5"
               title={visibleText(character.name, "Character")}
               minScale={0.58}
             >
@@ -355,7 +357,7 @@ export function CharacterTrackerCard({
                   scrollOnHover
                 />
               ) : (
-                <span className="truncate font-medium text-[var(--muted-foreground)]">{name}</span>
+                <span className="truncate font-medium text-[color:var(--tracker-profile-muted-text)]">{name}</span>
               )}
               {onUpdate ? (
                 <InlineEdit
@@ -366,7 +368,7 @@ export function CharacterTrackerCard({
                   scrollOnHover
                 />
               ) : (
-                <span className="min-w-0 truncate text-[var(--foreground)]">{value}</span>
+                <span className="min-w-0 truncate text-[color:var(--tracker-profile-text)]">{value}</span>
               )}
             </div>
           ))}

@@ -5,6 +5,7 @@ import { cn } from "../../lib/utils";
 import {
   cleanTrackerCardColorConfig,
   getTrackerCardFinish,
+  getTrackerCardSkinFinish,
   normalizeTrackerCardColorMode,
   parseTrackerCardColorConfig,
 } from "../../lib/tracker-card-colors";
@@ -96,24 +97,26 @@ type TrackerPreviewStyle = CSSProperties & {
   "--tracker-preview-contrast-top": string;
   "--tracker-preview-contrast-mid": string;
   "--tracker-preview-contrast-bottom": string;
+  "--tracker-preview-muted-text": string;
+  "--tracker-preview-number-text": string;
+  "--tracker-preview-row-rule": string;
+  "--tracker-preview-stat-fill-glow": string;
+  "--tracker-preview-stat-fill-highlight": string;
+  "--tracker-preview-stat-track": string;
+  "--tracker-preview-stat-track-ring": string;
+  "--tracker-preview-stat-track-shadow": string;
+  "--tracker-preview-text": string;
 };
 
 function mixPercent(value: number, scale: number, max: number) {
   return Math.min(max, Math.round(value * scale));
 }
 
-function rangePercent(base: number, value: number, scale: number, max: number) {
-  return Math.min(max, Math.round(base + value * scale));
-}
-
-function getOpacity(base: number, value: number, scale: number, max: number) {
-  return Math.min(max, base + value * scale).toFixed(3);
-}
-
 function getTrackerPreviewStyle(
   colors: TrackerCardColorControlsProps["chatColors"],
   finish: ReturnType<typeof getTrackerCardFinish>,
 ): TrackerPreviewStyle {
+  const skin = getTrackerCardSkinFinish(finish);
   const displaySolid =
     getPaintSolidFallback(colors.nameColor) ??
     getPaintSolidFallback(colors.dialogueColor) ??
@@ -125,56 +128,56 @@ function getTrackerPreviewStyle(
   const accentLayer = getPaintLayer(colors.dialogueColor) ?? `linear-gradient(${accent}, ${accent})`;
   const boxLayer = getPaintLayer(colors.boxColor) ?? `linear-gradient(${box}, ${box})`;
   const tint = finish.tintIntensity;
-  const glow = finish.glowIntensity;
-  const contrast = finish.contrastIntensity;
   const ambienceBoxMix = mixPercent(tint, 0.22, 22);
   const ambienceDisplayMix = mixPercent(tint, 0.2, 20);
   const ambienceRadialMix = mixPercent(tint, 0.18, 18);
-  const surfaceBoxMix = mixPercent(tint, 0.18, 18);
-  const surfaceDisplayMix = mixPercent(tint, 0.18, 18);
-  const panelBoxMix = mixPercent(tint, 0.18, 18);
-  const panelDisplayMix = mixPercent(tint, 0.12, 12);
-  const accentPanelMix = mixPercent(glow, 0.12, 12);
-  const borderOpacity = rangePercent(22, glow, 0.42, 64);
-  const glowMix = rangePercent(12, glow, 0.36, 48);
-  const mutedBoxMix = Math.round(panelBoxMix * 0.55);
-  const mutedDisplayMix = Math.round(panelDisplayMix * 0.45);
+  const mutedBoxMix = Math.round(skin.panelBoxMix * 0.55);
+  const mutedDisplayMix = Math.round(skin.panelDisplayMix * 0.45);
 
   return {
     "--tracker-preview-accent": accent,
     "--tracker-preview-accent-layer": accentLayer,
     "--tracker-preview-box": box,
     "--tracker-preview-box-layer": boxLayer,
-    "--tracker-preview-dialogue-glow": `color-mix(in srgb, ${accent} ${glowMix}%, transparent)`,
+    "--tracker-preview-dialogue-glow": `color-mix(in srgb, ${accent} ${skin.glowMix}%, transparent)`,
     "--tracker-preview-display-layer": displayLayer,
-    "--tracker-preview-display-opacity": getOpacity(0.035, tint + glow, 0.00042, 0.14),
+    "--tracker-preview-display-opacity": skin.displayOpacity,
     "--tracker-preview-display-solid": displaySolid,
     "--tracker-preview-frame":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--card) ${100 - surfaceBoxMix}%, ${box} ${surfaceBoxMix}%), ` +
-      `color-mix(in srgb, var(--background) ${100 - surfaceDisplayMix}%, ${displaySolid} ${surfaceDisplayMix}%))`,
+      `color-mix(in srgb, var(--card) ${100 - skin.surfaceBoxMix}%, ${box} ${skin.surfaceBoxMix}%), ` +
+      `color-mix(in srgb, var(--background) ${100 - skin.surfaceDisplayMix}%, ${displaySolid} ${skin.surfaceDisplayMix}%))`,
     "--tracker-preview-muted-panel":
       `linear-gradient(135deg, ` +
       `color-mix(in srgb, var(--background) ${100 - mutedBoxMix}%, ${box} ${mutedBoxMix}%), ` +
       `color-mix(in srgb, var(--card) ${100 - mutedDisplayMix}%, ${displaySolid} ${mutedDisplayMix}%))`,
     "--tracker-preview-panel":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--background) ${100 - panelBoxMix}%, ${box} ${panelBoxMix}%), ` +
-      `color-mix(in srgb, var(--card) ${100 - panelDisplayMix}%, ${displaySolid} ${panelDisplayMix}%))`,
+      `color-mix(in srgb, var(--background) ${100 - skin.panelBoxMix}%, ${box} ${skin.panelBoxMix}%), ` +
+      `color-mix(in srgb, var(--card) ${100 - skin.panelDisplayMix}%, ${displaySolid} ${skin.panelDisplayMix}%))`,
     "--tracker-preview-panel-strong":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, color-mix(in srgb, var(--background) ${100 - panelBoxMix}%, ${box} ${panelBoxMix}%) ${100 - accentPanelMix}%, ${accent} ${accentPanelMix}%), ` +
-      `color-mix(in srgb, var(--card) ${100 - panelDisplayMix}%, ${displaySolid} ${panelDisplayMix}%))`,
-    "--tracker-preview-rule": `color-mix(in srgb, color-mix(in srgb, ${box} 58%, ${accent} 42%) ${borderOpacity}%, transparent)`,
+      `color-mix(in srgb, color-mix(in srgb, var(--background) ${100 - skin.panelBoxMix}%, ${box} ${skin.panelBoxMix}%) ${100 - skin.accentPanelMix}%, ${accent} ${skin.accentPanelMix}%), ` +
+      `color-mix(in srgb, var(--card) ${100 - skin.panelDisplayMix}%, ${displaySolid} ${skin.panelDisplayMix}%))`,
+    "--tracker-preview-rule": `color-mix(in srgb, color-mix(in srgb, ${box} 58%, ${accent} 42%) ${skin.borderOpacity}%, transparent)`,
     "--tracker-preview-surface":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--card) ${100 - surfaceDisplayMix}%, ${displaySolid} ${surfaceDisplayMix}%), ` +
-      `color-mix(in srgb, var(--background) ${100 - surfaceBoxMix}%, ${box} ${surfaceBoxMix}%))`,
-    "--tracker-preview-tint-opacity": getOpacity(0.025, finish.tintIntensity, 0.00095, 0.12),
-    "--tracker-preview-glow-opacity": getOpacity(0.035, finish.tintIntensity + finish.glowIntensity, 0.00042, 0.14),
-    "--tracker-preview-contrast-top": `${rangePercent(18, contrast, 0.5, 72)}%`,
-    "--tracker-preview-contrast-mid": `${rangePercent(14, contrast, 0.42, 60)}%`,
-    "--tracker-preview-contrast-bottom": `${rangePercent(20, contrast, 0.52, 78)}%`,
+      `color-mix(in srgb, var(--card) ${100 - skin.surfaceDisplayMix}%, ${displaySolid} ${skin.surfaceDisplayMix}%), ` +
+      `color-mix(in srgb, var(--background) ${100 - skin.surfaceBoxMix}%, ${box} ${skin.surfaceBoxMix}%))`,
+    "--tracker-preview-tint-opacity": skin.tintOpacity,
+    "--tracker-preview-glow-opacity": skin.displayOpacity,
+    "--tracker-preview-contrast-top": `${skin.strongContrastTop}%`,
+    "--tracker-preview-contrast-mid": `${skin.strongContrastMid}%`,
+    "--tracker-preview-contrast-bottom": `${skin.strongContrastBottom}%`,
+    "--tracker-preview-muted-text": `color-mix(in srgb, var(--foreground) ${skin.mutedTextMix}%, var(--muted-foreground) ${100 - skin.mutedTextMix}%)`,
+    "--tracker-preview-number-text": `color-mix(in srgb, var(--foreground) ${skin.numberTextMix}%, var(--muted-foreground) ${100 - skin.numberTextMix}%)`,
+    "--tracker-preview-row-rule": `color-mix(in srgb, var(--foreground) ${skin.rowRuleOpacity}%, transparent)`,
+    "--tracker-preview-stat-fill-glow": `color-mix(in srgb, var(--foreground) ${skin.statFillGlowMix}%, transparent)`,
+    "--tracker-preview-stat-fill-highlight": `color-mix(in srgb, var(--foreground) ${skin.statFillHighlightMix}%, transparent)`,
+    "--tracker-preview-stat-track": `color-mix(in srgb, var(--background) ${skin.statTrackBackgroundMix}%, var(--secondary) ${100 - skin.statTrackBackgroundMix}%)`,
+    "--tracker-preview-stat-track-ring": `color-mix(in srgb, var(--foreground) ${skin.statTrackRingOpacity}%, transparent)`,
+    "--tracker-preview-stat-track-shadow": `rgba(0, 0, 0, ${skin.statTrackShadowOpacity})`,
+    "--tracker-preview-text": `color-mix(in srgb, var(--foreground) ${skin.textMix}%, var(--muted-foreground) ${100 - skin.textMix}%)`,
     background:
       `radial-gradient(circle at 78% 18%, color-mix(in srgb, ${displaySolid} ${ambienceRadialMix}%, transparent) 0%, transparent 54%), ` +
       `linear-gradient(135deg, color-mix(in srgb, var(--card) ${100 - ambienceBoxMix}%, ${box} ${ambienceBoxMix}%), ` +
@@ -303,7 +306,7 @@ export function TrackerCardColorControls({
                     className="pointer-events-none absolute inset-0 bg-[image:var(--tracker-preview-display-layer)]"
                     style={{ opacity: "var(--tracker-preview-display-opacity)" }}
                   />
-                  <span className="relative z-[1] block truncate text-[0.75rem] font-semibold leading-5 text-[var(--foreground)]">
+                  <span className="relative z-[1] block truncate text-[0.75rem] font-semibold leading-5 text-[color:var(--tracker-preview-text)]">
                     {previewName || entityLabel}
                   </span>
                   <span className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[image:var(--tracker-preview-display-layer)] opacity-80" />
@@ -311,14 +314,19 @@ export function TrackerCardColorControls({
                 </div>
                 <div className="space-y-1 px-1 py-1">
                   {TRACKER_CARD_PREVIEW_STATS.map((stat) => (
-                    <div key={stat.label} className="grid gap-0.5">
+                    <div
+                      key={stat.label}
+                      className="grid gap-0.5 border-b border-[var(--tracker-preview-row-rule)] pb-0.5 last:border-b-0 last:pb-0"
+                    >
                       <div className="flex items-center justify-between gap-2 text-[0.625rem] leading-none">
-                        <span className="truncate text-[var(--foreground)]/82">{stat.label}</span>
-                        <span className="font-mono text-[var(--foreground)]/72">{stat.value} / 100</span>
+                        <span className="truncate text-[color:var(--tracker-preview-text)]">{stat.label}</span>
+                        <span className="font-mono text-[color:var(--tracker-preview-number-text)]">
+                          {stat.value} / 100
+                        </span>
                       </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-[var(--background)]/68 ring-1 ring-[color-mix(in_srgb,var(--tracker-preview-rule)_55%,transparent)]">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-[var(--tracker-preview-stat-track)] shadow-[inset_0_1px_2px_var(--tracker-preview-stat-track-shadow)] ring-1 ring-[var(--tracker-preview-stat-track-ring)]">
                         <div
-                          className="h-full rounded-full shadow-[0_0_6px_color-mix(in_srgb,var(--foreground)_12%,transparent)]"
+                          className="h-full rounded-full shadow-[inset_0_1px_0_var(--tracker-preview-stat-fill-highlight),0_0_6px_var(--tracker-preview-stat-fill-glow)]"
                           style={{ width: stat.width, backgroundColor: stat.color }}
                         />
                       </div>
@@ -361,13 +369,13 @@ export function TrackerCardColorControls({
                     style={{ opacity: "var(--tracker-preview-display-opacity)" }}
                   />
                   <Package size="0.75rem" className="relative z-[1] shrink-0 text-[var(--tracker-preview-accent)]/78" />
-                  <span className="relative z-[1] min-w-0 flex-1 truncate font-medium text-[color-mix(in_srgb,var(--foreground)_78%,var(--tracker-preview-accent)_22%)]">
+                  <span className="relative z-[1] min-w-0 flex-1 truncate font-medium text-[color-mix(in_srgb,var(--tracker-preview-text)_78%,var(--tracker-preview-accent)_22%)]">
                     Inventory
                   </span>
                 </div>
                 <div className="relative mt-px grid min-h-4 grid-cols-[minmax(0,1fr)_max-content] items-center gap-0.5 rounded-[2px] border border-[var(--tracker-preview-rule)] bg-[image:var(--tracker-preview-muted-panel)] px-1 py-px text-[0.625rem] leading-4">
-                  <span className="truncate text-[var(--foreground)]/78">None</span>
-                  <span className="font-mono text-[var(--foreground)]/60">1</span>
+                  <span className="truncate text-[color:var(--tracker-preview-text)]">None</span>
+                  <span className="font-mono text-[color:var(--tracker-preview-number-text)]">1</span>
                 </div>
               </div>
             </div>

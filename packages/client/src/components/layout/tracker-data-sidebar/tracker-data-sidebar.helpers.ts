@@ -9,6 +9,7 @@ import type {
 import type { SpriteInfo } from "../../../hooks/use-characters";
 import {
   getTrackerCardFinish,
+  getTrackerCardSkinFinish,
   normalizeTrackerCardColorMode,
   parseTrackerCardColorConfig,
   type TrackerCardFinish,
@@ -527,33 +528,8 @@ function getTrackerMix(value: number, scale: number, max: number) {
   return Math.min(max, Math.round(value * scale));
 }
 
-function getTrackerRange(base: number, value: number, scale: number, max: number) {
-  return Math.min(max, Math.round(base + value * scale));
-}
-
-function getTrackerOpacity(base: number, value: number, scale: number, max: number) {
-  return Math.min(max, base + value * scale).toFixed(3);
-}
-
 function withTrackerProfileStyle(palette: TrackerProfilePalette, background: string): CSSProperties {
-  const tint = palette.finish.tintIntensity;
-  const glow = palette.finish.glowIntensity;
-  const contrast = palette.finish.contrastIntensity;
-  const surfaceDisplayMix = getTrackerMix(tint, 0.18, 18);
-  const surfaceBoxMix = getTrackerMix(tint, 0.18, 18);
-  const panelDisplayMix = getTrackerMix(tint, 0.12, 12);
-  const panelBoxMix = getTrackerMix(tint, 0.18, 18);
-  const accentPanelMix = getTrackerMix(glow, 0.12, 12);
-  const glowMix = getTrackerRange(12, glow, 0.36, 48);
-  const borderOpacity = getTrackerRange(22, glow, 0.42, 64);
-  const displayOpacity = getTrackerOpacity(0.035, tint + glow, 0.00042, 0.14);
-  const tintOpacity = getTrackerOpacity(0.025, tint, 0.00095, 0.12);
-  const softContrastTop = getTrackerRange(12, contrast, 0.42, 62);
-  const softContrastMid = getTrackerRange(10, contrast, 0.32, 48);
-  const softContrastBottom = getTrackerRange(14, contrast, 0.44, 66);
-  const strongContrastTop = getTrackerRange(18, contrast, 0.5, 72);
-  const strongContrastMid = getTrackerRange(14, contrast, 0.42, 60);
-  const strongContrastBottom = getTrackerRange(20, contrast, 0.52, 78);
+  const finish = getTrackerCardSkinFinish(palette.finish);
 
   const style: CSSProperties & {
     "--tracker-profile-accent": string;
@@ -580,13 +556,26 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-contrast-strong-top": string;
     "--tracker-profile-contrast-strong-mid": string;
     "--tracker-profile-contrast-strong-bottom": string;
+    "--tracker-profile-muted-text": string;
+    "--tracker-profile-number-text": string;
+    "--tracker-profile-row-rule": string;
+    "--tracker-profile-stat-fill-glow": string;
+    "--tracker-profile-stat-fill-highlight": string;
+    "--tracker-profile-stat-track": string;
+    "--tracker-profile-stat-track-ring": string;
+    "--tracker-profile-stat-track-shadow": string;
+    "--tracker-profile-text": string;
+    "--tracker-inline-foreground": string;
+    "--tracker-inline-muted": string;
+    "--tracker-inline-number": string;
+    "--tracker-inline-rule": string;
     "--primary"?: string;
   } = {
     "--tracker-profile-accent": palette.accent,
     "--tracker-profile-accent-layer": palette.accentLayer,
     "--tracker-profile-dialogue": palette.accent,
-    "--tracker-profile-dialogue-border": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 52%, ${palette.accent} 48%) ${borderOpacity}%, transparent)`,
-    "--tracker-profile-dialogue-glow": `color-mix(in srgb, ${palette.accent} ${glowMix}%, transparent)`,
+    "--tracker-profile-dialogue-border": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 52%, ${palette.accent} 48%) ${finish.borderOpacity}%, transparent)`,
+    "--tracker-profile-dialogue-glow": `color-mix(in srgb, ${palette.accent} ${finish.glowMix}%, transparent)`,
     "--tracker-profile-display-layer": palette.displayLayer,
     "--tracker-profile-display-solid": palette.displaySolid,
     "--tracker-profile-icon": palette.displaySolid,
@@ -594,33 +583,46 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-box-layer": palette.boxLayer,
     "--tracker-profile-frame":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--card) ${100 - surfaceBoxMix}%, ${palette.box} ${surfaceBoxMix}%), ` +
-      `color-mix(in srgb, var(--background) ${100 - surfaceDisplayMix}%, ${palette.displaySolid} ${surfaceDisplayMix}%))`,
+      `color-mix(in srgb, var(--card) ${100 - finish.surfaceBoxMix}%, ${palette.box} ${finish.surfaceBoxMix}%), ` +
+      `color-mix(in srgb, var(--background) ${100 - finish.surfaceDisplayMix}%, ${palette.displaySolid} ${finish.surfaceDisplayMix}%))`,
     "--tracker-profile-panel":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--background) ${100 - panelBoxMix}%, ${palette.box} ${panelBoxMix}%), ` +
-      `color-mix(in srgb, var(--card) ${100 - panelDisplayMix}%, ${palette.displaySolid} ${panelDisplayMix}%))`,
+      `color-mix(in srgb, var(--background) ${100 - finish.panelBoxMix}%, ${palette.box} ${finish.panelBoxMix}%), ` +
+      `color-mix(in srgb, var(--card) ${100 - finish.panelDisplayMix}%, ${palette.displaySolid} ${finish.panelDisplayMix}%))`,
     "--tracker-profile-panel-strong":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, color-mix(in srgb, var(--background) ${100 - panelBoxMix}%, ${palette.box} ${panelBoxMix}%) ${100 - accentPanelMix}%, ${palette.accent} ${accentPanelMix}%), ` +
-      `color-mix(in srgb, var(--card) ${100 - panelDisplayMix}%, ${palette.displaySolid} ${panelDisplayMix}%))`,
+      `color-mix(in srgb, color-mix(in srgb, var(--background) ${100 - finish.panelBoxMix}%, ${palette.box} ${finish.panelBoxMix}%) ${100 - finish.accentPanelMix}%, ${palette.accent} ${finish.accentPanelMix}%), ` +
+      `color-mix(in srgb, var(--card) ${100 - finish.panelDisplayMix}%, ${palette.displaySolid} ${finish.panelDisplayMix}%))`,
     "--tracker-profile-muted-panel":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--background) ${100 - Math.round(panelBoxMix * 0.55)}%, ${palette.box} ${Math.round(panelBoxMix * 0.55)}%), ` +
-      `color-mix(in srgb, var(--card) ${100 - Math.round(panelDisplayMix * 0.45)}%, ${palette.displaySolid} ${Math.round(panelDisplayMix * 0.45)}%))`,
-    "--tracker-profile-rule": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 58%, ${palette.accent} 42%) ${borderOpacity}%, transparent)`,
+      `color-mix(in srgb, var(--background) ${100 - Math.round(finish.panelBoxMix * 0.55)}%, ${palette.box} ${Math.round(finish.panelBoxMix * 0.55)}%), ` +
+      `color-mix(in srgb, var(--card) ${100 - Math.round(finish.panelDisplayMix * 0.45)}%, ${palette.displaySolid} ${Math.round(finish.panelDisplayMix * 0.45)}%))`,
+    "--tracker-profile-rule": `color-mix(in srgb, color-mix(in srgb, ${palette.box} 58%, ${palette.accent} 42%) ${finish.borderOpacity}%, transparent)`,
     "--tracker-profile-surface":
       `linear-gradient(135deg, ` +
-      `color-mix(in srgb, var(--card) ${100 - surfaceDisplayMix}%, ${palette.displaySolid} ${surfaceDisplayMix}%), ` +
-      `color-mix(in srgb, var(--background) ${100 - surfaceBoxMix}%, ${palette.box} ${surfaceBoxMix}%))`,
-    "--tracker-profile-tint-opacity": tintOpacity,
-    "--tracker-profile-display-opacity": displayOpacity,
-    "--tracker-profile-contrast-soft-top": `${softContrastTop}%`,
-    "--tracker-profile-contrast-soft-mid": `${softContrastMid}%`,
-    "--tracker-profile-contrast-soft-bottom": `${softContrastBottom}%`,
-    "--tracker-profile-contrast-strong-top": `${strongContrastTop}%`,
-    "--tracker-profile-contrast-strong-mid": `${strongContrastMid}%`,
-    "--tracker-profile-contrast-strong-bottom": `${strongContrastBottom}%`,
+      `color-mix(in srgb, var(--card) ${100 - finish.surfaceDisplayMix}%, ${palette.displaySolid} ${finish.surfaceDisplayMix}%), ` +
+      `color-mix(in srgb, var(--background) ${100 - finish.surfaceBoxMix}%, ${palette.box} ${finish.surfaceBoxMix}%))`,
+    "--tracker-profile-tint-opacity": finish.tintOpacity,
+    "--tracker-profile-display-opacity": finish.displayOpacity,
+    "--tracker-profile-contrast-soft-top": `${finish.softContrastTop}%`,
+    "--tracker-profile-contrast-soft-mid": `${finish.softContrastMid}%`,
+    "--tracker-profile-contrast-soft-bottom": `${finish.softContrastBottom}%`,
+    "--tracker-profile-contrast-strong-top": `${finish.strongContrastTop}%`,
+    "--tracker-profile-contrast-strong-mid": `${finish.strongContrastMid}%`,
+    "--tracker-profile-contrast-strong-bottom": `${finish.strongContrastBottom}%`,
+    "--tracker-profile-muted-text": `color-mix(in srgb, var(--foreground) ${finish.mutedTextMix}%, var(--muted-foreground) ${100 - finish.mutedTextMix}%)`,
+    "--tracker-profile-number-text": `color-mix(in srgb, var(--foreground) ${finish.numberTextMix}%, var(--muted-foreground) ${100 - finish.numberTextMix}%)`,
+    "--tracker-profile-row-rule": `color-mix(in srgb, var(--foreground) ${finish.rowRuleOpacity}%, transparent)`,
+    "--tracker-profile-stat-fill-glow": `color-mix(in srgb, var(--foreground) ${finish.statFillGlowMix}%, transparent)`,
+    "--tracker-profile-stat-fill-highlight": `color-mix(in srgb, var(--foreground) ${finish.statFillHighlightMix}%, transparent)`,
+    "--tracker-profile-stat-track": `color-mix(in srgb, var(--background) ${finish.statTrackBackgroundMix}%, var(--secondary) ${100 - finish.statTrackBackgroundMix}%)`,
+    "--tracker-profile-stat-track-ring": `color-mix(in srgb, var(--foreground) ${finish.statTrackRingOpacity}%, transparent)`,
+    "--tracker-profile-stat-track-shadow": `rgba(0, 0, 0, ${finish.statTrackShadowOpacity})`,
+    "--tracker-profile-text": `color-mix(in srgb, var(--foreground) ${finish.textMix}%, var(--muted-foreground) ${100 - finish.textMix}%)`,
+    "--tracker-inline-foreground": "var(--tracker-profile-text)",
+    "--tracker-inline-muted": "var(--tracker-profile-muted-text)",
+    "--tracker-inline-number": "var(--tracker-profile-number-text)",
+    "--tracker-inline-rule": "var(--tracker-profile-row-rule)",
     background,
   };
 
