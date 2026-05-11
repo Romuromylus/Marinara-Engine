@@ -75,6 +75,7 @@ const CREATE_TABLES: string[] = [
     name_color TEXT NOT NULL DEFAULT '',
     dialogue_color TEXT NOT NULL DEFAULT '',
     box_color TEXT NOT NULL DEFAULT '',
+    tracker_card_colors TEXT NOT NULL DEFAULT '{"mode":"chat"}',
     persona_stats TEXT NOT NULL DEFAULT '',
     alt_descriptions TEXT NOT NULL DEFAULT '[]',
     tags TEXT NOT NULL DEFAULT '[]',
@@ -692,6 +693,11 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: "personas",
     column: "avatar_crop",
     definition: "TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    table: "personas",
+    column: "tracker_card_colors",
+    definition: `TEXT NOT NULL DEFAULT '{"mode":"chat"}'`,
   },
 ];
 

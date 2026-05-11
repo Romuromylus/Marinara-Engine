@@ -621,6 +621,7 @@ export async function charactersRoutes(app: FastifyInstance) {
       nameColor?: string;
       dialogueColor?: string;
       boxColor?: string;
+      trackerCardColors?: string;
       avatarCrop?: string;
       createdAt?: string;
       updatedAt?: string;

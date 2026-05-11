@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { ChevronDown, Pencil, Plus } from "lucide-react";
 import { cn } from "../../../lib/utils";
 import { TRACKER_TEXT_MICRO } from "./tracker-data-sidebar.constants";
@@ -473,25 +481,22 @@ export function SectionHeader({
 }
 
 export function TrackerReadabilityVeil({ strength = "soft" }: { strength?: "soft" | "strong" }) {
-  return (
-    <div
-      className={cn(
-        "pointer-events-none absolute inset-0 z-0",
-        strength === "strong"
-          ? "bg-[linear-gradient(180deg,color-mix(in_srgb,var(--background)_40%,transparent)_0%,color-mix(in_srgb,var(--card)_30%,transparent)_52%,color-mix(in_srgb,var(--background)_42%,transparent)_100%)]"
-          : "bg-[linear-gradient(180deg,color-mix(in_srgb,var(--background)_30%,transparent)_0%,color-mix(in_srgb,var(--card)_22%,transparent)_58%,color-mix(in_srgb,var(--background)_32%,transparent)_100%)]",
-      )}
-    />
-  );
+  const background =
+    strength === "strong"
+      ? "linear-gradient(180deg,color-mix(in srgb,var(--background) var(--tracker-profile-contrast-strong-top,40%),transparent) 0%,color-mix(in srgb,var(--card) var(--tracker-profile-contrast-strong-mid,30%),transparent) 52%,color-mix(in srgb,var(--background) var(--tracker-profile-contrast-strong-bottom,42%),transparent) 100%)"
+      : "linear-gradient(180deg,color-mix(in srgb,var(--background) var(--tracker-profile-contrast-soft-top,30%),transparent) 0%,color-mix(in srgb,var(--card) var(--tracker-profile-contrast-soft-mid,22%),transparent) 58%,color-mix(in srgb,var(--background) var(--tracker-profile-contrast-soft-bottom,32%),transparent) 100%)";
+
+  return <div className="pointer-events-none absolute inset-0 z-0" style={{ background }} />;
 }
 
 export function TrackerProfileDisplayWash({ className }: { className?: string }) {
   return (
     <div
-      className={cn(
-        "pointer-events-none absolute inset-0 bg-[image:var(--tracker-profile-display-layer)]",
-        className ?? "opacity-[0.12]",
-      )}
+      className={cn("pointer-events-none absolute inset-0", className ?? "opacity-[0.12]")}
+      style={{
+        backgroundImage: "var(--tracker-profile-display-layer)",
+        opacity: "var(--tracker-profile-display-opacity)",
+      }}
     />
   );
 }
@@ -507,10 +512,10 @@ export function TrackerProfileEdgeHighlight({
     <div className={cn("pointer-events-none absolute inset-0 rounded-[inherit]", className)}>
       <div
         className={cn(
-          "absolute inset-0 rounded-[inherit] ring-1 ring-inset shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_8%,transparent),0_0_10px_color-mix(in_srgb,var(--tracker-profile-display-solid)_10%,transparent)]",
+          "absolute inset-0 rounded-[inherit] ring-1 ring-inset shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_8%,transparent),0_0_10px_var(--tracker-profile-dialogue-glow)]",
           strength === "strong"
-            ? "ring-[var(--tracker-profile-display-solid)]/30"
-            : "ring-[var(--tracker-profile-display-solid)]/20",
+            ? "ring-[var(--tracker-profile-rule)]"
+            : "ring-[color-mix(in_srgb,var(--tracker-profile-rule)_72%,transparent)]",
         )}
       />
       <div
@@ -519,15 +524,21 @@ export function TrackerProfileEdgeHighlight({
           strength === "strong" ? "opacity-80" : "opacity-55",
         )}
       />
-      <div className="absolute inset-x-0 bottom-0 h-px bg-[image:var(--tracker-profile-display-layer)] opacity-35" />
+      <div className="absolute inset-x-0 bottom-0 h-px bg-[image:var(--tracker-profile-accent-layer)] opacity-35" />
     </div>
   );
 }
 
 export function TrackerPortraitStageBackdrop({ media, className }: { media?: string | null; className?: string }) {
+  const boxLayerStyle = {
+    backgroundImage: "var(--tracker-profile-box-layer)",
+    opacity: "var(--tracker-profile-tint-opacity, 0.12)",
+  } as CSSProperties;
+
   return (
     <div className={cn("pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]", className)}>
       <div className="absolute inset-0 bg-[linear-gradient(150deg,color-mix(in_srgb,var(--tracker-profile-box)_30%,var(--background)_70%)_0%,color-mix(in_srgb,var(--background)_88%,var(--tracker-profile-display-solid)_12%)_48%,color-mix(in_srgb,var(--card)_70%,var(--tracker-profile-box)_30%)_100%)]" />
+      <div className="absolute inset-0" style={boxLayerStyle} />
       {media ? (
         <img
           src={media}

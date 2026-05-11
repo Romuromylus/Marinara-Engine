@@ -130,7 +130,7 @@ test("startup migrations add lorebook folders schema to existing installs", asyn
   }
 });
 
-test("startup migrations add saved persona status options to existing installs", async () => {
+test("startup migrations add saved persona status options and tracker card colors to existing installs", async () => {
   const client = createClient({ url: "file::memory:" });
   const db = drizzle(client) as unknown as DB;
 
@@ -173,12 +173,15 @@ test("startup migrations add saved persona status options to existing installs",
     await runMigrations(db);
 
     const personaColumns = await db.all<{ name: string }>(sql.raw("PRAGMA table_info(personas)"));
-    const preservedPersonas = await db.all<{ id: string; saved_status_options: string }>(
-      sql.raw(`SELECT id, saved_status_options FROM personas WHERE id = 'legacy-persona'`),
+    const preservedPersonas = await db.all<{ id: string; saved_status_options: string; tracker_card_colors: string }>(
+      sql.raw(`SELECT id, saved_status_options, tracker_card_colors FROM personas WHERE id = 'legacy-persona'`),
     );
 
     assert.ok(personaColumns.some((column) => column.name === "saved_status_options"));
-    assert.deepEqual(preservedPersonas, [{ id: "legacy-persona", saved_status_options: "[]" }]);
+    assert.ok(personaColumns.some((column) => column.name === "tracker_card_colors"));
+    assert.deepEqual(preservedPersonas, [
+      { id: "legacy-persona", saved_status_options: "[]", tracker_card_colors: '{"mode":"chat"}' },
+    ]);
   } finally {
     client.close();
   }

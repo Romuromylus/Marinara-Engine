@@ -81,12 +81,14 @@ import { extractColorsFromImage } from "../../lib/avatar-color-extraction";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { api } from "../../lib/api-client";
 import { ColorPicker } from "../ui/ColorPicker";
+import { TrackerCardColorControls } from "../ui/TrackerCardColorControls";
 import { ExpandedTextarea } from "../ui/ExpandedTextarea";
 import { Modal } from "../ui/Modal";
 import { SpriteFrameEditor } from "../ui/SpriteFrameEditor";
 import { SpriteWandCleanupEditor } from "../ui/SpriteWandCleanupEditor";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
 import type { CharacterCardVersion, CharacterData, RPGStatsConfig } from "@marinara-engine/shared";
+import { parseTrackerCardColorConfig, serializeTrackerCardColorConfig } from "../../lib/tracker-card-colors";
 
 // ── Tabs ──
 const TABS = [
@@ -328,6 +330,9 @@ export function CharacterEditor() {
         nameColor: (formData.extensions.nameColor as string) ?? "",
         dialogueColor: (formData.extensions.dialogueColor as string) ?? "",
         boxColor: (formData.extensions.boxColor as string) ?? "",
+        trackerCardColors: serializeTrackerCardColorConfig(
+          parseTrackerCardColorConfig(formData.extensions.trackerCardColors),
+        ),
         personaStats,
         altDescriptions: "[]",
         tags: JSON.stringify(formData.tags ?? []),
@@ -2782,6 +2787,7 @@ function ColorsTab({
   const nameColor = (formData.extensions.nameColor as string) ?? "";
   const dialogueColor = (formData.extensions.dialogueColor as string) ?? "";
   const boxColor = (formData.extensions.boxColor as string) ?? "";
+  const trackerCardColors = parseTrackerCardColorConfig(formData.extensions.trackerCardColors);
   const [extracting, setExtracting] = useState(false);
 
   const handleExtract = async () => {
@@ -2889,6 +2895,14 @@ function ColorsTab({
         onChange={(v) => updateExtension("boxColor", v)}
         label="Message Box Color"
         helpText="Background color for this character's chat message bubbles. Use a semi-transparent color for best results (e.g. rgba)."
+      />
+
+      <TrackerCardColorControls
+        value={trackerCardColors}
+        onChange={(value) => updateExtension("trackerCardColors", value)}
+        chatColors={{ nameColor, dialogueColor, boxColor }}
+        entityLabel="Character"
+        previewName={formData.name || "Character"}
       />
 
       {/* Info */}

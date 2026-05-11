@@ -42,8 +42,10 @@ import { showAlertDialog, showConfirmDialog } from "../../lib/app-dialogs";
 import { extractColorsFromImage } from "../../lib/avatar-color-extraction";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { ColorPicker } from "../ui/ColorPicker";
+import { TrackerCardColorControls } from "../ui/TrackerCardColorControls";
 import { ExpandedTextarea } from "../ui/ExpandedTextarea";
 import { api } from "../../lib/api-client";
+import { parseTrackerCardColorConfig, serializeTrackerCardColorConfig } from "../../lib/tracker-card-colors";
 import {
   useCharacterSprites,
   useUploadSprite,
@@ -62,6 +64,7 @@ import { SpriteFrameEditor } from "../ui/SpriteFrameEditor";
 import { SpriteWandCleanupEditor } from "../ui/SpriteWandCleanupEditor";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
 import { Modal } from "../ui/Modal";
+import type { TrackerCardColorConfig } from "@marinara-engine/shared";
 
 // ── Tabs ──
 const TABS = [
@@ -95,6 +98,7 @@ interface PersonaFormData {
   nameColor: string;
   dialogueColor: string;
   boxColor: string;
+  trackerCardColors: TrackerCardColorConfig;
   personaStats: string;
   altDescriptions: AltDescriptionEntry[];
   tags: string[];
@@ -120,6 +124,7 @@ interface PersonaRow {
   nameColor?: string;
   dialogueColor?: string;
   boxColor?: string;
+  trackerCardColors?: string;
   personaStats?: string;
   altDescriptions?: string;
   tags?: string;
@@ -234,6 +239,7 @@ export function PersonaEditor() {
       nameColor: rawPersona.nameColor ?? "",
       dialogueColor: rawPersona.dialogueColor ?? "",
       boxColor: rawPersona.boxColor ?? "",
+      trackerCardColors: parseTrackerCardColorConfig(rawPersona.trackerCardColors),
       personaStats: rawPersona.personaStats ?? "",
       altDescriptions: parsedAltDescs,
       tags: (() => {
@@ -264,6 +270,7 @@ export function PersonaEditor() {
         ...rest,
         altDescriptions: JSON.stringify(altDescriptions),
         tags: JSON.stringify(tags),
+        trackerCardColors: serializeTrackerCardColorConfig(formData.trackerCardColors),
         // Persist as JSON string; empty string means "no crop" so the row keeps
         // the legacy default in render sites.
         avatarCrop: avatarCrop ? JSON.stringify(avatarCrop) : "",
@@ -1477,6 +1484,18 @@ function PersonaColorsTab({
         onChange={(v) => updateField("boxColor", v)}
         label="Message Box Color"
         helpText="Background color for your persona's chat message bubbles. Use a semi-transparent color for best results (e.g. rgba)."
+      />
+
+      <TrackerCardColorControls
+        value={formData.trackerCardColors}
+        onChange={(value) => updateField("trackerCardColors", value)}
+        chatColors={{
+          nameColor: formData.nameColor,
+          dialogueColor: formData.dialogueColor,
+          boxColor: formData.boxColor,
+        }}
+        entityLabel="Persona"
+        previewName={formData.name || "You"}
       />
 
       <div className="rounded-xl bg-[var(--card)] p-4 ring-1 ring-[var(--border)]">
