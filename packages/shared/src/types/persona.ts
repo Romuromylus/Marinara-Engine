@@ -42,6 +42,7 @@ export interface Persona {
 }
 
 export type TrackerCardColorMode = "default" | "chat" | "custom";
+export type TrackerCardPortraitStageBackground = "ambient" | "spotlight" | "soft" | "plain";
 
 export interface TrackerCardColorConfig {
   mode?: TrackerCardColorMode;
@@ -63,6 +64,8 @@ export interface TrackerCardColorConfig {
   glowIntensity?: number;
   /** How much neutral readability veil sits over the card, 0-100. */
   contrastIntensity?: number;
+  /** Portrait stage background treatment behind transparent sprites. */
+  portraitStageBackground?: TrackerCardPortraitStageBackground;
 }
 
 /** Avatar crop — current source-rectangle format. A square region of the source

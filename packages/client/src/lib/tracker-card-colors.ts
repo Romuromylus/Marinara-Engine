@@ -1,6 +1,11 @@
-import type { TrackerCardColorConfig, TrackerCardColorMode } from "@marinara-engine/shared";
+import type {
+  TrackerCardColorConfig,
+  TrackerCardColorMode,
+  TrackerCardPortraitStageBackground,
+} from "@marinara-engine/shared";
 
 export const DEFAULT_TRACKER_CARD_COLOR_MODE: TrackerCardColorMode = "chat";
+export const DEFAULT_TRACKER_CARD_PORTRAIT_STAGE_BACKGROUND: TrackerCardPortraitStageBackground = "ambient";
 
 export interface TrackerCardFinish {
   tintIntensity: number;
@@ -12,6 +17,25 @@ export interface TrackerCardPaintOpacity {
   nameColorOpacity: number;
   dialogueColorOpacity: number;
   boxColorOpacity: number;
+}
+
+export interface TrackerCardPortraitStageVars {
+  base: string;
+  veil: string;
+  mediaOpacity: string;
+  mediaBlur: string;
+  mediaSaturate: string;
+  sideMaskOpacity: string;
+  bottomGlowOpacity: string;
+  bottomRuleOpacity: string;
+}
+
+export interface TrackerCardPortraitStagePalette {
+  background: TrackerCardPortraitStageBackground;
+  displaySolid: string;
+  accent: string;
+  box: string;
+  opacity: TrackerCardPaintOpacity;
 }
 
 export interface TrackerCardSkinFinish {
@@ -75,6 +99,12 @@ export function normalizeTrackerCardColorMode(value: unknown): TrackerCardColorM
   return value === "default" || value === "chat" || value === "custom" ? value : DEFAULT_TRACKER_CARD_COLOR_MODE;
 }
 
+export function normalizeTrackerCardPortraitStageBackground(value: unknown): TrackerCardPortraitStageBackground {
+  return value === "ambient" || value === "spotlight" || value === "soft" || value === "plain"
+    ? value
+    : DEFAULT_TRACKER_CARD_PORTRAIT_STAGE_BACKGROUND;
+}
+
 function getString(value: unknown) {
   return typeof value === "string" ? value : "";
 }
@@ -112,6 +142,7 @@ export function cleanTrackerCardColorConfig(config: TrackerCardColorConfig | nul
   const tintIntensity = getClampedFinishValue(config?.tintIntensity);
   const glowIntensity = getClampedFinishValue(config?.glowIntensity);
   const contrastIntensity = getClampedFinishValue(config?.contrastIntensity);
+  const portraitStageBackground = normalizeTrackerCardPortraitStageBackground(config?.portraitStageBackground);
 
   return {
     mode: normalizeTrackerCardColorMode(config?.mode),
@@ -124,6 +155,7 @@ export function cleanTrackerCardColorConfig(config: TrackerCardColorConfig | nul
     ...(tintIntensity !== undefined && { tintIntensity }),
     ...(glowIntensity !== undefined && { glowIntensity }),
     ...(contrastIntensity !== undefined && { contrastIntensity }),
+    ...(portraitStageBackground !== DEFAULT_TRACKER_CARD_PORTRAIT_STAGE_BACKGROUND && { portraitStageBackground }),
   };
 }
 
@@ -142,6 +174,7 @@ export function parseTrackerCardColorConfig(raw: unknown): TrackerCardColorConfi
     tintIntensity: getClampedFinishValue(record.tintIntensity),
     glowIntensity: getClampedFinishValue(record.glowIntensity),
     contrastIntensity: getClampedFinishValue(record.contrastIntensity),
+    portraitStageBackground: normalizeTrackerCardPortraitStageBackground(record.portraitStageBackground),
   });
 }
 
@@ -171,6 +204,106 @@ export function getTrackerCardPaintOpacity(config: TrackerCardColorConfig | null
     boxColorOpacity:
       getClampedFinishValue(config?.boxColorOpacity) ?? TRACKER_CARD_PAINT_OPACITY_DEFAULTS.boxColorOpacity,
   };
+}
+
+export function getTrackerCardPortraitStageBackground(
+  config: TrackerCardColorConfig | null | undefined,
+): TrackerCardPortraitStageBackground {
+  return normalizeTrackerCardPortraitStageBackground(config?.portraitStageBackground);
+}
+
+function opacityWeight(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value))) / 100;
+}
+
+function scalePercent(value: number, opacity: number) {
+  return Math.round(value * opacityWeight(opacity));
+}
+
+export function getTrackerCardPortraitStageVars({
+  background,
+  displaySolid,
+  accent,
+  box,
+  opacity,
+}: TrackerCardPortraitStagePalette): TrackerCardPortraitStageVars {
+  const displayMix = scalePercent(18, opacity.nameColorOpacity);
+  const displaySoftMix = scalePercent(12, opacity.nameColorOpacity);
+  const displayGlowMix = scalePercent(28, opacity.nameColorOpacity);
+  const boxMix = scalePercent(30, opacity.boxColorOpacity);
+  const boxSoftMix = scalePercent(18, opacity.boxColorOpacity);
+  const accentMix = scalePercent(16, opacity.dialogueColorOpacity);
+  const softBoxMix = boxMix > 0 ? Math.max(boxMix, 12) : 0;
+  const softDisplayMix = displaySoftMix > 0 ? Math.max(displaySoftMix, 10) : 0;
+  const plainBoxMix = scalePercent(8, opacity.boxColorOpacity);
+  const plainDisplayMix = scalePercent(4, opacity.nameColorOpacity);
+
+  switch (background) {
+    case "spotlight":
+      return {
+        base:
+          `radial-gradient(circle at 50% 46%, color-mix(in srgb, ${displaySolid} ${displayGlowMix}%, transparent) 0%, transparent 36%), ` +
+          `linear-gradient(180deg, color-mix(in srgb, var(--card) ${100 - boxSoftMix}%, ${box} ${boxSoftMix}%) 0%, ` +
+          `color-mix(in srgb, var(--background) 92%, ${box} 8%) 100%)`,
+        veil:
+          "radial-gradient(circle at 50% 45%, transparent 0%, transparent 34%, " +
+          "color-mix(in srgb, var(--background) 42%, transparent) 72%, " +
+          "color-mix(in srgb, var(--background) 76%, transparent) 100%)",
+        mediaOpacity: "0.12",
+        mediaBlur: "1.5rem",
+        mediaSaturate: "1.08",
+        sideMaskOpacity: "0.72",
+        bottomGlowOpacity: "0.52",
+        bottomRuleOpacity: "0.82",
+      };
+    case "soft":
+      return {
+        base:
+          `linear-gradient(145deg, color-mix(in srgb, var(--card) ${100 - softBoxMix}%, ${box} ${softBoxMix}%) 0%, ` +
+          `color-mix(in srgb, var(--background) ${100 - softDisplayMix}%, ${displaySolid} ${softDisplayMix}%) 100%)`,
+        veil:
+          `radial-gradient(circle at 50% 48%, color-mix(in srgb, ${accent} ${accentMix}%, transparent) 0%, transparent 62%), ` +
+          "linear-gradient(180deg, color-mix(in srgb, var(--background) 18%, transparent) 0%, transparent 44%, " +
+          "color-mix(in srgb, var(--background) 44%, transparent) 100%)",
+        mediaOpacity: "0.28",
+        mediaBlur: "1.75rem",
+        mediaSaturate: "1.24",
+        sideMaskOpacity: "0.5",
+        bottomGlowOpacity: "0.46",
+        bottomRuleOpacity: "0.58",
+      };
+    case "plain":
+      return {
+        base:
+          `linear-gradient(180deg, color-mix(in srgb, var(--card) ${100 - plainBoxMix}%, ${box} ${plainBoxMix}%) 0%, ` +
+          `color-mix(in srgb, var(--background) ${100 - plainDisplayMix}%, ${displaySolid} ${plainDisplayMix}%) 100%)`,
+        veil:
+          "linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--background) 42%, transparent) 100%)",
+        mediaOpacity: "0.04",
+        mediaBlur: "1rem",
+        mediaSaturate: "0.9",
+        sideMaskOpacity: "0.28",
+        bottomGlowOpacity: "0.18",
+        bottomRuleOpacity: "0.28",
+      };
+    case "ambient":
+    default:
+      return {
+        base:
+          `linear-gradient(150deg, color-mix(in srgb, ${box} ${boxMix}%, var(--background) ${100 - boxMix}%) 0%, ` +
+          `color-mix(in srgb, var(--background) ${100 - displaySoftMix}%, ${displaySolid} ${displaySoftMix}%) 48%, ` +
+          `color-mix(in srgb, var(--card) ${100 - boxMix}%, ${box} ${boxMix}%) 100%)`,
+        veil:
+          `linear-gradient(180deg, color-mix(in srgb, ${displaySolid} ${displayMix}%, transparent) 0%, transparent 36%, ` +
+          "color-mix(in srgb, var(--background) 50%, transparent) 100%)",
+        mediaOpacity: "0.18",
+        mediaBlur: "1.25rem",
+        mediaSaturate: "1.18",
+        sideMaskOpacity: "1",
+        bottomGlowOpacity: "0.75",
+        bottomRuleOpacity: "0.75",
+      };
+  }
 }
 
 function getMix(value: number, scale: number, max: number) {

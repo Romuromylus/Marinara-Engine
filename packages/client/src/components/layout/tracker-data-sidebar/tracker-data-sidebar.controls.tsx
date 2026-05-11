@@ -545,25 +545,52 @@ export function TrackerPortraitStageBackdrop({ media, className }: { media?: str
     backgroundImage: "var(--tracker-profile-box-layer)",
     opacity: "var(--tracker-profile-tint-opacity, 0.12)",
   } as CSSProperties;
+  const mediaEchoStyle = {
+    filter:
+      "blur(var(--tracker-profile-portrait-media-blur, 1.25rem)) saturate(var(--tracker-profile-portrait-media-saturate, 1.18))",
+    opacity: "var(--tracker-profile-portrait-media-opacity, 0.18)",
+  } as CSSProperties;
+  const sideMaskStyle = {
+    opacity: "var(--tracker-profile-portrait-side-mask-opacity, 1)",
+  } as CSSProperties;
+  const bottomGlowStyle = {
+    opacity: "var(--tracker-profile-portrait-bottom-glow-opacity, 0.75)",
+  } as CSSProperties;
+  const bottomRuleStyle = {
+    opacity: "var(--tracker-profile-portrait-bottom-rule-opacity, 0.75)",
+  } as CSSProperties;
 
   return (
     <div className={cn("pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]", className)}>
-      <div className="absolute inset-0 bg-[linear-gradient(150deg,color-mix(in_srgb,var(--tracker-profile-box)_30%,var(--background)_70%)_0%,color-mix(in_srgb,var(--background)_88%,var(--tracker-profile-display-solid)_12%)_48%,color-mix(in_srgb,var(--card)_70%,var(--tracker-profile-box)_30%)_100%)]" />
+      <div className="absolute inset-0 bg-[image:var(--tracker-profile-portrait-base)]" />
       <div className="absolute inset-0" style={boxLayerStyle} />
       {media ? (
         <img
           src={media}
           alt=""
           aria-hidden="true"
-          className="absolute inset-[-10%] h-[120%] w-[120%] object-cover object-center opacity-[0.18] blur-xl saturate-[1.18]"
+          className="absolute inset-[-10%] h-[120%] w-[120%] object-cover object-center"
+          style={mediaEchoStyle}
           draggable={false}
         />
       ) : null}
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--tracker-profile-display-solid)_18%,transparent)_0%,transparent_36%,color-mix(in_srgb,var(--background)_50%,transparent)_100%)]" />
-      <div className="absolute inset-y-0 left-0 w-1/3 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--background)_60%,transparent),transparent)]" />
-      <div className="absolute inset-y-0 right-0 w-1/3 bg-[linear-gradient(270deg,color-mix(in_srgb,var(--background)_60%,transparent),transparent)]" />
-      <div className="absolute inset-x-2 bottom-0 h-1/2 bg-[linear-gradient(0deg,color-mix(in_srgb,var(--tracker-profile-dialogue)_16%,transparent),transparent_72%)] opacity-75" />
-      <div className="absolute inset-x-3 bottom-2 h-px bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--tracker-profile-dialogue)_48%,transparent),transparent)] opacity-75" />
+      <div className="absolute inset-0 bg-[image:var(--tracker-profile-portrait-veil)]" />
+      <div
+        className="absolute inset-y-0 left-0 w-1/3 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--background)_60%,transparent),transparent)]"
+        style={sideMaskStyle}
+      />
+      <div
+        className="absolute inset-y-0 right-0 w-1/3 bg-[linear-gradient(270deg,color-mix(in_srgb,var(--background)_60%,transparent),transparent)]"
+        style={sideMaskStyle}
+      />
+      <div
+        className="absolute inset-x-2 bottom-0 h-1/2 bg-[linear-gradient(0deg,color-mix(in_srgb,var(--tracker-profile-dialogue)_16%,transparent),transparent_72%)]"
+        style={bottomGlowStyle}
+      />
+      <div
+        className="absolute inset-x-3 bottom-2 h-px bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--tracker-profile-dialogue)_48%,transparent),transparent)]"
+        style={bottomRuleStyle}
+      />
     </div>
   );
 }

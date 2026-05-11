@@ -1,11 +1,17 @@
 import type { CSSProperties } from "react";
-import { Check, MessageSquareText, Package, Palette, Sparkles } from "lucide-react";
-import type { TrackerCardColorConfig, TrackerCardColorMode } from "@marinara-engine/shared";
+import { Check, Circle, Image, Layers, MessageSquareText, Package, Palette, Sparkles, Square } from "lucide-react";
+import type {
+  TrackerCardColorConfig,
+  TrackerCardColorMode,
+  TrackerCardPortraitStageBackground,
+} from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import {
   cleanTrackerCardColorConfig,
   getTrackerCardFinish,
   getTrackerCardPaintOpacity,
+  getTrackerCardPortraitStageBackground,
+  getTrackerCardPortraitStageVars,
   getTrackerCardSkinFinish,
   normalizeTrackerCardColorMode,
   parseTrackerCardColorConfig,
@@ -61,6 +67,18 @@ const PAINT_OPACITY_OPTIONS: Array<{
   { key: "nameColorOpacity", label: "Display" },
   { key: "dialogueColorOpacity", label: "Accent" },
   { key: "boxColorOpacity", label: "Surface" },
+];
+
+const PORTRAIT_STAGE_BACKGROUND_OPTIONS: Array<{
+  value: TrackerCardPortraitStageBackground;
+  label: string;
+  icon: typeof Palette;
+  title: string;
+}> = [
+  { value: "ambient", label: "Ambient", icon: Layers, title: "Balanced color wash" },
+  { value: "spotlight", label: "Spotlight", icon: Circle, title: "Focused center glow" },
+  { value: "soft", label: "Soft blur", icon: Image, title: "Extra blurred portrait echo" },
+  { value: "plain", label: "Plain", icon: Square, title: "Quiet neutral stage" },
 ];
 
 const TRACKER_CARD_PREVIEW_STATS = [
@@ -197,6 +215,14 @@ type TrackerPreviewStyle = CSSProperties & {
   "--tracker-preview-panel-blend": string;
   "--tracker-preview-panel-strong": string;
   "--tracker-preview-panel-strong-blend": string;
+  "--tracker-preview-portrait-base": string;
+  "--tracker-preview-portrait-bottom-glow-opacity": string;
+  "--tracker-preview-portrait-bottom-rule-opacity": string;
+  "--tracker-preview-portrait-media-blur": string;
+  "--tracker-preview-portrait-media-opacity": string;
+  "--tracker-preview-portrait-media-saturate": string;
+  "--tracker-preview-portrait-side-mask-opacity": string;
+  "--tracker-preview-portrait-veil": string;
   "--tracker-preview-rule": string;
   "--tracker-preview-surface": string;
   "--tracker-preview-surface-blend": string;
@@ -225,6 +251,7 @@ function getTrackerPreviewStyle(
   colors: TrackerCardColorControlsProps["chatColors"],
   finish: ReturnType<typeof getTrackerCardFinish>,
   paintOpacity: TrackerCardPaintOpacity,
+  portraitStageBackground: TrackerCardPortraitStageBackground,
 ): TrackerPreviewStyle {
   const skin = getTrackerCardSkinFinish(finish);
   const displayOpacity = paintOpacity.nameColorOpacity;
@@ -261,6 +288,13 @@ function getTrackerPreviewStyle(
   const statTrackPaintLayers = [boxGradientLayer, displayGradientLayer, accentGradientLayer];
   const surfacePaintLayers = [boxGradientLayer, displayGradientLayer, accentGradientLayer];
   const slotPaintLayers = [boxGradientLayer, displayGradientLayer];
+  const portraitStage = getTrackerCardPortraitStageVars({
+    background: portraitStageBackground,
+    displaySolid,
+    accent,
+    box,
+    opacity: paintOpacity,
+  });
   const ambienceBoxMix = scalePercent(Math.min(34, Math.round(skin.surfaceBoxMix * 0.95)), boxOpacity);
   const ambienceDisplayMix = scalePercent(Math.min(30, Math.round(skin.surfaceDisplayMix * 0.9)), displayOpacity);
   const ambienceRadialMix = scalePercent(Math.min(28, Math.round(skin.surfaceDisplayMix * 0.8)), displayOpacity);
@@ -304,6 +338,14 @@ function getTrackerPreviewStyle(
       panelStrongPaintLayers,
     ),
     "--tracker-preview-panel-strong-blend": getBackgroundBlendMode(panelStrongPaintLayers, "overlay"),
+    "--tracker-preview-portrait-base": portraitStage.base,
+    "--tracker-preview-portrait-bottom-glow-opacity": portraitStage.bottomGlowOpacity,
+    "--tracker-preview-portrait-bottom-rule-opacity": portraitStage.bottomRuleOpacity,
+    "--tracker-preview-portrait-media-blur": portraitStage.mediaBlur,
+    "--tracker-preview-portrait-media-opacity": portraitStage.mediaOpacity,
+    "--tracker-preview-portrait-media-saturate": portraitStage.mediaSaturate,
+    "--tracker-preview-portrait-side-mask-opacity": portraitStage.sideMaskOpacity,
+    "--tracker-preview-portrait-veil": portraitStage.veil,
     "--tracker-preview-rule": `color-mix(in srgb, color-mix(in srgb, ${box} 58%, ${accent} 42%) ${borderOpacity}%, transparent)`,
     "--tracker-preview-surface": getPaintedBackground(
       `linear-gradient(135deg, ` +
@@ -376,8 +418,11 @@ export function TrackerCardColorControls({
   const mode = normalizeTrackerCardColorMode(config.mode);
   const finish = getTrackerCardFinish(config, mode);
   const paintOpacity = getTrackerCardPaintOpacity(config);
+  const portraitStageBackground = getTrackerCardPortraitStageBackground(config);
   const effectiveColors = getEffectiveColors(mode, config, chatColors);
-  const previewStyle = getTrackerPreviewStyle(effectiveColors, finish, paintOpacity);
+  const previewStyle = getTrackerPreviewStyle(effectiveColors, finish, paintOpacity, portraitStageBackground);
+  const portraitStageBackgroundLabel =
+    PORTRAIT_STAGE_BACKGROUND_OPTIONS.find((option) => option.value === portraitStageBackground)?.label ?? "Ambient";
   const previewInitial = getPreviewInitial(previewName, entityLabel === "Persona" ? "Y" : "C");
   const previewContrastStyle = {
     background:
@@ -412,6 +457,10 @@ export function TrackerCardColorControls({
 
   const updatePaintOpacity = (key: keyof TrackerCardPaintOpacity, nextValue: number) => {
     onChange(cleanTrackerCardColorConfig({ ...config, [key]: nextValue }));
+  };
+
+  const updatePortraitStageBackground = (nextBackground: TrackerCardPortraitStageBackground) => {
+    onChange(cleanTrackerCardColorConfig({ ...config, portraitStageBackground: nextBackground }));
   };
 
   return (
@@ -525,12 +574,36 @@ export function TrackerCardColorControls({
                   </span>
                 </div>
                 <div className="relative flex min-h-[8.75rem] flex-1 items-center justify-center overflow-hidden">
-                  <div className="absolute inset-0 bg-[linear-gradient(150deg,color-mix(in_srgb,var(--tracker-preview-box)_30%,var(--background)_70%)_0%,color-mix(in_srgb,var(--background)_88%,var(--tracker-preview-display-solid)_12%)_48%,color-mix(in_srgb,var(--card)_70%,var(--tracker-preview-box)_30%)_100%)]" />
+                  <div className="absolute inset-0 bg-[image:var(--tracker-preview-portrait-base)]" />
                   <div
                     className="absolute inset-0 bg-[image:var(--tracker-preview-box-layer)]"
                     style={{ opacity: "var(--tracker-preview-tint-opacity)" }}
                   />
-                  <div className="absolute inset-0 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--tracker-preview-display-solid)_18%,transparent)_0%,transparent_36%,color-mix(in_srgb,var(--background)_50%,transparent)_100%)]" />
+                  <div
+                    className="absolute left-1/2 top-1/2 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[image:var(--tracker-preview-display-layer)]"
+                    style={{
+                      filter:
+                        "blur(var(--tracker-preview-portrait-media-blur)) saturate(var(--tracker-preview-portrait-media-saturate))",
+                      opacity: "var(--tracker-preview-portrait-media-opacity)",
+                    }}
+                  />
+                  <div className="absolute inset-0 bg-[image:var(--tracker-preview-portrait-veil)]" />
+                  <div
+                    className="absolute inset-y-0 left-0 w-1/3 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--background)_60%,transparent),transparent)]"
+                    style={{ opacity: "var(--tracker-preview-portrait-side-mask-opacity)" }}
+                  />
+                  <div
+                    className="absolute inset-y-0 right-0 w-1/3 bg-[linear-gradient(270deg,color-mix(in_srgb,var(--background)_60%,transparent),transparent)]"
+                    style={{ opacity: "var(--tracker-preview-portrait-side-mask-opacity)" }}
+                  />
+                  <div
+                    className="absolute inset-x-2 bottom-0 h-1/2 bg-[linear-gradient(0deg,color-mix(in_srgb,var(--tracker-preview-accent)_16%,transparent),transparent_72%)]"
+                    style={{ opacity: "var(--tracker-preview-portrait-bottom-glow-opacity)" }}
+                  />
+                  <div
+                    className="absolute inset-x-3 bottom-2 h-px bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--tracker-preview-accent)_48%,transparent),transparent)]"
+                    style={{ opacity: "var(--tracker-preview-portrait-bottom-rule-opacity)" }}
+                  />
                   <span className="relative flex h-10 w-10 items-center justify-center rounded-full border border-[var(--tracker-preview-rule)] bg-[color-mix(in_srgb,var(--background)_72%,transparent)] text-lg font-semibold leading-none text-[var(--tracker-preview-display-solid)] shadow-[0_0_10px_var(--tracker-preview-dialogue-glow)]">
                     {previewInitial}
                   </span>
@@ -556,6 +629,39 @@ export function TrackerCardColorControls({
             </div>
             <div className="pointer-events-none absolute inset-0 rounded-[inherit] ring-1 ring-inset ring-[var(--tracker-preview-rule)] shadow-[0_0_10px_var(--tracker-preview-dialogue-glow)]" />
           </div>
+        </div>
+      </div>
+
+      <div className="grid gap-2 rounded-lg bg-[var(--secondary)]/70 p-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[0.625rem] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+            Portrait stage BG
+          </span>
+          <span className="text-[0.625rem] text-[var(--muted-foreground)]">{portraitStageBackgroundLabel}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-1 rounded-md bg-[var(--background)]/35 p-0.5 sm:grid-cols-4">
+          {PORTRAIT_STAGE_BACKGROUND_OPTIONS.map((option) => {
+            const Icon = option.icon;
+            const selected = option.value === portraitStageBackground;
+
+            return (
+              <button
+                key={option.value}
+                type="button"
+                title={option.title}
+                onClick={() => updatePortraitStageBackground(option.value)}
+                className={cn(
+                  "flex min-h-6 min-w-0 items-center justify-center gap-1 rounded-sm px-1 text-[0.5625rem] font-semibold transition-colors",
+                  selected
+                    ? "bg-[var(--primary)]/12 text-[var(--primary)] ring-1 ring-[var(--primary)]/24"
+                    : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]/45 hover:text-[var(--foreground)]",
+                )}
+              >
+                {selected ? <Check size="0.625rem" /> : <Icon size="0.625rem" />}
+                <span className="truncate">{option.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
