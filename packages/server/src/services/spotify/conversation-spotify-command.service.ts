@@ -1,5 +1,6 @@
 import {
   fetchSpotifyApi,
+  normalizeSpotifySearchQuery,
   resolveSpotifyCredentials,
   spotifyHasScope,
   type SpotifyCredentialsResult,
@@ -102,7 +103,7 @@ async function searchSpotifyTrack(args: {
   const artist = args.artist.replace(/"/g, "").replace(/\s+/g, " ").trim();
   const queries = Array.from(
     new Set([`track:"${title}" artist:"${artist}"`, `"${title}" "${artist}"`, `${title} ${artist}`]),
-  ).map((query) => query.slice(0, 500));
+  ).map((query) => normalizeSpotifySearchQuery(query));
   const candidatesByUri = new Map<string, ConversationSpotifyTrack>();
 
   for (const query of queries) {

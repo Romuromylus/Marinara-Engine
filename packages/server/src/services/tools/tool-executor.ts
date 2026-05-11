@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { isCustomToolScriptEnabled, isWebhookLocalUrlsEnabled } from "../../config/runtime-config.js";
 import { safeFetch } from "../../utils/security.js";
 import { logger } from "../../lib/logger.js";
+import { normalizeSpotifySearchQuery } from "../spotify/spotify.service.js";
 
 export interface ToolExecutionResult {
   toolCallId: string;
@@ -1000,7 +1001,7 @@ async function spotifySearch(
   if (!creds?.accessToken) {
     return { error: "Spotify not configured. Please add your Spotify access token in the Spotify DJ agent settings." };
   }
-  const query = String(args.query ?? "");
+  const query = normalizeSpotifySearchQuery(args.query);
   const limit = Math.min(Number(args.limit ?? 5), 20);
 
   try {

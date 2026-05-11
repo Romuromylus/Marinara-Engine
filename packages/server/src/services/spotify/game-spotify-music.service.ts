@@ -7,7 +7,9 @@ import { logger } from "../../lib/logger.js";
 import type { createAgentsStorage } from "../storage/agents.storage.js";
 import {
   fetchSpotifyApi,
+  normalizeSpotifySearchQuery,
   resolveSpotifyCredentials,
+  SPOTIFY_SEARCH_QUERY_MAX_CHARS,
   type SpotifyCredentialError,
   type SpotifyCredentialsResult,
 } from "./spotify.service.js";
@@ -388,17 +390,12 @@ async function fetchSpotifyTrackIndex(
   return { ...entry, cacheStatus: "miss" };
 }
 
-function normalizeSearchQuery(query: string): string {
-  const compact = query.replace(/\s+/g, " ").trim();
-  return compact.slice(0, 500);
-}
-
 async function searchSpotifyTracks(
   credentials: SpotifyCredentialsResult,
   query: string,
   limit: number,
 ): Promise<SceneSpotifyTrackCandidate[]> {
-  const q = normalizeSearchQuery(query) || "soundtrack";
+  const q = normalizeSpotifySearchQuery(query) || "soundtrack";
   const res = await fetchSpotifyApi(
     credentials,
     `/search?${new URLSearchParams({ q, type: "track", limit: String(limit) })}`,
@@ -429,6 +426,14 @@ async function searchSpotifyTracks(
       };
     })
     .filter((track): track is SceneSpotifyTrackCandidate => Boolean(track));
+}
+
+function buildArtistSearchQuery(artist: string, query: string): string {
+  const artistFilter = normalizeSpotifySearchQuery(`artist:${artist}`, 120);
+  const fallback = artistFilter || "artist";
+  const remaining = Math.max(1, SPOTIFY_SEARCH_QUERY_MAX_CHARS - fallback.length - 1);
+  const sceneQuery = normalizeSpotifySearchQuery(query || "soundtrack", remaining);
+  return normalizeSpotifySearchQuery([fallback, sceneQuery].filter(Boolean).join(" "));
 }
 
 async function getCredentials(storage: AgentsStorage): Promise<SpotifyCredentialsResult> {
@@ -473,7 +478,7 @@ export async function getGameSpotifyCandidates(args: {
 
   const credentials = await getCredentials(args.storage);
   const limit = clampCount(args.limit ?? 50, 50, 1, 50);
-  const query = normalizeSearchQuery(args.query);
+  const query = normalizeSpotifySearchQuery(args.query);
 
   if (source.type === "liked" || source.type === "playlist") {
     const sourceKey = source.playlistId ?? "liked";
@@ -500,7 +505,7 @@ export async function getGameSpotifyCandidates(args: {
 
   if (source.type === "artist") {
     const artist = source.artist ?? "";
-    const artistQuery = `artist:${artist} ${query || "soundtrack"}`;
+    const artistQuery = buildArtistSearchQuery(artist, query);
     let tracks = await searchSpotifyTracks(credentials, artistQuery, limit);
     if (tracks.length === 0) {
       tracks = await searchSpotifyTracks(credentials, `artist:${artist}`, limit);
@@ -573,10 +578,7 @@ async function findAvailablePlaybackDevice(
     predicate: (d: { id?: string | null; name?: string; is_active?: boolean; is_restricted?: boolean }) => boolean,
   ) => devices.find((d) => typeof d.id === "string" && d.id && !d.is_restricted && predicate(d));
 
-  const candidate =
-    pick((d) => d.is_active === true) ??
-    pick((d) => d.name === "Marinara Engine") ??
-    pick(() => true);
+  const candidate = pick((d) => d.is_active === true) ?? pick((d) => d.name === "Marinara Engine") ?? pick(() => true);
 
   if (!candidate?.id) return null;
   return { deviceId: candidate.id, deviceName: candidate.name ?? "Spotify device" };
