@@ -40,7 +40,7 @@ import {
   Tag,
 } from "lucide-react";
 import { showConfirmDialog } from "../../lib/app-dialogs";
-import { cn, getAvatarCropStyle, type AvatarCrop, type LegacyAvatarCrop } from "../../lib/utils";
+import { cn, getAvatarCropStyle, parseAvatarCropJson } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { api } from "../../lib/api-client";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
@@ -61,55 +61,6 @@ type PersonaRow = {
   createdAt: string;
   tags?: string;
 };
-
-/** Parses the persona row's JSON-encoded avatarCrop field with defensive shape
- *  validation. Accepts either the current source-relative shape (srcX/Y/W/H) or
- *  the legacy zoom+offset shape, so a malformed cell never breaks rendering. */
-function parsePersonaAvatarCrop(raw: string | undefined): AvatarCrop | LegacyAvatarCrop | null {
-  if (!raw) return null;
-  try {
-    const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== "object") return null;
-    // Validate geometry — finite, positive, within normalized bounds. Anything
-    // malformed is dropped so the panel falls back to the uncropped render
-    // instead of producing NaN transforms or an off-canvas image.
-    if (
-      Number.isFinite(obj.srcX) &&
-      Number.isFinite(obj.srcY) &&
-      Number.isFinite(obj.srcWidth) &&
-      Number.isFinite(obj.srcHeight) &&
-      obj.srcWidth > 0 &&
-      obj.srcHeight > 0 &&
-      obj.srcX >= 0 &&
-      obj.srcY >= 0 &&
-      obj.srcX + obj.srcWidth <= 1.001 &&
-      obj.srcY + obj.srcHeight <= 1.001
-    ) {
-      return {
-        srcX: obj.srcX,
-        srcY: obj.srcY,
-        srcWidth: obj.srcWidth,
-        srcHeight: obj.srcHeight,
-      };
-    }
-    if (
-      Number.isFinite(obj.zoom) &&
-      Number.isFinite(obj.offsetX) &&
-      Number.isFinite(obj.offsetY) &&
-      obj.zoom > 0
-    ) {
-      return {
-        zoom: obj.zoom,
-        offsetX: obj.offsetX,
-        offsetY: obj.offsetY,
-        ...(obj.fullImage ? { fullImage: true } : {}),
-      };
-    }
-  } catch {
-    /* fall through to null */
-  }
-  return null;
-}
 
 type PersonaGroupRow = { id: string; name: string; description: string; personaIds: string };
 
@@ -740,7 +691,7 @@ export function PersonasPanel() {
                                       src={p.avatarPath}
                                       alt=""
                                       className="h-full w-full rounded-lg object-cover"
-                                      style={getAvatarCropStyle(parsePersonaAvatarCrop(p.avatarCrop))}
+                                      style={getAvatarCropStyle(parseAvatarCropJson(p.avatarCrop))}
                                     />
                                   ) : (
                                     <User size="0.625rem" />
@@ -868,7 +819,7 @@ export function PersonasPanel() {
                       alt=""
                       loading="lazy"
                       className="h-full w-full rounded-xl object-cover"
-                      style={getAvatarCropStyle(parsePersonaAvatarCrop(persona.avatarCrop))}
+                      style={getAvatarCropStyle(parseAvatarCropJson(persona.avatarCrop))}
                     />
                   ) : (
                     <User size="1rem" />

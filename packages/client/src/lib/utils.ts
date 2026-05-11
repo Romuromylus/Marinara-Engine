@@ -67,9 +67,62 @@ export interface LegacyAvatarCrop {
   fullImage?: boolean;
 }
 
+/** Union alias for either crop shape — handy when threading a value through
+ *  type-narrow interfaces that just need "a crop, either format". */
+export type AvatarCropValue = AvatarCrop | LegacyAvatarCrop;
+
 /** Discriminator: legacy crops have `zoom`, current crops have `srcWidth`. */
 export function isLegacyAvatarCrop(c: AvatarCrop | LegacyAvatarCrop): c is LegacyAvatarCrop {
   return typeof (c as LegacyAvatarCrop).zoom === "number" && typeof (c as AvatarCrop).srcWidth !== "number";
+}
+
+/** Parses a JSON-encoded avatarCrop string (as stored on persona rows and as
+ *  emitted from extensions on character rows when serialized) with defensive
+ *  shape validation. Accepts either the current source-relative shape
+ *  (srcX/Y/W/H) or the legacy zoom+offset shape, so a malformed cell never
+ *  breaks rendering — returns null and the caller falls back to the uncropped
+ *  render. */
+export function parseAvatarCropJson(raw: string | undefined | null): AvatarCrop | LegacyAvatarCrop | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object") return null;
+    if (
+      Number.isFinite(obj.srcX) &&
+      Number.isFinite(obj.srcY) &&
+      Number.isFinite(obj.srcWidth) &&
+      Number.isFinite(obj.srcHeight) &&
+      obj.srcWidth > 0 &&
+      obj.srcHeight > 0 &&
+      obj.srcX >= 0 &&
+      obj.srcY >= 0 &&
+      obj.srcX + obj.srcWidth <= 1.001 &&
+      obj.srcY + obj.srcHeight <= 1.001
+    ) {
+      return {
+        srcX: obj.srcX,
+        srcY: obj.srcY,
+        srcWidth: obj.srcWidth,
+        srcHeight: obj.srcHeight,
+      };
+    }
+    if (
+      Number.isFinite(obj.zoom) &&
+      Number.isFinite(obj.offsetX) &&
+      Number.isFinite(obj.offsetY) &&
+      obj.zoom > 0
+    ) {
+      return {
+        zoom: obj.zoom,
+        offsetX: obj.offsetX,
+        offsetY: obj.offsetY,
+        ...(obj.fullImage ? { fullImage: true } : {}),
+      };
+    }
+  } catch {
+    /* fall through to null */
+  }
+  return null;
 }
 
 /** Returns inline styles for a cropped avatar image. Container must have
