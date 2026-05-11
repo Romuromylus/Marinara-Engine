@@ -76,7 +76,7 @@ import {
   History,
   RotateCcw,
 } from "lucide-react";
-import { cn, generateClientId, getAvatarCropStyle, type AvatarCrop } from "../../lib/utils";
+import { cn, generateClientId, getAvatarCropStyle, type AvatarCrop, type LegacyAvatarCrop } from "../../lib/utils";
 import { extractColorsFromImage } from "../../lib/avatar-color-extraction";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { api } from "../../lib/api-client";
@@ -540,7 +540,7 @@ export function CharacterEditor() {
                 src={avatarPreview}
                 alt={formData.name}
                 className="h-full w-full object-cover"
-                style={getAvatarCropStyle(formData.extensions.avatarCrop as AvatarCrop | undefined)}
+                style={getAvatarCropStyle(formData.extensions.avatarCrop as AvatarCrop | LegacyAvatarCrop | undefined)}
               />
             ) : (
               <User size="1.375rem" className="text-white" />
@@ -1008,22 +1008,20 @@ function MetadataTab({
   removeTag: (tag: string) => void;
   avatarPreview: string | null;
 }) {
-  const crop: AvatarCrop = (formData.extensions.avatarCrop as AvatarCrop | undefined) ?? {
-    zoom: 1,
-    offsetX: 0,
-    offsetY: 0,
-  };
+  // Read existing crop in either current or legacy shape; the widget handles both
+  // and writes back the current shape on first interaction.
+  const savedCrop = (formData.extensions.avatarCrop as AvatarCrop | LegacyAvatarCrop | undefined) ?? null;
 
   return (
     <div className="space-y-5">
       <SectionHeader title="Metadata" subtitle="Basic character info — name, creator, version, tags." />
 
-      {/* Avatar Crop / Zoom */}
+      {/* Avatar Crop */}
       {avatarPreview && (
         <AvatarCropWidget
           src={avatarPreview}
           alt={formData.name}
-          crop={crop}
+          crop={savedCrop}
           onChange={(next) => updateExtension("avatarCrop", next)}
         />
       )}

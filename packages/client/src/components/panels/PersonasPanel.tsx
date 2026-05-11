@@ -40,7 +40,7 @@ import {
   Tag,
 } from "lucide-react";
 import { showConfirmDialog } from "../../lib/app-dialogs";
-import { cn, getAvatarCropStyle, type AvatarCrop } from "../../lib/utils";
+import { cn, getAvatarCropStyle, type AvatarCrop, type LegacyAvatarCrop } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { api } from "../../lib/api-client";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
@@ -63,14 +63,27 @@ type PersonaRow = {
 };
 
 /** Parses the persona row's JSON-encoded avatarCrop field with defensive shape
- *  validation, so a malformed cell doesn't break rendering with NaN transforms. */
-function parsePersonaAvatarCrop(raw: string | undefined): AvatarCrop | null {
+ *  validation. Accepts either the current source-relative shape (srcX/Y/W/H) or
+ *  the legacy zoom+offset shape, so a malformed cell never breaks rendering. */
+function parsePersonaAvatarCrop(raw: string | undefined): AvatarCrop | LegacyAvatarCrop | null {
   if (!raw) return null;
   try {
     const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object") return null;
     if (
-      obj &&
-      typeof obj === "object" &&
+      typeof obj.srcX === "number" &&
+      typeof obj.srcY === "number" &&
+      typeof obj.srcWidth === "number" &&
+      typeof obj.srcHeight === "number"
+    ) {
+      return {
+        srcX: obj.srcX,
+        srcY: obj.srcY,
+        srcWidth: obj.srcWidth,
+        srcHeight: obj.srcHeight,
+      };
+    }
+    if (
       typeof obj.zoom === "number" &&
       typeof obj.offsetX === "number" &&
       typeof obj.offsetY === "number"
@@ -711,7 +724,7 @@ export function PersonasPanel() {
                             if (!p) return null;
                             return (
                               <div key={pid} className="flex items-center gap-2 rounded-lg px-1 py-1 text-xs">
-                                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
+                                <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
                                   {p.avatarPath ? (
                                     <img
                                       src={p.avatarPath}

@@ -37,7 +37,7 @@ import {
   RotateCcw,
   Crop,
 } from "lucide-react";
-import { cn, generateClientId, getAvatarCropStyle, type AvatarCrop } from "../../lib/utils";
+import { cn, generateClientId, getAvatarCropStyle, type AvatarCrop, type LegacyAvatarCrop } from "../../lib/utils";
 import { showAlertDialog, showConfirmDialog } from "../../lib/app-dialogs";
 import { extractColorsFromImage } from "../../lib/avatar-color-extraction";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -98,8 +98,10 @@ interface PersonaFormData {
   personaStats: string;
   altDescriptions: AltDescriptionEntry[];
   tags: string[];
-  /** Avatar zoom + position (parsed from the persona row's JSON-encoded `avatarCrop`). */
-  avatarCrop: AvatarCrop | null;
+  /** Avatar crop region (parsed from the persona row's JSON-encoded `avatarCrop`).
+   *  May be the current source-relative shape, the legacy zoom+offset shape (held
+   *  through until the user re-edits via the cropper), or null when unset. */
+  avatarCrop: AvatarCrop | LegacyAvatarCrop | null;
 }
 
 interface PersonaRow {
@@ -172,26 +174,39 @@ export function PersonaEditor() {
       /* ignore */
     }
 
-    let parsedAvatarCrop: AvatarCrop | null = null;
+    let parsedAvatarCrop: AvatarCrop | LegacyAvatarCrop | null = null;
     try {
       const raw = rawPersona.avatarCrop;
       if (raw) {
         const obj = JSON.parse(raw);
-        // Defensive: only accept the expected shape so a malformed cell can't
-        // break the editor with NaN transforms.
-        if (
-          obj &&
-          typeof obj === "object" &&
-          typeof obj.zoom === "number" &&
-          typeof obj.offsetX === "number" &&
-          typeof obj.offsetY === "number"
-        ) {
-          parsedAvatarCrop = {
-            zoom: obj.zoom,
-            offsetX: obj.offsetX,
-            offsetY: obj.offsetY,
-            ...(obj.fullImage ? { fullImage: true } : {}),
-          };
+        // Defensive: accept either the current source-relative shape or the
+        // legacy zoom+offset shape. Anything else is silently dropped so a
+        // malformed cell can't break the editor with NaN transforms.
+        if (obj && typeof obj === "object") {
+          if (
+            typeof obj.srcX === "number" &&
+            typeof obj.srcY === "number" &&
+            typeof obj.srcWidth === "number" &&
+            typeof obj.srcHeight === "number"
+          ) {
+            parsedAvatarCrop = {
+              srcX: obj.srcX,
+              srcY: obj.srcY,
+              srcWidth: obj.srcWidth,
+              srcHeight: obj.srcHeight,
+            };
+          } else if (
+            typeof obj.zoom === "number" &&
+            typeof obj.offsetX === "number" &&
+            typeof obj.offsetY === "number"
+          ) {
+            parsedAvatarCrop = {
+              zoom: obj.zoom,
+              offsetX: obj.offsetX,
+              offsetY: obj.offsetY,
+              ...(obj.fullImage ? { fullImage: true } : {}),
+            };
+          }
         }
       }
     } catch {
@@ -1834,7 +1849,9 @@ function DescriptionTab({
     updateAltDescs(altDescs.filter((d) => d.id !== id));
   };
 
-  const avatarCrop: AvatarCrop = formData.avatarCrop ?? { zoom: 1, offsetX: 0, offsetY: 0 };
+  // Pass through whichever shape is saved (or null when unset). The widget
+  // initializes the cropper from the saved value or a centered max-square.
+  const avatarCrop: AvatarCrop | LegacyAvatarCrop | null = formData.avatarCrop;
 
   return (
     <div className="space-y-6">
