@@ -290,15 +290,23 @@ function pruneSpotifyTrackCache() {
   }
 }
 
+// /me/tracks wraps each track under `.track`, while /playlists/{id}/items wraps
+// it under `.item` (the singular field, because an item may also be a podcast
+// episode). Accept either shape so the same mapper covers both endpoints.
+type SpotifyTrackInner = {
+  uri?: string;
+  name?: string;
+  artists?: Array<{ name?: string }>;
+  album?: { name?: string };
+};
+
 function mapSpotifyTrackItems(
-  items: Array<{
-    track?: { uri?: string; name?: string; artists?: Array<{ name?: string }>; album?: { name?: string } } | null;
-  }>,
+  items: Array<{ track?: SpotifyTrackInner | null; item?: SpotifyTrackInner | null }>,
   offset: number,
 ): SceneSpotifyTrackCandidate[] {
   return items
     .map((item, index): SceneSpotifyTrackCandidate | null => {
-      const track = item.track;
+      const track = item.track ?? item.item;
       if (!track?.uri?.startsWith("spotify:track:")) return null;
       return {
         uri: track.uri,
@@ -355,9 +363,7 @@ async function fetchSpotifyTrackIndex(
     }
 
     const data = (await res.json()) as {
-      items?: Array<{
-        track?: { uri?: string; name?: string; artists?: Array<{ name?: string }>; album?: { name?: string } } | null;
-      }>;
+      items?: Array<{ track?: SpotifyTrackInner | null; item?: SpotifyTrackInner | null }>;
       total?: number;
       next?: string | null;
     };
