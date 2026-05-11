@@ -496,6 +496,7 @@ interface UIState {
     options: Partial<GameSetupLearnedOptions>,
     text?: Partial<GameSetupRememberedText>,
   ) => void;
+  forgetGameSetupOption: (group: keyof GameSetupLearnedOptions, value: string) => void;
   setEnterToSendRP: (v: boolean) => void;
   setEnterToSendConvo: (v: boolean) => void;
   setEnterToSendGame: (v: boolean) => void;
@@ -1077,6 +1078,19 @@ export const useUIStore = create<UIState>()(
                   ? normalizeRememberedGameSetupText(text.preferences)
                   : remembered.preferences,
             },
+          };
+        }),
+      forgetGameSetupOption: (group, value) =>
+        set((state) => {
+          const learned = state.learnedGameSetupOptions ?? DEFAULT_GAME_SETUP_LEARNED_OPTIONS;
+          const targetKey = normalizeLearnedGameSetupOption(value).toLowerCase();
+          if (!targetKey) return state;
+          const next = learned[group].filter(
+            (entry) => normalizeLearnedGameSetupOption(entry).toLowerCase() !== targetKey,
+          );
+          if (next.length === learned[group].length) return state;
+          return {
+            learnedGameSetupOptions: { ...learned, [group]: next },
           };
         }),
       setEnterToSendRP: (v) => set({ enterToSendRP: v }),

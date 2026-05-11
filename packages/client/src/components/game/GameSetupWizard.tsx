@@ -164,12 +164,14 @@ function LearnedOptionChips({
   expanded,
   onToggleExpanded,
   onSelect,
+  onForget,
   selected,
 }: {
   options: string[];
   expanded: boolean;
   onToggleExpanded: () => void;
   onSelect: (value: string) => void;
+  onForget?: (value: string) => void;
   selected?: (value: string) => boolean;
 }) {
   if (options.length === 0) return null;
@@ -182,19 +184,37 @@ function LearnedOptionChips({
       {visible.map((option) => {
         const isSelected = selected?.(option) ?? false;
         return (
-          <button
+          <span
             key={option}
-            type="button"
-            onClick={() => onSelect(option)}
             className={cn(
-              "rounded-full px-2 py-0.5 text-[0.625rem] transition-colors",
+              "group/learned inline-flex items-center rounded-full text-[0.625rem] transition-colors",
               isSelected
                 ? "bg-[var(--primary)]/20 text-[var(--primary)] ring-1 ring-[var(--primary)]/35"
                 : "bg-[var(--secondary)] text-[var(--muted-foreground)] hover:bg-[var(--primary)]/10 hover:text-[var(--primary)]",
             )}
           >
-            {option}
-          </button>
+            <button
+              type="button"
+              onClick={() => onSelect(option)}
+              className="px-2 py-0.5"
+            >
+              {option}
+            </button>
+            {onForget && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onForget(option);
+                }}
+                aria-label={`Forget ${option}`}
+                title="Forget this option"
+                className="ml-0.5 mr-1 inline-flex rounded-full p-0.5 opacity-40 transition-opacity hover:bg-[var(--destructive)]/20 hover:text-[var(--destructive)] hover:opacity-100 focus-visible:opacity-100 group-hover/learned:opacity-100"
+              >
+                <X size={9} />
+              </button>
+            )}
+          </span>
         );
       })}
       {(hiddenCount > 0 || expanded) && (
@@ -302,6 +322,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
   const sidecarConfig = useSidecarStore((s) => s.config);
   const learnedGameSetupOptions = useUIStore((s) => s.learnedGameSetupOptions);
   const rememberGameSetupOptions = useUIStore((s) => s.rememberGameSetupOptions);
+  const forgetGameSetupOption = useUIStore((s) => s.forgetGameSetupOption);
   const sidecarAvailable = !!sidecarConfig.modelPath && sidecarStatus !== "not_downloaded";
 
   // Fetch sidecar status on mount so the dropdown is populated without visiting Connections first
@@ -623,6 +644,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                 expanded={expandedLearnedOptions.genres}
                 onToggleExpanded={() => toggleLearnedOptions("genres")}
                 onSelect={toggleGenre}
+                onForget={(value) => forgetGameSetupOption("genres", value)}
                 selected={(value) => genres.includes(value)}
               />
               <div className="mt-2 flex items-center gap-1.5">
@@ -671,6 +693,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                 expanded={expandedLearnedOptions.settings}
                 onToggleExpanded={() => toggleLearnedOptions("settings")}
                 onSelect={setSetting}
+                onForget={(value) => forgetGameSetupOption("settings", value)}
               />
             </div>
 
@@ -713,6 +736,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                 expanded={expandedLearnedOptions.tones}
                 onToggleExpanded={() => toggleLearnedOptions("tones")}
                 onSelect={toggleTone}
+                onForget={(value) => forgetGameSetupOption("tones", value)}
                 selected={(value) => tones.includes(value)}
               />
               <div className="mt-2 flex items-center gap-1.5">
@@ -1521,6 +1545,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                 expanded={expandedLearnedOptions.goals}
                 onToggleExpanded={() => toggleLearnedOptions("goals")}
                 onSelect={setPlayerGoals}
+                onForget={(value) => forgetGameSetupOption("goals", value)}
               />
             </div>
 
@@ -1552,6 +1577,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                 expanded={expandedLearnedOptions.preferences}
                 onToggleExpanded={() => toggleLearnedOptions("preferences")}
                 onSelect={setPreferences}
+                onForget={(value) => forgetGameSetupOption("preferences", value)}
               />
             </div>
 
