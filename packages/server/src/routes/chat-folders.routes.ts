@@ -31,7 +31,8 @@ export async function chatFoldersRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Invalid mode" });
     }
     const folder = await storage.create({ name: name.trim(), mode, color });
-    return reply.send({ ...folder, collapsed: folder!.collapsed === "true" });
+    if (!folder) return reply.status(500).send({ error: "Failed to create folder" });
+    return reply.send({ ...folder, collapsed: folder.collapsed === "true" });
   });
 
   // ── Update a folder ──
@@ -42,7 +43,8 @@ export async function chatFoldersRoutes(app: FastifyInstance) {
     const existing = await storage.getById(req.params.id);
     if (!existing) return reply.status(404).send({ error: "Folder not found" });
     const folder = await storage.update(req.params.id, req.body);
-    return reply.send({ ...folder, collapsed: folder!.collapsed === "true" });
+    if (!folder) return reply.status(500).send({ error: "Failed to update folder" });
+    return reply.send({ ...folder, collapsed: folder.collapsed === "true" });
   });
 
   // ── Delete a folder (chats are moved to root) ──
