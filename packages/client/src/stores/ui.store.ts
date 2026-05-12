@@ -211,6 +211,8 @@ interface UIState {
   regexDetailId: string | null;
   /** When true, the main area shows the browser */
   botBrowserOpen: boolean;
+  /** When true, the main area shows the game assets browser */
+  gameAssetsBrowserOpen: boolean;
   /** When true, the main area shows the full-page character library */
   characterLibraryOpen: boolean;
   /** True when any open detail editor has unsaved changes */
@@ -431,6 +433,8 @@ interface UIState {
   closeCharacterLibrary: () => void;
   openBotBrowser: () => void;
   closeBotBrowser: () => void;
+  openGameAssetsBrowser: () => void;
+  closeGameAssetsBrowser: () => void;
 
   /** Returns true if any full-page detail editor is currently open */
   hasAnyDetailOpen: () => boolean;
@@ -656,6 +660,7 @@ export const useUIStore = create<UIState>()(
       personaDetailId: null,
       regexDetailId: null,
       botBrowserOpen: false,
+      gameAssetsBrowserOpen: false,
       characterLibraryOpen: false,
       editorDirty: false,
 
@@ -933,6 +938,7 @@ export const useUIStore = create<UIState>()(
       openBotBrowser: () =>
         set({
           botBrowserOpen: true,
+          gameAssetsBrowserOpen: false,
           characterLibraryOpen: false,
           regexDetailId: null,
           personaDetailId: null,
@@ -945,6 +951,22 @@ export const useUIStore = create<UIState>()(
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
       closeBotBrowser: () => set({ botBrowserOpen: false }),
+      openGameAssetsBrowser: () =>
+        set({
+          gameAssetsBrowserOpen: true,
+          botBrowserOpen: false,
+          characterLibraryOpen: false,
+          regexDetailId: null,
+          personaDetailId: null,
+          characterDetailId: null,
+          lorebookDetailId: null,
+          presetDetailId: null,
+          connectionDetailId: null,
+          agentDetailId: null,
+          toolDetailId: null,
+          ...(window.innerWidth < 768 && { rightPanelOpen: false }),
+        }),
+      closeGameAssetsBrowser: () => set({ gameAssetsBrowserOpen: false }),
 
       hasAnyDetailOpen: () => {
         const s = get();
@@ -958,7 +980,8 @@ export const useUIStore = create<UIState>()(
           s.personaDetailId ||
           s.regexDetailId ||
           s.characterLibraryOpen ||
-          s.botBrowserOpen
+          s.botBrowserOpen ||
+          s.gameAssetsBrowserOpen
         );
       },
       closeAllDetails: () =>
@@ -973,6 +996,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           characterLibraryOpen: false,
           botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           editorDirty: false,
         }),
       setEditorDirty: (dirty) => set({ editorDirty: dirty }),
