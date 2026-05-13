@@ -22,6 +22,10 @@ export interface TrackerCardPaintOpacity {
 export interface TrackerCardPortraitStageVars {
   base: string;
   veil: string;
+  light: string;
+  lightOpacity: string;
+  rim: string;
+  rimOpacity: string;
   mediaOpacity: string;
   mediaBlur: string;
   mediaSaturate: string;
@@ -237,40 +241,65 @@ export function getTrackerCardPortraitStageVars({
   const softDisplayMix = displaySoftMix > 0 ? Math.max(displaySoftMix, 10) : 0;
   const plainBoxMix = scalePercent(8, opacity.boxColorOpacity);
   const plainDisplayMix = scalePercent(4, opacity.nameColorOpacity);
+  const accentSoftMix = accentMix > 0 ? Math.max(accentMix, 8) : 0;
+  const accentKeyMix = accentMix > 0 ? Math.max(accentMix, 12) : 0;
+  const displayKeyMix = displayGlowMix > 0 ? Math.max(displayGlowMix, 14) : 0;
+  const displayWashMix = displaySoftMix > 0 ? Math.max(displaySoftMix, 8) : 0;
+  const boxKeyMix = boxSoftMix > 0 ? Math.max(boxSoftMix, 10) : 0;
 
   switch (background) {
     case "spotlight":
       return {
         base:
-          `radial-gradient(circle at 50% 46%, color-mix(in srgb, ${displaySolid} ${displayGlowMix}%, transparent) 0%, transparent 36%), ` +
-          `linear-gradient(180deg, color-mix(in srgb, var(--card) ${100 - boxSoftMix}%, ${box} ${boxSoftMix}%) 0%, ` +
+          `radial-gradient(ellipse at 50% 38%, color-mix(in srgb, ${displaySolid} ${displayKeyMix}%, transparent) 0%, transparent 32%), ` +
+          `radial-gradient(ellipse at 50% 108%, color-mix(in srgb, ${accent} ${accentKeyMix}%, transparent) 0%, transparent 48%), ` +
+          `linear-gradient(180deg, color-mix(in srgb, var(--card) ${100 - boxKeyMix}%, ${box} ${boxKeyMix}%) 0%, ` +
           `color-mix(in srgb, var(--background) 92%, ${box} 8%) 100%)`,
         veil:
-          "radial-gradient(circle at 50% 45%, transparent 0%, transparent 34%, " +
-          "color-mix(in srgb, var(--background) 42%, transparent) 72%, " +
-          "color-mix(in srgb, var(--background) 76%, transparent) 100%)",
-        mediaOpacity: "0.12",
-        mediaBlur: "1.5rem",
-        mediaSaturate: "1.08",
-        sideMaskOpacity: "0.72",
-        bottomGlowOpacity: "0.52",
-        bottomRuleOpacity: "0.82",
+          "radial-gradient(ellipse at 50% 39%, transparent 0%, transparent 28%, " +
+          "color-mix(in srgb, var(--background) 46%, transparent) 68%, " +
+          "color-mix(in srgb, var(--background) 84%, transparent) 100%), " +
+          "linear-gradient(90deg, color-mix(in srgb, var(--background) 62%, transparent) 0%, transparent 24%, transparent 76%, color-mix(in srgb, var(--background) 62%, transparent) 100%)",
+        light:
+          `radial-gradient(ellipse at 50% 22%, color-mix(in srgb, ${displaySolid} ${displayKeyMix}%, transparent) 0%, transparent 34%), ` +
+          `radial-gradient(ellipse at 50% 94%, color-mix(in srgb, ${accent} ${accentKeyMix}%, transparent) 0%, transparent 44%)`,
+        lightOpacity: "0.88",
+        rim:
+          `linear-gradient(180deg, color-mix(in srgb, ${displaySolid} 18%, transparent) 0%, transparent 24%), ` +
+          `linear-gradient(90deg, transparent 0%, color-mix(in srgb, ${accent} 34%, transparent) 48%, transparent 100%)`,
+        rimOpacity: "0.64",
+        mediaOpacity: "0.16",
+        mediaBlur: "1.8rem",
+        mediaSaturate: "1.12",
+        sideMaskOpacity: "0.84",
+        bottomGlowOpacity: "0.7",
+        bottomRuleOpacity: "0.9",
       };
     case "soft":
       return {
         base:
+          `radial-gradient(circle at 18% 24%, color-mix(in srgb, ${box} ${softBoxMix}%, transparent) 0%, transparent 46%), ` +
+          `radial-gradient(circle at 82% 18%, color-mix(in srgb, ${displaySolid} ${softDisplayMix}%, transparent) 0%, transparent 48%), ` +
           `linear-gradient(145deg, color-mix(in srgb, var(--card) ${100 - softBoxMix}%, ${box} ${softBoxMix}%) 0%, ` +
           `color-mix(in srgb, var(--background) ${100 - softDisplayMix}%, ${displaySolid} ${softDisplayMix}%) 100%)`,
         veil:
-          `radial-gradient(circle at 50% 48%, color-mix(in srgb, ${accent} ${accentMix}%, transparent) 0%, transparent 62%), ` +
+          `radial-gradient(circle at 50% 48%, color-mix(in srgb, ${accent} ${accentSoftMix}%, transparent) 0%, transparent 64%), ` +
           "linear-gradient(180deg, color-mix(in srgb, var(--background) 18%, transparent) 0%, transparent 44%, " +
-          "color-mix(in srgb, var(--background) 44%, transparent) 100%)",
-        mediaOpacity: "0.28",
-        mediaBlur: "1.75rem",
-        mediaSaturate: "1.24",
-        sideMaskOpacity: "0.5",
+          "color-mix(in srgb, var(--background) 38%, transparent) 100%)",
+        light:
+          `radial-gradient(ellipse at 24% 36%, color-mix(in srgb, ${accent} ${accentSoftMix}%, transparent) 0%, transparent 46%), ` +
+          `radial-gradient(ellipse at 76% 64%, color-mix(in srgb, ${displaySolid} ${displayWashMix}%, transparent) 0%, transparent 52%)`,
+        lightOpacity: "0.56",
+        rim:
+          `linear-gradient(90deg, color-mix(in srgb, ${box} 16%, transparent) 0%, transparent 38%, color-mix(in srgb, ${displaySolid} 14%, transparent) 100%), ` +
+          `linear-gradient(180deg, color-mix(in srgb, var(--foreground) 6%, transparent) 0%, transparent 36%)`,
+        rimOpacity: "0.42",
+        mediaOpacity: "0.34",
+        mediaBlur: "2.25rem",
+        mediaSaturate: "1.32",
+        sideMaskOpacity: "0.34",
         bottomGlowOpacity: "0.46",
-        bottomRuleOpacity: "0.58",
+        bottomRuleOpacity: "0.46",
       };
     case "plain":
       return {
@@ -278,30 +307,48 @@ export function getTrackerCardPortraitStageVars({
           `linear-gradient(180deg, color-mix(in srgb, var(--card) ${100 - plainBoxMix}%, ${box} ${plainBoxMix}%) 0%, ` +
           `color-mix(in srgb, var(--background) ${100 - plainDisplayMix}%, ${displaySolid} ${plainDisplayMix}%) 100%)`,
         veil:
-          "linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--background) 42%, transparent) 100%)",
-        mediaOpacity: "0.04",
+          "linear-gradient(180deg, color-mix(in srgb, var(--background) 12%, transparent) 0%, transparent 48%, color-mix(in srgb, var(--background) 48%, transparent) 100%)",
+        light:
+          `radial-gradient(ellipse at 50% 86%, color-mix(in srgb, ${accent} ${Math.round(accentSoftMix * 0.45)}%, transparent) 0%, transparent 46%)`,
+        lightOpacity: "0.22",
+        rim:
+          `linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent) 0%, transparent 20%), ` +
+          `linear-gradient(90deg, transparent 0%, color-mix(in srgb, ${displaySolid} 10%, transparent) 50%, transparent 100%)`,
+        rimOpacity: "0.28",
+        mediaOpacity: "0.03",
         mediaBlur: "1rem",
         mediaSaturate: "0.9",
-        sideMaskOpacity: "0.28",
-        bottomGlowOpacity: "0.18",
-        bottomRuleOpacity: "0.28",
+        sideMaskOpacity: "0.22",
+        bottomGlowOpacity: "0.16",
+        bottomRuleOpacity: "0.24",
       };
     case "ambient":
     default:
       return {
         base:
+          `radial-gradient(ellipse at 16% 18%, color-mix(in srgb, ${displaySolid} ${displayWashMix}%, transparent) 0%, transparent 42%), ` +
+          `radial-gradient(ellipse at 84% 82%, color-mix(in srgb, ${accent} ${accentSoftMix}%, transparent) 0%, transparent 48%), ` +
           `linear-gradient(150deg, color-mix(in srgb, ${box} ${boxMix}%, var(--background) ${100 - boxMix}%) 0%, ` +
           `color-mix(in srgb, var(--background) ${100 - displaySoftMix}%, ${displaySolid} ${displaySoftMix}%) 48%, ` +
           `color-mix(in srgb, var(--card) ${100 - boxMix}%, ${box} ${boxMix}%) 100%)`,
         veil:
-          `linear-gradient(180deg, color-mix(in srgb, ${displaySolid} ${displayMix}%, transparent) 0%, transparent 36%, ` +
-          "color-mix(in srgb, var(--background) 50%, transparent) 100%)",
-        mediaOpacity: "0.18",
-        mediaBlur: "1.25rem",
-        mediaSaturate: "1.18",
-        sideMaskOpacity: "1",
-        bottomGlowOpacity: "0.75",
-        bottomRuleOpacity: "0.75",
+          `linear-gradient(180deg, color-mix(in srgb, ${displaySolid} ${displayMix}%, transparent) 0%, transparent 34%, ` +
+          "color-mix(in srgb, var(--background) 48%, transparent) 100%), " +
+          "linear-gradient(115deg, transparent 0%, color-mix(in srgb, var(--foreground) 5%, transparent) 44%, transparent 66%)",
+        light:
+          `radial-gradient(ellipse at 28% 30%, color-mix(in srgb, ${displaySolid} ${displayKeyMix}%, transparent) 0%, transparent 42%), ` +
+          `radial-gradient(ellipse at 76% 70%, color-mix(in srgb, ${accent} ${accentKeyMix}%, transparent) 0%, transparent 46%)`,
+        lightOpacity: "0.7",
+        rim:
+          `linear-gradient(90deg, transparent 0%, color-mix(in srgb, ${accent} 28%, transparent) 50%, transparent 100%), ` +
+          `linear-gradient(180deg, color-mix(in srgb, var(--foreground) 7%, transparent) 0%, transparent 28%)`,
+        rimOpacity: "0.52",
+        mediaOpacity: "0.22",
+        mediaBlur: "1.45rem",
+        mediaSaturate: "1.22",
+        sideMaskOpacity: "0.82",
+        bottomGlowOpacity: "0.82",
+        bottomRuleOpacity: "0.78",
       };
   }
 }
@@ -336,10 +383,10 @@ export function getTrackerCardSkinFinish(finish: TrackerCardFinish): TrackerCard
     softContrastBottom: getRange(14, contrast, 0.48, 70),
     softContrastMid: getRange(9, contrast, 0.38, 56),
     softContrastTop: getRange(12, contrast, 0.44, 64),
-    slotBackgroundBottomMix: getRange(52, contrast, 0.42, 94),
-    slotBackgroundTopMix: getRange(42, contrast, 0.44, 88),
+    slotBackgroundBottomMix: getRange(38, contrast, 0.4, 78),
+    slotBackgroundTopMix: getRange(30, contrast, 0.36, 70),
     slotRuleOpacity: getRange(18, contrast, 0.42, 64),
-    slotShadowOpacity: getOpacity(0.18, contrast, 0.0038, 0.58),
+    slotShadowOpacity: getOpacity(0.06, contrast, 0.0022, 0.28),
     statTrackAccentMix: Math.min(24, Math.round(2 + tint * 0.08 + glow * 0.12)),
     statFillGlowMix: Math.min(32, Math.round(5 + contrast * 0.12 + glow * 0.12)),
     statFillHighlightMix: getRange(8, contrast, 0.18, 28),

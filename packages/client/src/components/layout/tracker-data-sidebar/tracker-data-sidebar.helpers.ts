@@ -635,6 +635,12 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
   const statTrackPaintLayers = [palette.boxGradientLayer, palette.displayGradientLayer, palette.accentGradientLayer];
   const surfacePaintLayers = [palette.boxGradientLayer, palette.displayGradientLayer, palette.accentGradientLayer];
   const slotPaintLayers = [palette.boxGradientLayer, palette.displayGradientLayer];
+  const slotTopBoxMix = scalePercent(24, boxOpacity);
+  const slotBottomBoxMix = scalePercent(20, boxOpacity);
+  const slotTopLiftMix = Math.round(finish.slotBackgroundTopMix * 0.08);
+  const slotBottomLiftMix = Math.round(finish.slotBackgroundBottomMix * 0.05);
+  const slotTopBase = `color-mix(in srgb, var(--background) ${100 - slotTopBoxMix}%, ${palette.box} ${slotTopBoxMix}%)`;
+  const slotBottomBase = `color-mix(in srgb, var(--background) ${100 - slotBottomBoxMix}%, ${palette.box} ${slotBottomBoxMix}%)`;
   const portraitStage = getTrackerCardPortraitStageVars({
     background: palette.portraitStageBackground,
     displaySolid: palette.displaySolid,
@@ -666,6 +672,10 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-portrait-media-blur": string;
     "--tracker-profile-portrait-media-opacity": string;
     "--tracker-profile-portrait-media-saturate": string;
+    "--tracker-profile-portrait-light": string;
+    "--tracker-profile-portrait-light-opacity": string;
+    "--tracker-profile-portrait-rim": string;
+    "--tracker-profile-portrait-rim-opacity": string;
     "--tracker-profile-portrait-side-mask-opacity": string;
     "--tracker-profile-portrait-veil": string;
     "--tracker-profile-muted-panel": string;
@@ -738,6 +748,10 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-portrait-media-blur": portraitStage.mediaBlur,
     "--tracker-profile-portrait-media-opacity": portraitStage.mediaOpacity,
     "--tracker-profile-portrait-media-saturate": portraitStage.mediaSaturate,
+    "--tracker-profile-portrait-light": portraitStage.light,
+    "--tracker-profile-portrait-light-opacity": portraitStage.lightOpacity,
+    "--tracker-profile-portrait-rim": portraitStage.rim,
+    "--tracker-profile-portrait-rim-opacity": portraitStage.rimOpacity,
     "--tracker-profile-portrait-side-mask-opacity": portraitStage.sideMaskOpacity,
     "--tracker-profile-portrait-veil": portraitStage.veil,
     "--tracker-profile-muted-panel": getPaintedBackground(
@@ -759,8 +773,8 @@ function withTrackerProfileStyle(palette: TrackerProfilePalette, background: str
     "--tracker-profile-slot-shadow": `rgba(0, 0, 0, ${finish.slotShadowOpacity})`,
     "--tracker-profile-slot-surface": getPaintedBackground(
       `linear-gradient(180deg, ` +
-        `color-mix(in srgb, var(--background) ${finish.slotBackgroundTopMix}%, var(--card) ${100 - finish.slotBackgroundTopMix}%), ` +
-        `color-mix(in srgb, var(--background) ${finish.slotBackgroundBottomMix}%, var(--card) ${100 - finish.slotBackgroundBottomMix}%))`,
+        `color-mix(in srgb, ${slotTopBase} ${100 - slotTopLiftMix}%, var(--foreground) ${slotTopLiftMix}%), ` +
+        `color-mix(in srgb, ${slotBottomBase} ${100 - slotBottomLiftMix}%, var(--foreground) ${slotBottomLiftMix}%))`,
       slotPaintLayers,
     ),
     "--tracker-profile-slot-surface-blend": getBackgroundBlendMode(slotPaintLayers, "soft-light"),

@@ -77,7 +77,7 @@ const PORTRAIT_STAGE_BACKGROUND_OPTIONS: Array<{
 }> = [
   { value: "ambient", label: "Ambient", icon: Layers, title: "Balanced color wash" },
   { value: "spotlight", label: "Spotlight", icon: Circle, title: "Focused center glow" },
-  { value: "soft", label: "Soft blur", icon: Image, title: "Extra blurred portrait echo" },
+  { value: "soft", label: "Haze", icon: Image, title: "Diffused portrait glow" },
   { value: "plain", label: "Plain", icon: Square, title: "Quiet neutral stage" },
 ];
 
@@ -221,6 +221,10 @@ type TrackerPreviewStyle = CSSProperties & {
   "--tracker-preview-portrait-media-blur": string;
   "--tracker-preview-portrait-media-opacity": string;
   "--tracker-preview-portrait-media-saturate": string;
+  "--tracker-preview-portrait-light": string;
+  "--tracker-preview-portrait-light-opacity": string;
+  "--tracker-preview-portrait-rim": string;
+  "--tracker-preview-portrait-rim-opacity": string;
   "--tracker-preview-portrait-side-mask-opacity": string;
   "--tracker-preview-portrait-veil": string;
   "--tracker-preview-rule": string;
@@ -288,6 +292,12 @@ function getTrackerPreviewStyle(
   const statTrackPaintLayers = [boxGradientLayer, displayGradientLayer, accentGradientLayer];
   const surfacePaintLayers = [boxGradientLayer, displayGradientLayer, accentGradientLayer];
   const slotPaintLayers = [boxGradientLayer, displayGradientLayer];
+  const slotTopBoxMix = scalePercent(24, boxOpacity);
+  const slotBottomBoxMix = scalePercent(20, boxOpacity);
+  const slotTopLiftMix = Math.round(skin.slotBackgroundTopMix * 0.08);
+  const slotBottomLiftMix = Math.round(skin.slotBackgroundBottomMix * 0.05);
+  const slotTopBase = `color-mix(in srgb, var(--background) ${100 - slotTopBoxMix}%, ${box} ${slotTopBoxMix}%)`;
+  const slotBottomBase = `color-mix(in srgb, var(--background) ${100 - slotBottomBoxMix}%, ${box} ${slotBottomBoxMix}%)`;
   const portraitStage = getTrackerCardPortraitStageVars({
     background: portraitStageBackground,
     displaySolid,
@@ -344,6 +354,10 @@ function getTrackerPreviewStyle(
     "--tracker-preview-portrait-media-blur": portraitStage.mediaBlur,
     "--tracker-preview-portrait-media-opacity": portraitStage.mediaOpacity,
     "--tracker-preview-portrait-media-saturate": portraitStage.mediaSaturate,
+    "--tracker-preview-portrait-light": portraitStage.light,
+    "--tracker-preview-portrait-light-opacity": portraitStage.lightOpacity,
+    "--tracker-preview-portrait-rim": portraitStage.rim,
+    "--tracker-preview-portrait-rim-opacity": portraitStage.rimOpacity,
     "--tracker-preview-portrait-side-mask-opacity": portraitStage.sideMaskOpacity,
     "--tracker-preview-portrait-veil": portraitStage.veil,
     "--tracker-preview-rule": `color-mix(in srgb, color-mix(in srgb, ${box} 58%, ${accent} 42%) ${borderOpacity}%, transparent)`,
@@ -358,8 +372,8 @@ function getTrackerPreviewStyle(
     "--tracker-preview-slot-shadow": `rgba(0, 0, 0, ${skin.slotShadowOpacity})`,
     "--tracker-preview-slot-surface": getPaintedBackground(
       `linear-gradient(180deg, ` +
-        `color-mix(in srgb, var(--background) ${skin.slotBackgroundTopMix}%, var(--card) ${100 - skin.slotBackgroundTopMix}%), ` +
-        `color-mix(in srgb, var(--background) ${skin.slotBackgroundBottomMix}%, var(--card) ${100 - skin.slotBackgroundBottomMix}%))`,
+        `color-mix(in srgb, ${slotTopBase} ${100 - slotTopLiftMix}%, var(--foreground) ${slotTopLiftMix}%), ` +
+        `color-mix(in srgb, ${slotBottomBase} ${100 - slotBottomLiftMix}%, var(--foreground) ${slotBottomLiftMix}%))`,
       slotPaintLayers,
     ),
     "--tracker-preview-slot-surface-blend": getBackgroundBlendMode(slotPaintLayers, "soft-light"),
@@ -587,6 +601,10 @@ export function TrackerCardColorControls({
                       opacity: "var(--tracker-preview-portrait-media-opacity)",
                     }}
                   />
+                  <div
+                    className="absolute inset-0 bg-[image:var(--tracker-preview-portrait-light)]"
+                    style={{ opacity: "var(--tracker-preview-portrait-light-opacity)" }}
+                  />
                   <div className="absolute inset-0 bg-[image:var(--tracker-preview-portrait-veil)]" />
                   <div
                     className="absolute inset-y-0 left-0 w-1/3 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--background)_60%,transparent),transparent)]"
@@ -599,6 +617,10 @@ export function TrackerCardColorControls({
                   <div
                     className="absolute inset-x-2 bottom-0 h-1/2 bg-[linear-gradient(0deg,color-mix(in_srgb,var(--tracker-preview-accent)_16%,transparent),transparent_72%)]"
                     style={{ opacity: "var(--tracker-preview-portrait-bottom-glow-opacity)" }}
+                  />
+                  <div
+                    className="absolute inset-0 bg-[image:var(--tracker-preview-portrait-rim)]"
+                    style={{ opacity: "var(--tracker-preview-portrait-rim-opacity)" }}
                   />
                   <div
                     className="absolute inset-x-3 bottom-2 h-px bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--tracker-preview-accent)_48%,transparent),transparent)]"

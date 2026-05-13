@@ -548,10 +548,22 @@ export function TrackerPortraitStageBackdrop({ media, className }: { media?: str
   const mediaEchoStyle = {
     filter:
       "blur(var(--tracker-profile-portrait-media-blur, 1.25rem)) saturate(var(--tracker-profile-portrait-media-saturate, 1.18))",
+    maskImage: "radial-gradient(ellipse at 50% 48%, black 0%, black 56%, transparent 82%)",
     opacity: "var(--tracker-profile-portrait-media-opacity, 0.18)",
+    WebkitMaskImage: "radial-gradient(ellipse at 50% 48%, black 0%, black 56%, transparent 82%)",
   } as CSSProperties;
   const sideMaskStyle = {
+    maskImage: "linear-gradient(180deg, black 0%, black 62%, transparent 100%)",
     opacity: "var(--tracker-profile-portrait-side-mask-opacity, 1)",
+    WebkitMaskImage: "linear-gradient(180deg, black 0%, black 62%, transparent 100%)",
+  } as CSSProperties;
+  const lightStyle = {
+    backgroundImage: "var(--tracker-profile-portrait-light)",
+    opacity: "var(--tracker-profile-portrait-light-opacity, 0.7)",
+  } as CSSProperties;
+  const rimStyle = {
+    backgroundImage: "var(--tracker-profile-portrait-rim)",
+    opacity: "var(--tracker-profile-portrait-rim-opacity, 0.52)",
   } as CSSProperties;
   const bottomGlowStyle = {
     opacity: "var(--tracker-profile-portrait-bottom-glow-opacity, 0.75)",
@@ -574,6 +586,7 @@ export function TrackerPortraitStageBackdrop({ media, className }: { media?: str
           draggable={false}
         />
       ) : null}
+      <div className="absolute inset-0" style={lightStyle} />
       <div className="absolute inset-0 bg-[image:var(--tracker-profile-portrait-veil)]" />
       <div
         className="absolute inset-y-0 left-0 w-1/3 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--background)_60%,transparent),transparent)]"
@@ -587,6 +600,7 @@ export function TrackerPortraitStageBackdrop({ media, className }: { media?: str
         className="absolute inset-x-2 bottom-0 h-1/2 bg-[linear-gradient(0deg,color-mix(in_srgb,var(--tracker-profile-dialogue)_16%,transparent),transparent_72%)]"
         style={bottomGlowStyle}
       />
+      <div className="absolute inset-0" style={rimStyle} />
       <div
         className="absolute inset-x-3 bottom-2 h-px bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--tracker-profile-dialogue)_48%,transparent),transparent)]"
         style={bottomRuleStyle}
