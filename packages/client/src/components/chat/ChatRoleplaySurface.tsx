@@ -26,7 +26,7 @@ import {
   FlipHorizontal2,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { getChatDisplayName } from "../../lib/chat-display";
+import { getConnectedChatDisplayName } from "../../lib/chat-display";
 import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useGameStateStore } from "../../stores/game-state.store";
@@ -108,7 +108,7 @@ function CrossfadeBackground({ url, className }: { url: string | null; className
     const currentUrl = activeSlot.current === "a" ? bgA : bgB;
     if (url === currentUrl) return;
 
-    if (url && url.startsWith("/api/backgrounds/")) {
+    if (url && (url.startsWith("/api/backgrounds/") || url.startsWith("/api/game-assets/"))) {
       fetch(url, { method: "HEAD" })
         .then((res) => {
           if (res.ok) {
@@ -665,7 +665,7 @@ export function ChatRoleplaySurface({
   isGrouped,
 }: RoleplaySurfaceProps) {
   const linkedChatName = chat?.connectedChatId
-    ? getChatDisplayName(allChats?.find((c) => c.id === chat.connectedChatId))
+    ? getConnectedChatDisplayName(allChats?.find((c) => c.id === chat.connectedChatId))
     : undefined;
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const rightPanelOpen = useUIStore((s) => s.rightPanelOpen);

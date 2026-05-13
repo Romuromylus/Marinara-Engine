@@ -52,10 +52,27 @@ export interface APIConnection {
   imageService: string | null;
   /** Default generation parameters for new chats using this connection (JSON) */
   defaultParameters: string | null;
+  /** Prompt preset to use instead of a chat's selected preset when this connection is active */
+  promptPresetId: string | null;
   /** Hard cap on max_tokens for the API response (for providers with lower limits, e.g. DeepSeek at 8192). */
   maxTokensOverride: number | null;
   /** Maximum number of agent LLM jobs Marinara may run at once for this connection. */
   maxParallelJobs: number;
+  /** Folder this connection belongs to (null = root/unfiled). */
+  folderId: string | null;
+  /** Manual sort order within a folder (lower = higher). 0 = use default sort. */
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A folder for organising API connections in the Connections panel. */
+export interface ConnectionFolder {
+  id: string;
+  name: string;
+  color: string;
+  sortOrder: number;
+  collapsed: boolean;
   createdAt: string;
   updatedAt: string;
 }

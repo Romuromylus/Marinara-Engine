@@ -32,6 +32,7 @@ import {
   useRecruitPartyMember,
   useRemovePartyMember,
   gameKeys,
+  patchChatMetadata,
 } from "../../hooks/use-game";
 import {
   chatKeys,
@@ -64,6 +65,7 @@ import { normalizeGameSegmentEdit, serializeGameSegmentEdit, type GameSegmentEdi
 import { useSceneAnalysis } from "../../hooks/use-scene-analysis";
 import { useSidecarStore } from "../../stores/sidecar.store";
 import { parsePartyDialogue } from "../../lib/party-dialogue-parser";
+import { dispatchSpotifySceneTrackChange } from "../../lib/spotify-playback-events";
 import { ActiveWorldInfoButton, ActiveWorldInfoModal } from "../chat/ActiveWorldInfoButton";
 import type {
   PartyDialogueLine,
@@ -79,6 +81,7 @@ import type {
   DiceRollResult,
   EncounterInitResponse,
   EncounterSettings,
+  HudWidget,
   SceneSpotifyTrackCandidate,
   SceneSpotifyTrackSelection,
 } from "@marinara-engine/shared";
@@ -100,7 +103,6 @@ import { GameTransitionManager } from "./GameTransitionManager";
 import { GameChoiceCards } from "./GameChoiceCards";
 import { GameQteOverlay } from "./GameQteOverlay";
 import { GameJournal } from "./GameJournal";
-import { GameCombatUI } from "./GameCombatUI";
 import { GameJsonRepairModal } from "./GameJsonRepairModal";
 import {
   GameImagePromptReviewModal,
@@ -452,7 +454,7 @@ function combatStatusEffectsFromGenerated(
   const mapped = statuses
     .filter((status) => status?.name)
     .map((status) => ({
-      name: status.name,
+      name: typeof status.name === "string" ? status.name : String(status.name),
       modifier: typeof status.modifier === "number" ? status.modifier : 0,
       stat: status.stat ?? ("hp" as const),
       turnsLeft: Math.max(1, Number(status.duration) || 1),
@@ -486,8 +488,8 @@ function combatSkillsFromGeneratedAttacks(
             : 1.35,
       description: attack.description || (attack.type === "AoE" ? "Area combat ability" : "Combat ability"),
       cooldown: typeof attack.cooldown === "number" ? attack.cooldown : undefined,
-      element: attack.element || undefined,
-      statusEffect: attack.statusEffect || undefined,
+      element: typeof attack.element === "string" ? attack.element : undefined,
+      statusEffect: typeof attack.statusEffect === "string" ? attack.statusEffect : undefined,
     });
   }
   return skills.length > 0 ? skills : undefined;
@@ -878,6 +880,11 @@ function buildNpcAvatarLookup(
 const SpriteOverlay = lazy(async () => {
   const module = await import("../chat/SpriteOverlay");
   return { default: module.SpriteOverlay };
+});
+
+const GameCombatUI = lazy(async () => {
+  const module = await import("./GameCombatUI");
+  return { default: module.GameCombatUI };
 });
 
 import { Modal } from "../ui/Modal";
@@ -1566,6 +1573,7 @@ function getSceneBackgroundTags(assetKeys: string[]): string[] {
 }
 
 const RECENT_MUSIC_HISTORY_LIMIT = 8;
+const RECENT_SPOTIFY_TRACK_HISTORY_LIMIT = 12;
 const GAME_START_GENERATION_GUIDE =
   "Begin the game now with the first visible GM VN narration/dialogue segment. This is an invisible startup trigger, not a player action. Do not mention a start command.";
 const SYNTHETIC_GAME_START_MESSAGE_RE = /^\s*\[start(?:\s+the)?\s+game\]\s*$/i;
@@ -1577,6 +1585,19 @@ function normalizeRecentMusicHistory(value: unknown): string[] {
 function appendRecentMusic(history: string[], tag: string | null | undefined): string[] {
   if (!tag) return history.slice(0, RECENT_MUSIC_HISTORY_LIMIT);
   return [tag, ...history.filter((entry) => entry !== tag)].slice(0, RECENT_MUSIC_HISTORY_LIMIT);
+}
+
+function normalizeRecentSpotifyTrackHistory(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .filter((uri): uri is string => typeof uri === "string" && uri.startsWith("spotify:track:"))
+        .slice(0, RECENT_SPOTIFY_TRACK_HISTORY_LIMIT)
+    : [];
+}
+
+function appendRecentSpotifyTrack(history: string[], uri: string | null | undefined): string[] {
+  if (!uri?.startsWith("spotify:track:")) return history.slice(0, RECENT_SPOTIFY_TRACK_HISTORY_LIMIT);
+  return [uri, ...history.filter((entry) => entry !== uri)].slice(0, RECENT_SPOTIFY_TRACK_HISTORY_LIMIT);
 }
 
 function formatCombatLogContent(message: Message): string {
@@ -1827,6 +1848,24 @@ export function GameSurface({
 
   // Asset store
   const queryClient = useQueryClient();
+  const syncHudWidgetsToChatCache = useCallback(
+    (widgets: HudWidget[]) => {
+      const detailKey = chatKeys.detail(activeChatId);
+      const patchedChat = patchChatMetadata(queryClient.getQueryData<Chat>(detailKey), { gameWidgetState: widgets });
+      if (patchedChat) {
+        queryClient.setQueryData(detailKey, patchedChat);
+      }
+
+      const chatStore = useChatStore.getState();
+      if (chatStore.activeChatId === activeChatId) {
+        const patchedActiveChat = patchChatMetadata(chatStore.activeChat, { gameWidgetState: widgets });
+        if (patchedActiveChat) {
+          chatStore.setActiveChat(patchedActiveChat);
+        }
+      }
+    },
+    [activeChatId, queryClient],
+  );
   const assetManifest = useGameAssetStore((s) => s.manifest);
   const currentBackground = useGameAssetStore((s) => s.currentBackground);
   const audioMuted = useGameAssetStore((s) => s.audioMuted);
@@ -1928,6 +1967,9 @@ export function GameSurface({
   const [activeReadable, setActiveReadable] = useState<JournalReadable | null>(null);
   const readableQueueRef = useRef<JournalReadable[]>([]);
   const recentMusicHistoryRef = useRef<string[]>(normalizeRecentMusicHistory(chatMeta.gameRecentMusic));
+  const recentSpotifyTrackHistoryRef = useRef<string[]>(
+    normalizeRecentSpotifyTrackHistory(chatMeta.gameRecentSpotifyTracks),
+  );
   const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startGameGuardRef = useRef(false);
   const startSessionGuardRef = useRef(false);
@@ -2144,6 +2186,7 @@ export function GameSurface({
     if (prevActiveChatRef.current === activeChatId) return; // skip initial mount
     prevActiveChatRef.current = activeChatId;
     recentMusicHistoryRef.current = normalizeRecentMusicHistory(chatMeta.gameRecentMusic);
+    recentSpotifyTrackHistoryRef.current = normalizeRecentSpotifyTrackHistory(chatMeta.gameRecentSpotifyTracks);
     setPartyDialogue([]);
     setPartyChatMessageId(null);
     setQueuedQte(null);
@@ -2174,7 +2217,7 @@ export function GameSurface({
     setPrepareSessionWidgetsOpen(false);
     // Allow the auto-tutorial to re-evaluate for the new chat (guard still gates on disabled flag)
     tutorialAutoTriggeredRef.current = false;
-  }, [activeChatId, chatMeta.gameInventory, chatMeta.gameRecentMusic]);
+  }, [activeChatId, chatMeta.gameInventory, chatMeta.gameRecentMusic, chatMeta.gameRecentSpotifyTracks]);
 
   const clearPendingInteractiveCommands = useCallback(() => {
     setActiveChoices(null);
@@ -2816,11 +2859,21 @@ export function GameSurface({
       if (!activeChatId || !useSpotifyGameMusic || !track?.uri) return;
       setSpotifyRetryPending(true);
       try {
+        dispatchSpotifySceneTrackChange(track.uri);
         await api.post<GameSpotifyPlayResponse>(
           "/game/spotify/play",
           { chatId: activeChatId, track },
           { signal: AbortSignal.timeout(20_000) },
         );
+        recentSpotifyTrackHistoryRef.current = appendRecentSpotifyTrack(
+          recentSpotifyTrackHistoryRef.current,
+          track.uri,
+        );
+        api
+          .patch(`/chats/${activeChatId}/metadata`, {
+            gameRecentSpotifyTracks: recentSpotifyTrackHistoryRef.current,
+          })
+          .catch(() => {});
         await queryClient.invalidateQueries({ queryKey: ["spotify", "player"] });
       } catch (error) {
         console.warn("[spotify/game] Failed to play scene track:", error);
@@ -2912,6 +2965,7 @@ export function GameSurface({
       normalizeRecentMusicHistory(chatMeta.gameRecentMusic),
       savedMusic,
     );
+    recentSpotifyTrackHistoryRef.current = normalizeRecentSpotifyTrackHistory(chatMeta.gameRecentSpotifyTracks);
 
     // Always overwrite from chatMeta (source of truth on mount) — handles both
     // same-chat remount (store may already match) and different-chat mount.
@@ -2968,6 +3022,7 @@ export function GameSurface({
     chatMeta.gameSceneBackground,
     chatMeta.gameSceneMusic,
     chatMeta.gameRecentMusic,
+    chatMeta.gameRecentSpotifyTracks,
     chatMeta.gameSceneAmbient,
     hasQteResponseAfterMessage,
     hasCombatResultAfterMessage,
@@ -3479,8 +3534,12 @@ export function GameSurface({
 
     // Scene wrap-up: handle bg, music, sfx, ambient, widgets, state changes
     // Widget updates always come from the GM model (not sidecar), apply them immediately
+    let nextWidgetState: HudWidget[] | null = null;
     for (const wu of tags.widgetUpdates) {
-      applyWidgetUpdate(wu);
+      nextWidgetState = applyWidgetUpdate(wu);
+    }
+    if (nextWidgetState) {
+      syncHudWidgetsToChatCache(nextWidgetState);
     }
 
     // State change tags always come from the GM model — transition via server so
@@ -3552,6 +3611,8 @@ export function GameSurface({
       recentMusic: recentMusicHistoryRef.current,
       useSpotifyMusic: useSpotifyGameMusic,
       availableSpotifyTracks: [] as SceneSpotifyTrackCandidate[],
+      currentSpotifyTrack: recentSpotifyTrackHistoryRef.current[0] ?? null,
+      recentSpotifyTracks: recentSpotifyTrackHistoryRef.current,
       currentAmbient: useGameAssetStore.getState().currentAmbient,
       currentWeather: gameSnapshot?.weather ?? null,
       currentTimeOfDay: gameSnapshot?.time ?? null,
@@ -4349,6 +4410,8 @@ export function GameSurface({
       recentMusic: recentMusicHistoryRef.current,
       useSpotifyMusic: useSpotifyGameMusic,
       availableSpotifyTracks: [] as SceneSpotifyTrackCandidate[],
+      currentSpotifyTrack: recentSpotifyTrackHistoryRef.current[0] ?? null,
+      recentSpotifyTracks: recentSpotifyTrackHistoryRef.current,
       currentAmbient: useGameAssetStore.getState().currentAmbient,
       currentWeather: gameSnapshot?.weather ?? null,
       currentTimeOfDay: gameSnapshot?.time ?? null,
@@ -7039,26 +7102,13 @@ export function GameSurface({
 
   const widgetSessionPrepModal = (
     <GameWidgetSessionPrepModal
-      open={prepareInitialWidgetsOpen || prepareSessionWidgetsOpen}
+      open={prepareSessionWidgetsOpen}
       widgets={normalizedWidgets}
       chatId={activeChatId}
-      mode={prepareInitialWidgetsOpen ? "initial" : "next"}
-      onClose={() => {
-        if (prepareInitialWidgetsOpen) {
-          setPrepareInitialWidgetsOpen(false);
-          return;
-        }
-        setPrepareSessionWidgetsOpen(false);
-      }}
-      onStartSession={
-        prepareInitialWidgetsOpen
-          ? () => {
-              setPrepareInitialWidgetsOpen(false);
-              handleStartGameNow();
-            }
-          : handleStartNewSessionNow
-      }
-      isStartingSession={prepareInitialWidgetsOpen ? startGame.isPending || startGameRequested : startSessionLocked}
+      mode="next"
+      onClose={() => setPrepareSessionWidgetsOpen(false)}
+      onStartSession={handleStartNewSessionNow}
+      isStartingSession={startSessionLocked}
     />
   );
 
@@ -7693,7 +7743,7 @@ export function GameSurface({
                 {/* Top-left: Map + Party portraits side by side */}
                 <div
                   className={cn(
-                    "pointer-events-auto absolute left-3 z-20 flex items-start gap-2",
+                    "pointer-events-auto absolute left-3 right-14 z-20 flex min-w-0 items-start gap-2 md:right-auto",
                     topOverlayOffsetClass,
                   )}
                 >
@@ -7740,7 +7790,7 @@ export function GameSurface({
 
                   {/* Party portraits — right of map */}
                   {partyMembers.length > 0 && (
-                    <div data-tour="game-party">
+                    <div data-tour="game-party" className="min-w-0 flex-1 md:flex-none">
                       <GamePartyBar
                         partyMembers={partyMembers}
                         partyCards={partyCards}
@@ -7904,27 +7954,35 @@ export function GameSurface({
 
                     return (
                       <div className="relative h-full min-h-0">
-                        <GameCombatUI
-                          chatId={activeChatId}
-                          party={combatParty}
-                          enemies={combatEnemies}
-                          inventoryItems={inventoryItems}
-                          onCombatEnd={handleCombatEnd}
-                          onInventoryItemUsed={handleUseCombatInventoryItem}
-                          onCombatantsChange={handleCombatantsChange}
-                          onOpenInventory={() => setInventoryOpen(true)}
-                          onCustomInstruction={handleCombatCustomInstruction}
-                          onSpriteSuggestionChange={setCombatSpriteSuggestion}
-                          _isStreaming={isStreaming}
-                          narration={combatStartNarration ?? "Combat starts!"}
-                          combatDialogue={combatDialogueLines}
-                          combatDialogueCues={combatDialogueCues}
-                          combatItemEffects={combatItemEffects}
-                          combatMechanics={combatMechanics}
-                          voicedCombatSpeakerNames={voicedCombatSpeakerNames}
-                          gameVoiceVolume={effectiveGameVoiceVolume}
-                          combatControlsSlot={combatControlsSlot}
-                        />
+                        <Suspense
+                          fallback={
+                            <div className="flex h-full items-center justify-center text-sm text-white/70">
+                              Loading combat...
+                            </div>
+                          }
+                        >
+                          <GameCombatUI
+                            chatId={activeChatId}
+                            party={combatParty}
+                            enemies={combatEnemies}
+                            inventoryItems={inventoryItems}
+                            onCombatEnd={handleCombatEnd}
+                            onInventoryItemUsed={handleUseCombatInventoryItem}
+                            onCombatantsChange={handleCombatantsChange}
+                            onOpenInventory={() => setInventoryOpen(true)}
+                            onCustomInstruction={handleCombatCustomInstruction}
+                            onSpriteSuggestionChange={setCombatSpriteSuggestion}
+                            _isStreaming={isStreaming}
+                            narration={combatStartNarration ?? "Combat starts!"}
+                            combatDialogue={combatDialogueLines}
+                            combatDialogueCues={combatDialogueCues}
+                            combatItemEffects={combatItemEffects}
+                            combatMechanics={combatMechanics}
+                            voicedCombatSpeakerNames={voicedCombatSpeakerNames}
+                            gameVoiceVolume={effectiveGameVoiceVolume}
+                            combatControlsSlot={combatControlsSlot}
+                          />
+                        </Suspense>
                       </div>
                     );
                   }

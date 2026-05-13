@@ -29,7 +29,11 @@ import {
   type GmPromptContext,
 } from "../services/game/gm-prompts.js";
 import { buildPartySystemPrompt } from "../services/game/party-prompts.js";
-import { buildPromptMacroContext, getCharacterDescriptionWithExtensions } from "../services/prompt/index.js";
+import {
+  buildPromptMacroContext,
+  getCharacterDescriptionWithExtensions,
+  resolveMacrosWithVariableSnapshot,
+} from "../services/prompt/index.js";
 import { listPartySprites, readPreferredFullBodySpriteBase64 } from "../services/game/sprite.service.js";
 import {
   buildSceneAnalyzerSystemPrompt,
@@ -176,6 +180,27 @@ function addNameLookupEntry(map: Map<string, string>, name: unknown, value: unkn
     map.set(alias, trimmedValue);
   }
 }
+
+function generatedStringValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return (
+      generatedStringValue(record.name) ??
+      generatedStringValue(record.label) ??
+      generatedStringValue(record.id) ??
+      generatedStringValue(record.type)
+    );
+  }
+  return undefined;
+}
+
+const generatedRequiredStringSchema = z.preprocess((value) => generatedStringValue(value) ?? value, z.string());
+const generatedOptionalStringSchema = z.preprocess((value) => generatedStringValue(value), z.string().optional());
 
 /**
  * Fuzzy-match an NPC name against the character-avatar/description map.
@@ -3131,18 +3156,25 @@ export async function gameRoutes(app: FastifyInstance) {
       }
     }
 
+    const setupPersonaId = chat.personaId || setupConfig.personaId || null;
+    const setupPersona = setupPersonaId ? await characters.getPersona(setupPersonaId) : null;
+
     // Load persona info so the GM can tailor the experience
     let personaCard: string | null = null;
-    if (chat.personaId || setupConfig.personaId) {
-      const persona = await characters.getPersona(chat.personaId || setupConfig.personaId!);
-      if (persona) {
-        const parts = [`Name: ${persona.name}`];
-        if (persona.description) parts.push(`Description: ${persona.description}`);
-        if (persona.personality) parts.push(`Personality: ${persona.personality}`);
-        if (persona.backstory) parts.push(`Backstory: ${persona.backstory}`);
-        if (persona.appearance) parts.push(`Appearance: ${persona.appearance}`);
-        personaCard = parts.join("\n");
-      }
+    const setupPersonaFields = {
+      description: setupPersona?.description ?? "",
+      personality: setupPersona?.personality ?? "",
+      backstory: setupPersona?.backstory ?? "",
+      appearance: setupPersona?.appearance ?? "",
+      scenario: setupPersona?.scenario ?? "",
+    };
+    if (setupPersona) {
+      const parts = [`Name: ${setupPersona.name}`];
+      if (setupPersona.description) parts.push(`Description: ${setupPersona.description}`);
+      if (setupPersona.personality) parts.push(`Personality: ${setupPersona.personality}`);
+      if (setupPersona.backstory) parts.push(`Backstory: ${setupPersona.backstory}`);
+      if (setupPersona.appearance) parts.push(`Appearance: ${setupPersona.appearance}`);
+      personaCard = parts.join("\n");
     }
 
     // Load party character cards for context (full detail)
@@ -3181,29 +3213,37 @@ export async function gameRoutes(app: FastifyInstance) {
       attributes: Array<{ name: string; value: number }>;
       hp: { value: number; max: number };
     } | null = null;
-    let personaName: string | null = null;
-    if (chat.personaId || setupConfig.personaId) {
-      const persona = await characters.getPersona(chat.personaId || setupConfig.personaId!);
-      if (persona) {
-        personaName = persona.name;
-        try {
-          const statsData = persona.personaStats ? JSON.parse(persona.personaStats) : null;
-          if (statsData?.rpgStats?.enabled) {
-            personaRpgStats = statsData.rpgStats;
-          }
-        } catch {
-          /* skip */
+    const personaName: string | null = setupPersona?.name ?? null;
+    if (setupPersona) {
+      try {
+        const statsData = setupPersona.personaStats ? JSON.parse(setupPersona.personaStats) : null;
+        if (statsData?.rpgStats?.enabled) {
+          personaRpgStats = statsData.rpgStats;
         }
+      } catch {
+        /* skip */
       }
     }
 
     let setupLorebookContext: string | undefined;
     if ((setupConfig.activeLorebookIds?.length ?? 0) > 0) {
+      const setupPromptMacroContext = await buildPromptMacroContext({
+        db: app.db,
+        characterIds: setupConfig.partyCharacterIds,
+        personaName: personaName ?? "User",
+        personaDescription: setupPersonaFields.description,
+        personaFields: setupPersonaFields,
+        variables: {},
+        chatId,
+      });
+      const resolveSetupLorebookMacrosForFinal = (value: string) =>
+        resolveMacrosWithVariableSnapshot(value, setupPromptMacroContext);
       const lorebookResult = await processLorebooks(app.db, [], null, {
         characterIds: setupConfig.partyCharacterIds,
-        personaId: setupConfig.personaId ?? null,
+        personaId: setupPersonaId,
         activeLorebookIds: setupConfig.activeLorebookIds,
         generationTriggers: ["game_setup", "game"],
+        resolveContent: resolveSetupLorebookMacrosForFinal,
       });
       const combinedLore = [
         lorebookResult.worldInfoBefore,
@@ -5178,8 +5218,8 @@ export async function gameRoutes(app: FastifyInstance) {
       chatId: z.string().min(1),
       combatants: z.array(
         z.object({
-          id: z.string(),
-          name: z.string(),
+          id: generatedRequiredStringSchema,
+          name: generatedRequiredStringSchema,
           hp: z.number(),
           maxHp: z.number(),
           mp: z.number().optional(),
@@ -5192,34 +5232,34 @@ export async function gameRoutes(app: FastifyInstance) {
           skills: z
             .array(
               z.object({
-                id: z.string(),
-                name: z.string(),
+                id: generatedRequiredStringSchema,
+                name: generatedRequiredStringSchema,
                 type: z.enum(["attack", "heal", "buff", "debuff"]),
                 mpCost: z.number(),
                 power: z.number(),
-                description: z.string().optional(),
+                description: generatedOptionalStringSchema,
                 cooldown: z.number().optional(),
-                element: z.string().optional(),
-                statusEffect: z.string().optional(),
+                element: generatedOptionalStringSchema,
+                statusEffect: generatedOptionalStringSchema,
               }),
             )
             .optional(),
           statusEffects: z
             .array(
               z.object({
-                name: z.string(),
+                name: generatedRequiredStringSchema,
                 modifier: z.number(),
                 stat: z.enum(["attack", "defense", "speed", "hp"]),
                 turnsLeft: z.number(),
               }),
             )
             .optional(),
-          element: z.string().optional(),
+          element: generatedOptionalStringSchema,
           elementAura: z
             .object({
-              element: z.string(),
+              element: generatedRequiredStringSchema,
               gauge: z.number(),
-              sourceId: z.string(),
+              sourceId: generatedRequiredStringSchema,
             })
             .nullable()
             .optional(),
@@ -5234,16 +5274,16 @@ export async function gameRoutes(app: FastifyInstance) {
           itemId: z.string().optional(),
           itemEffect: z
             .object({
-              name: z.string(),
+              name: generatedRequiredStringSchema,
               target: z.enum(["self", "ally", "enemy", "any"]),
               type: z.enum(["heal", "damage", "buff", "debuff", "status", "utility"]),
-              description: z.string(),
+              description: generatedRequiredStringSchema,
               power: z.number().optional(),
-              element: z.string().optional(),
+              element: generatedOptionalStringSchema,
               status: z
                 .object({
-                  name: z.string(),
-                  emoji: z.string(),
+                  name: generatedRequiredStringSchema,
+                  emoji: generatedRequiredStringSchema,
                   duration: z.number(),
                   modifier: z.number().optional(),
                   stat: z.enum(["attack", "defense", "speed", "hp"]).optional(),
@@ -5257,22 +5297,22 @@ export async function gameRoutes(app: FastifyInstance) {
       mechanics: z
         .array(
           z.object({
-            name: z.string(),
-            description: z.string(),
-            ownerName: z.string().optional(),
+            name: generatedRequiredStringSchema,
+            description: generatedRequiredStringSchema,
+            ownerName: generatedOptionalStringSchema,
             trigger: z.enum(["round_interval", "hp_threshold", "on_hit", "on_attack", "passive"]),
             interval: z.number().optional(),
             hpThreshold: z.number().optional(),
-            counterplay: z.string().optional(),
+            counterplay: generatedOptionalStringSchema,
             effectType: z
               .enum(["damage_all", "damage_one", "buff_self", "debuff_party", "status_party", "status_enemy"])
               .optional(),
             power: z.number().optional(),
-            element: z.string().optional(),
+            element: generatedOptionalStringSchema,
             status: z
               .object({
-                name: z.string(),
-                emoji: z.string(),
+                name: generatedRequiredStringSchema,
+                emoji: generatedRequiredStringSchema,
                 duration: z.number(),
                 modifier: z.number().optional(),
                 stat: z.enum(["attack", "defense", "speed", "hp"]).optional(),
@@ -5912,6 +5952,12 @@ export async function gameRoutes(app: FastifyInstance) {
     limit: z.number().min(1).max(50).optional().default(50),
   });
 
+  function normalizeSpotifyTrackHistory(value: unknown): string[] {
+    return Array.isArray(value)
+      ? value.filter((uri): uri is string => typeof uri === "string" && uri.startsWith("spotify:track:")).slice(0, 20)
+      : [];
+  }
+
   app.post("/spotify/candidates", async (req, reply) => {
     const input = spotifyCandidatesSchema.parse(req.body);
     const chats = createChatsStorage(app.db);
@@ -5925,6 +5971,17 @@ export async function gameRoutes(app: FastifyInstance) {
       playerAction: input.playerAction,
       context: input.context,
     });
+    const currentSpotifyTrack =
+      typeof input.context.currentSpotifyTrack === "string" &&
+      input.context.currentSpotifyTrack.startsWith("spotify:track:")
+        ? input.context.currentSpotifyTrack
+        : null;
+    const recentTrackUris = Array.from(
+      new Set([
+        ...(currentSpotifyTrack ? [currentSpotifyTrack] : []),
+        ...normalizeSpotifyTrackHistory(input.context.recentSpotifyTracks),
+      ]),
+    );
 
     try {
       return await getGameSpotifyCandidates({
@@ -5932,6 +5989,7 @@ export async function gameRoutes(app: FastifyInstance) {
         chatMeta: meta,
         query,
         limit: input.limit,
+        recentTrackUris,
       });
     } catch (err) {
       logger.warn(err, "[spotify/game] Failed to build scene music candidates");
@@ -5989,6 +6047,8 @@ export async function gameRoutes(app: FastifyInstance) {
       recentMusic: z.array(z.string().max(500)).max(20).optional().default([]),
       useSpotifyMusic: z.boolean().optional().default(false),
       availableSpotifyTracks: z.array(spotifySceneTrackCandidateSchema).max(50).optional().default([]),
+      currentSpotifyTrack: z.string().max(300).nullable().optional().default(null),
+      recentSpotifyTracks: z.array(z.string().max(300)).max(20).optional().default([]),
       currentAmbient: z.string().nullable().optional().default(null),
       currentWeather: z.string().nullable(),
       currentTimeOfDay: z.string().nullable(),

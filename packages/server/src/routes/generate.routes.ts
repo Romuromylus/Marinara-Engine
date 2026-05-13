@@ -10,10 +10,12 @@ import {
   findKnownModel,
   nameToXmlTag,
   DEFAULT_AGENT_TOOLS,
+  DEFAULT_AGENT_MAX_TOKENS,
+  MAX_AGENT_MAX_TOKENS,
+  MIN_AGENT_MAX_TOKENS,
   LOCAL_SIDECAR_CONNECTION_ID,
   resolveMacros,
   LIMITS,
-  applyRegexReplacement,
 } from "@marinara-engine/shared";
 import type {
   AgentContext,
@@ -36,6 +38,7 @@ import { createGameStateStorage } from "../services/storage/game-state.storage.j
 import { createCustomToolsStorage } from "../services/storage/custom-tools.storage.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createRegexScriptsStorage } from "../services/storage/regex-scripts.storage.js";
+import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
 import { loadPrompt, CONVERSATION_SELFIE } from "../services/prompt-overrides/index.js";
 import { processLorebooks } from "../services/lorebook/index.js";
@@ -55,6 +58,7 @@ import {
   buildPromptMacroContext,
   collectCharacterDepthPromptEntries,
   getCharacterDescriptionWithExtensions,
+  resolveMacrosWithVariableSnapshot,
   type AssemblerInput,
 } from "../services/prompt/index.js";
 import { mergeAdjacentMessages } from "../services/prompt/merger.js";
@@ -77,6 +81,7 @@ import {
 } from "../services/agents/agent-executor.js";
 import { buildSpriteExpressionChoices, listCharacterSprites } from "../services/game/sprite.service.js";
 import { generateChatBackground } from "../services/game/game-asset-generation.js";
+import { getAssetManifest } from "../services/game/asset-manifest.service.js";
 import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../services/llm/local-sidecar.js";
 import {
   parseCharacterCommands,
@@ -176,6 +181,10 @@ import {
   normalizeStringArray,
 } from "./generate/agent-normalizers.js";
 import {
+  buildGenerationPromptPresetCandidates,
+  type PromptPresetCandidateSource,
+} from "./generate/prompt-preset-selection.js";
+import {
   createJournal,
   addLocationEntry,
   addEventEntry,
@@ -217,6 +226,16 @@ function bumpCharacterVersion(value: unknown): string {
 
 function hasConversationSchedules(value: unknown): value is Record<string, any> {
   return !!value && typeof value === "object" && Object.keys(value as Record<string, unknown>).length > 0;
+}
+
+function parsePromptPresetChoices(value: unknown): Record<string, string | string[]> | null {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, string | string[]>;
+  } catch {
+    return null;
+  }
 }
 
 function areConversationSchedulesEnabled(meta: Record<string, any>): boolean {
@@ -478,6 +497,16 @@ function normalizeDmTargetName(value: string): string {
 function normalizeMaxContext(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
   return Math.floor(value);
+}
+
+function normalizeAgentMaxTokens(value: unknown, fallback = DEFAULT_AGENT_MAX_TOKENS): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(MIN_AGENT_MAX_TOKENS, Math.min(MAX_AGENT_MAX_TOKENS, Math.trunc(parsed)));
+}
+
+function applyProviderMaxTokensOverride(provider: BaseLLMProvider, maxTokens: number): number {
+  return provider.maxTokensOverrideValue !== null ? Math.min(maxTokens, provider.maxTokensOverrideValue) : maxTokens;
 }
 
 function minContextLimit(...limits: Array<number | undefined>): number | undefined {
@@ -869,8 +898,11 @@ export async function generateRoutes(app: FastifyInstance) {
 
       // ── Regeneration as swipe: exclude the target message from context ──
       if (input.regenerateMessageId) {
-        regenMsg = chatMessages.find((m: any) => m.id === input.regenerateMessageId);
-        if (!regenMsg) return reply.code(404).send({ error: "Regenerated message not found" });
+        regenMsg = scopedMessages.find((m: any) => m.id === input.regenerateMessageId);
+        if (!regenMsg) {
+          sendSseEvent(reply, { type: "error", data: "Regenerated message not found" });
+          return;
+        }
         chatMessages = chatMessages.filter((m: any) => m.id !== input.regenerateMessageId);
         lorebookKeeperMessages = lorebookKeeperMessages.filter((m: any) => m.id !== input.regenerateMessageId);
       }
@@ -933,62 +965,14 @@ export async function generateRoutes(app: FastifyInstance) {
         }
       }
 
-      // ── Apply prompt-only regex scripts to message content ──
-      const allRegexScripts = await regexScriptsStore.list();
-      const promptOnlyScripts = allRegexScripts.filter((s: any) => {
-        if (s.enabled !== "true" || s.promptOnly !== "true") return false;
-        return true;
-      });
-      if (promptOnlyScripts.length > 0) {
-        const totalMessages = mappedMessages.length;
-        for (let msgIdx = 0; msgIdx < totalMessages; msgIdx++) {
-          const msg = mappedMessages[msgIdx]!;
-          const messageDepth = totalMessages - 1 - msgIdx;
-          const placement = msg.role === "user" ? "user_input" : "ai_output";
-          let text = msg.content;
-          for (const script of promptOnlyScripts) {
-            const placements: string[] = (() => {
-              try {
-                return JSON.parse(script.placement as string);
-              } catch {
-                return [];
-              }
-            })();
-            if (!placements.includes(placement)) continue;
-            // Depth range filtering
-            const sMinDepth = script.minDepth as number | null;
-            const sMaxDepth = script.maxDepth as number | null;
-            if (sMinDepth != null && messageDepth < sMinDepth) continue;
-            if (sMaxDepth != null && messageDepth > sMaxDepth) continue;
-            try {
-              const re = new RegExp(script.findRegex as string, script.flags as string);
-              text = applyRegexReplacement(text, re, script.replaceString as string);
-              const trims: string[] = (() => {
-                try {
-                  return JSON.parse(script.trimStrings as string);
-                } catch {
-                  return [];
-                }
-              })();
-              for (const t of trims) {
-                if (t) text = text.split(t).join("");
-              }
-            } catch {
-              /* invalid regex — skip */
-            }
-          }
-          msg.content = text;
-        }
-      }
-
-      // Always collapse 3+ consecutive blank lines into a double newline —
-      // these waste tokens and produce messy logs regardless of user regex settings.
-      // Matches pure newlines AND lines that contain only whitespace.
-      for (const msg of mappedMessages) {
-        msg.content = msg.content.replace(/\n([ \t]*\n){2,}/g, "\n\n");
-      }
-
       const characterIds: string[] = JSON.parse(chat.characterIds as string);
+
+      // ── Game mode: apply segment edit/delete overlays before regex scripts ──
+      // Users can edit individual narration/dialogue beats in the VN UI.
+      // Apply overlays first so regex scripts also affect corrected beat text.
+      if (chatMode === "game") {
+        applyAllSegmentEdits(mappedMessages, chatMeta as Record<string, unknown>, chatMessages);
+      }
 
       // Resolve persona — prefer per-chat personaId, fall back to globally active persona
       // (Game mode skips the fallback — persona must be explicitly selected in the setup wizard)
@@ -997,14 +981,6 @@ export async function generateRoutes(app: FastifyInstance) {
       let personaDescription = "";
       let personaFields: { personality?: string; scenario?: string; backstory?: string; appearance?: string } = {};
       const allPersonas = await chars.listPersonas();
-      // ── Game mode: apply segment edit overlays to message content ──
-      // Users can edit individual narration/dialogue segments in the VN UI.
-      // Edits are stored as chat-metadata overlays; apply them so the model
-      // sees the corrected text in its conversation history.
-      if (chatMode === "game") {
-        applyAllSegmentEdits(mappedMessages, chatMeta as Record<string, unknown>, chatMessages);
-      }
-
       const persona =
         (chat.personaId ? allPersonas.find((p: any) => p.id === chat.personaId) : null) ??
         (chatMode !== "game" ? allPersonas.find((p: any) => p.isActive === "true") : null);
@@ -1043,38 +1019,41 @@ export async function generateRoutes(app: FastifyInstance) {
         postToDiscordWebhook(discordWebhookUrl, { content: pendingUserDiscordMsg, username: personaName });
       }
 
-      // ── Assembler path: use preset if the chat has one ──
-      let presetId =
-        chatMode === "conversation"
-          ? undefined
-          : input.impersonate && input.impersonatePresetId
-            ? input.impersonatePresetId
-            : ((chat.promptPresetId as string | null) ?? undefined);
-      let resolvedPreset = presetId ? await presets.getById(presetId) : null;
-      const usingImpersonatePreset = !!(input.impersonate && input.impersonatePresetId);
-      if (usingImpersonatePreset && !resolvedPreset) {
-        presetId = (chat.promptPresetId as string | null) ?? undefined;
-        resolvedPreset = presetId ? await presets.getById(presetId) : null;
+      // ── Assembler path: use the highest-priority prompt preset for this generation ──
+      const chatPromptPresetId = (chat.promptPresetId as string | null) ?? null;
+      const presetCandidates = buildGenerationPromptPresetCandidates({
+        chatMode,
+        chatPromptPresetId,
+        connectionPromptPresetId: conn.promptPresetId,
+        impersonate: input.impersonate,
+        impersonatePromptPresetId: input.impersonatePresetId,
+      });
+      let presetId: string | undefined;
+      let resolvedPreset: Awaited<ReturnType<typeof presets.getById>> | null = null;
+      let presetSource: PromptPresetCandidateSource | null = null;
+      for (const candidate of presetCandidates) {
+        const candidatePreset = await presets.getById(candidate.id);
+        if (candidatePreset) {
+          presetId = candidate.id;
+          resolvedPreset = candidatePreset;
+          presetSource = candidate.source;
+          break;
+        }
+        if (candidate.source !== "chat") {
+          logger.warn(
+            "[generate] %s prompt preset override %s was not found; falling back to the next preset candidate",
+            candidate.source,
+            candidate.id,
+          );
+        }
       }
-      const usingResolvedImpersonatePreset =
-        usingImpersonatePreset && !!resolvedPreset && presetId === input.impersonatePresetId;
-      const impersonatePresetDiffers =
-        usingResolvedImpersonatePreset && input.impersonatePresetId !== chat.promptPresetId;
-      const impersonateDefaultChoices = impersonatePresetDiffers
-        ? (() => {
-            try {
-              const raw = resolvedPreset?.defaultChoices as string | undefined;
-              if (!raw) return {};
-              const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-              if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-              return parsed as Record<string, string | string[]>;
-            } catch {
-              return {};
-            }
-          })()
-        : null;
+      const selectedPresetDiffersFromChat = !!resolvedPreset && !!presetId && presetId !== chatPromptPresetId;
+      const overrideDefaultChoices =
+        selectedPresetDiffersFromChat && presetSource !== "chat"
+          ? (parsePromptPresetChoices((resolvedPreset as { defaultChoices?: unknown }).defaultChoices) ?? {})
+          : null;
       const chatChoices: Record<string, string | string[]> =
-        impersonateDefaultChoices ?? ((chatMeta.presetChoices ?? {}) as Record<string, string | string[]>);
+        overrideDefaultChoices ?? ((chatMeta.presetChoices ?? {}) as Record<string, string | string[]>);
 
       let finalMessages: Array<{
         role: "system" | "user" | "assistant";
@@ -1154,6 +1133,22 @@ export async function generateRoutes(app: FastifyInstance) {
         model: conn.model,
       });
       const resolvePromptMacros = (value: string) => resolveMacros(value, promptMacroContext);
+      const resolvePromptMacrosForLorebook = (value: string) =>
+        resolveMacrosWithVariableSnapshot(value, promptMacroContext);
+
+      // ── Apply regex scripts to prompt message content ──
+      // Macro context is available now, so regex find/replace/trim fields can use prompt macros.
+      applyRegexScriptsToPromptMessages(mappedMessages, await regexScriptsStore.list(), {
+        resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
+      });
+
+      // Always collapse 3+ consecutive blank lines into a double newline —
+      // these waste tokens and produce messy logs regardless of user regex settings.
+      // Matches pure newlines AND lines that contain only whitespace.
+      for (const msg of mappedMessages) {
+        msg.content = msg.content.replace(/\n([ \t]*\n){2,}/g, "\n\n");
+      }
+      promptMacroContext.lastInput = [...mappedMessages].reverse().find((message) => message.role === "user")?.content;
 
       // ── Compute chat embedding for semantic lorebook matching (if any entries are vectorized) ──
       sendProgress("embedding");
@@ -2358,6 +2353,7 @@ export async function generateRoutes(app: FastifyInstance) {
               undefined,
             entryTimingStates: (chatMeta.entryTimingStates as Record<string, LorebookEntryTimingState>) ?? undefined,
             generationTriggers: lorebookGenerationTriggers,
+            resolveContent: resolvePromptMacrosForLorebook,
           });
 
           if (lorebookResult.updatedEntryStateOverrides)
@@ -2383,13 +2379,7 @@ export async function generateRoutes(app: FastifyInstance) {
           }
           // Inject depth-based lorebook entries into the message array
           if (lorebookResult.depthEntries.length > 0) {
-            finalMessages = injectAtDepth(
-              finalMessages,
-              lorebookResult.depthEntries.map((entry) => ({
-                ...entry,
-                content: resolvePromptMacros(entry.content),
-              })),
-            );
+            finalMessages = injectAtDepth(finalMessages, lorebookResult.depthEntries);
           }
         }
       }
@@ -2417,6 +2407,7 @@ export async function generateRoutes(app: FastifyInstance) {
             undefined,
           entryTimingStates: (chatMeta.entryTimingStates as Record<string, LorebookEntryTimingState>) ?? undefined,
           generationTriggers: lorebookGenerationTriggers,
+          resolveContent: resolvePromptMacrosForLorebook,
         });
 
         if (lorebookResult.updatedEntryStateOverrides)
@@ -2438,13 +2429,7 @@ export async function generateRoutes(app: FastifyInstance) {
           finalMessages.splice(insertAt, 0, { role: "system" as const, content: loreBlock });
         }
         if (lorebookResult.depthEntries.length > 0) {
-          finalMessages = injectAtDepth(
-            finalMessages,
-            lorebookResult.depthEntries.map((entry) => ({
-              ...entry,
-              content: resolvePromptMacros(entry.content),
-            })),
-          );
+          finalMessages = injectAtDepth(finalMessages, lorebookResult.depthEntries);
         }
       }
 
@@ -2733,6 +2718,8 @@ export async function generateRoutes(app: FastifyInstance) {
       const agentConnectionWarnings: AgentConnectionWarning[] = [];
       const skippedLocalSidecarAgents: string[] = [];
       const defaultAgentConnectionAgents: string[] = [];
+      let responseOrchestratorSelectorAgent: ResolvedAgent | null = null;
+      let responseOrchestratorSelectorUnavailable = false;
       for (const cfg of enabledConfigs) {
         // If this chat has a per-chat agent list, only include agents in that list
         if (hasPerChatAgentList && !perChatAgentSet.has(cfg.type)) continue;
@@ -2841,6 +2828,110 @@ export async function generateRoutes(app: FastifyInstance) {
           model: builtInCached?.model ?? conn.model,
           maxParallelJobs: builtInCached?.maxParallelJobs ?? chatConnectionMaxParallelJobs,
         });
+      }
+
+      // The smart group speaker picker is an internal Response Orchestrator call,
+      // not a normal pipeline agent. Resolve only that agent's config so its
+      // connection/model/budget controls apply without enabling unrelated agents.
+      const selectorGroupResponseOrder = (chatMeta.groupResponseOrder as string) ?? "sequential";
+      const selectorGroupChatMode =
+        chatMode === "conversation"
+          ? selectorGroupResponseOrder === "manual"
+            ? "individual"
+            : "merged"
+          : ((chatMeta.groupChatMode as string) ?? "merged");
+      const shouldResolveResponseOrchestratorSelector =
+        !input.impersonate &&
+        !input.regenerateMessageId &&
+        characterIds.length > 1 &&
+        selectorGroupChatMode === "individual" &&
+        selectorGroupResponseOrder === "smart";
+      if (shouldResolveResponseOrchestratorSelector) {
+        const resolvedResponseOrchestratorAgent = resolvedAgents.find((agent) => agent.type === "response-orchestrator");
+        if (resolvedResponseOrchestratorAgent) {
+          responseOrchestratorSelectorAgent = resolvedResponseOrchestratorAgent;
+        } else {
+          const storedResponseOrchestratorConfig = await agentsStore.getByType("response-orchestrator");
+          const cfg =
+            storedResponseOrchestratorConfig ??
+            (defaultAgentConn
+              ? (BUILT_IN_AGENTS.find((agent) => agent.id === "response-orchestrator") ?? null)
+              : null);
+          if (cfg) {
+            const settings =
+              "settings" in cfg && cfg.settings
+                ? JSON.parse(cfg.settings as string)
+                : getDefaultBuiltInAgentSettings("response-orchestrator");
+            let agentProvider = provider;
+            let agentModel = conn.model;
+            let agentMaxParallelJobs = chatConnectionMaxParallelJobs;
+            const requestedConnectionId = "connectionId" in cfg ? (cfg.connectionId as string | null) : null;
+            const effectiveConnectionId = resolveAgentConnectionId({
+              requestedConnectionId,
+              defaultAgentConnectionId: defaultAgentConn?.id ?? null,
+              localSidecarAvailable: localSidecarAvailableForTrackers,
+            });
+
+            if (effectiveConnectionId === "skip-local-sidecar") {
+              responseOrchestratorSelectorUnavailable = true;
+              const alreadyWarned = skippedLocalSidecarAgents.some((agentName) => agentName === "Response Orchestrator");
+              if (!alreadyWarned) {
+                agentConnectionWarnings.push(buildLocalSidecarUnavailableWarning(["Response Orchestrator"]));
+              }
+              logger.warn(
+                "[group-smart] Skipping Response Orchestrator Local Model override for chat %s because the sidecar is unavailable",
+                input.chatId,
+              );
+            } else {
+              if (defaultAgentConn && effectiveConnectionId === defaultAgentConn.id) {
+                defaultAgentConnectionAgents.push("Response Orchestrator");
+              }
+              if (effectiveConnectionId) {
+                const cached = agentProviderCache.get(effectiveConnectionId);
+                if (cached) {
+                  agentProvider = cached.provider;
+                  agentModel = cached.model;
+                  agentMaxParallelJobs = cached.maxParallelJobs;
+                } else {
+                  const agentConn = await connections.getWithKey(effectiveConnectionId);
+                  if (agentConn) {
+                    const agentBaseUrl = resolveBaseUrl(agentConn);
+                    if (agentBaseUrl) {
+                      agentProvider = createLLMProvider(
+                        agentConn.provider,
+                        agentBaseUrl,
+                        agentConn.apiKey,
+                        agentConn.maxContext,
+                        agentConn.openrouterProvider,
+                        agentConn.maxTokensOverride,
+                      );
+                      agentModel = agentConn.model;
+                      agentMaxParallelJobs = Number(agentConn.maxParallelJobs) || 1;
+                      agentProviderCache.set(effectiveConnectionId, {
+                        provider: agentProvider,
+                        model: agentModel,
+                        maxParallelJobs: agentMaxParallelJobs,
+                      });
+                    }
+                  }
+                }
+              }
+
+              responseOrchestratorSelectorAgent = {
+                id: "id" in cfg ? String(cfg.id) : "builtin:response-orchestrator",
+                type: "response-orchestrator",
+                name: "name" in cfg ? String(cfg.name) : "Response Orchestrator",
+                phase: "phase" in cfg ? String(cfg.phase) : "pre_generation",
+                promptTemplate: "promptTemplate" in cfg ? String(cfg.promptTemplate ?? "") : "",
+                connectionId: effectiveConnectionId,
+                settings,
+                provider: agentProvider,
+                model: agentModel,
+                maxParallelJobs: agentMaxParallelJobs,
+              };
+            }
+          }
+        }
       }
 
       if (defaultAgentConn && defaultAgentConnectionAgents.length > 0) {
@@ -3494,6 +3585,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 undefined,
               entryTimingStates: (chatMeta.entryTimingStates as Record<string, LorebookEntryTimingState>) ?? undefined,
               generationTriggers: lorebookGenerationTriggers,
+              resolveContent: resolvePromptMacrosForLorebook,
             },
           );
 
@@ -3510,7 +3602,6 @@ export async function generateRoutes(app: FastifyInstance) {
           });
           const loreContent = [lorebookResult.worldInfoBefore, lorebookResult.worldInfoAfter]
             .filter(Boolean)
-            .map((content) => resolvePromptMacros(content))
             .join("\n");
           if (loreContent) {
             const loreBlock = `<lore>\n${loreContent}\n</lore>`;
@@ -3523,13 +3614,7 @@ export async function generateRoutes(app: FastifyInstance) {
             }
           }
           if (lorebookResult.depthEntries.length > 0) {
-            finalMessages = injectAtDepth(
-              finalMessages,
-              lorebookResult.depthEntries.map((entry) => ({
-                ...entry,
-                content: resolvePromptMacros(entry.content),
-              })),
-            );
+            finalMessages = injectAtDepth(finalMessages, lorebookResult.depthEntries);
           }
         }
 
@@ -4002,6 +4087,12 @@ export async function generateRoutes(app: FastifyInstance) {
         try {
           const { readdirSync, readFileSync, existsSync } = await import("fs");
           const { join, extname } = await import("path");
+          const availableBackgrounds: Array<{
+            filename: string;
+            originalName?: string | null;
+            tags: string[];
+            source?: "user" | "game_asset";
+          }> = [];
           const bgDir = join(DATA_DIR, "backgrounds");
           if (existsSync(bgDir)) {
             const exts = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"]);
@@ -4018,12 +4109,26 @@ export async function generateRoutes(app: FastifyInstance) {
               }
             }
 
-            agentContext.memory._availableBackgrounds = files.map((f: string) => ({
-              filename: f,
-              originalName: meta[f]?.originalName ?? null,
-              tags: meta[f]?.tags ?? [],
-            }));
+            availableBackgrounds.push(
+              ...files.map((f: string) => ({
+                filename: f,
+                originalName: meta[f]?.originalName ?? null,
+                tags: meta[f]?.tags ?? [],
+                source: "user" as const,
+              })),
+            );
           }
+          availableBackgrounds.push(
+            ...(getAssetManifest().byCategory.backgrounds ?? [])
+              .filter((entry) => !entry.path.startsWith("__user_bg__/"))
+              .map((entry) => ({
+                filename: `gameAsset:${entry.path}`,
+                originalName: entry.tag,
+                tags: entry.subcategory ? [entry.subcategory] : [],
+                source: "game_asset" as const,
+              })),
+          );
+          agentContext.memory._availableBackgrounds = availableBackgrounds;
         } catch {
           /* non-critical */
         }
@@ -4235,6 +4340,26 @@ export async function generateRoutes(app: FastifyInstance) {
       // ────────────────────────────────────────
       // Tracker Data Injection
       // ────────────────────────────────────────
+      // The Card Evolution Auditor proposes user-facing character-card edits,
+      // so gate it by assistant-message cadence instead of auditing every turn.
+      if (resolvedAgents.some((a) => a.type === "card-evolution-auditor")) {
+        const ceaAgent = resolvedAgents.find((a) => a.type === "card-evolution-auditor")!;
+        const defaultInterval = (getDefaultBuiltInAgentSettings("card-evolution-auditor").runInterval as number) ?? 8;
+        const runInterval = (ceaAgent.settings.runInterval as number) ?? defaultInterval;
+
+        if (runInterval > 1) {
+          const lastRun = await agentsStore.getLastSuccessfulRunByType("card-evolution-auditor", input.chatId);
+          if (lastRun) {
+            const lastRunIdx = allChatMessages.findIndex((m: any) => m.id === lastRun.messageId);
+            const assistantMsgsSince =
+              lastRunIdx >= 0 ? allChatMessages.slice(lastRunIdx + 1).filter((m: any) => m.role === "assistant") : [];
+            if (assistantMsgsSince.length + 1 < runInterval) {
+              resolvedAgents.splice(resolvedAgents.indexOf(ceaAgent), 1);
+            }
+          }
+        }
+      }
+
       // Always inject committed tracker data as a system message regardless of
       // preset configuration. This replaces the old agent_data marker approach.
       if (chatEnableAgents && chatActiveAgentIds.length > 0) {
@@ -5476,6 +5601,7 @@ export async function generateRoutes(app: FastifyInstance) {
       const selectSmartGroupResponders = async (): Promise<string[]> => {
         const explicitMentionIds = getExplicitlyMentionedCharacterIds();
         if (explicitMentionIds.length > 0) return explicitMentionIds;
+        if (responseOrchestratorSelectorUnavailable) return fallbackSmartGroupResponders();
 
         const recentTranscript = chatMessages
           .slice(-16)
@@ -5531,10 +5657,21 @@ export async function generateRoutes(app: FastifyInstance) {
         ];
 
         try {
-          const result = await provider.chatComplete(selectionPrompt, {
-            model: conn.model,
-            temperature: 0.2,
-            maxTokens: 512,
+          const orchestratorAgent =
+            responseOrchestratorSelectorAgent ?? resolvedAgents.find((agent) => agent.type === "response-orchestrator");
+          const selectorProvider = orchestratorAgent?.provider ?? provider;
+          const selectorModel = orchestratorAgent?.model ?? conn.model;
+          const selectorTemperature =
+            typeof orchestratorAgent?.settings.temperature === "number" ? orchestratorAgent.settings.temperature : 0.2;
+          const selectorMaxTokens = applyProviderMaxTokensOverride(
+            selectorProvider,
+            normalizeAgentMaxTokens(orchestratorAgent?.settings?.maxTokens),
+          );
+
+          const result = await selectorProvider.chatComplete(selectionPrompt, {
+            model: selectorModel,
+            temperature: selectorTemperature,
+            maxTokens: selectorMaxTokens,
             maxContext: effectiveMaxContext,
             topP: 1,
             stream: false,
@@ -6544,10 +6681,14 @@ export async function generateRoutes(app: FastifyInstance) {
         }
 
         if (regenGroupChatIndividual) {
-          if (regenMsg?.chatId !== input.chatId)
-            return reply.code(400).send({ error: "Regenerated message does not belong to this chat" });
-          if (!regenMsg?.characterId)
-            return reply.code(400).send({ error: "Regenerated message is missing character" });
+          if (regenMsg?.chatId !== input.chatId) {
+            sendSseEvent(reply, { type: "error", data: "Regenerated message does not belong to this chat" });
+            return;
+          }
+          if (!regenMsg?.characterId) {
+            sendSseEvent(reply, { type: "error", data: "Regenerated message is missing character" });
+            return;
+          }
 
           // Get character of regenerated message and append "Respond ONLY as [name]" instruction
           targetCharId = regenMsg?.characterId ?? null;

@@ -258,6 +258,7 @@ const CREATE_TABLES: string[] = [
     use_for_random TEXT NOT NULL DEFAULT 'false',
     enable_caching TEXT NOT NULL DEFAULT 'false',
     caching_at_depth INTEGER NOT NULL DEFAULT 5,
+    prompt_preset_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -417,6 +418,15 @@ const CREATE_TABLES: string[] = [
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     mode TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    collapsed TEXT NOT NULL DEFAULT 'false',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS api_connection_folders (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
     color TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
     collapsed TEXT NOT NULL DEFAULT 'false',
@@ -631,6 +641,11 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
   },
   {
     table: "api_connections",
+    column: "prompt_preset_id",
+    definition: "TEXT",
+  },
+  {
+    table: "api_connections",
     column: "max_tokens_override",
     definition: "INTEGER",
   },
@@ -698,6 +713,16 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: "personas",
     column: "tracker_card_colors",
     definition: `TEXT NOT NULL DEFAULT '{"mode":"chat"}'`,
+  },
+  {
+    table: "api_connections",
+    column: "folder_id",
+    definition: "TEXT",
+  },
+  {
+    table: "api_connections",
+    column: "sort_order",
+    definition: "INTEGER NOT NULL DEFAULT 0",
   },
 ];
 

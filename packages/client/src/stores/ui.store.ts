@@ -211,6 +211,8 @@ interface UIState {
   regexDetailId: string | null;
   /** When true, the main area shows the browser */
   botBrowserOpen: boolean;
+  /** When true, the main area shows the game assets browser */
+  gameAssetsBrowserOpen: boolean;
   /** When true, the main area shows the full-page character library */
   characterLibraryOpen: boolean;
   /** True when any open detail editor has unsaved changes */
@@ -276,6 +278,8 @@ interface UIState {
   intuitiveSwipeNavigation: boolean;
   /** When true, moving past the newest swipe on the latest assistant message creates a new reroll. */
   intuitiveSwipeRerollLatest: boolean;
+  /** When true, pressing Up Arrow with an empty chat input opens the last user message for editing (Conversation/Roleplay). */
+  editLastMessageOnArrowUp: boolean;
 
   // ── Text Appearance ──
   /** Color for narrator text in RP mode (empty = default amber) */
@@ -429,6 +433,8 @@ interface UIState {
   closeCharacterLibrary: () => void;
   openBotBrowser: () => void;
   closeBotBrowser: () => void;
+  openGameAssetsBrowser: () => void;
+  closeGameAssetsBrowser: () => void;
 
   /** Returns true if any full-page detail editor is currently open */
   hasAnyDetailOpen: () => boolean;
@@ -471,6 +477,7 @@ interface UIState {
   setSpotifyMobileWidgetPosition: (position: FloatingWidgetPosition) => void;
   setIntuitiveSwipeNavigation: (v: boolean) => void;
   setIntuitiveSwipeRerollLatest: (v: boolean) => void;
+  setEditLastMessageOnArrowUp: (v: boolean) => void;
   setNarrationFontColor: (v: string) => void;
   setNarrationOpacity: (v: number) => void;
   setChatFontColor: (v: string) => void;
@@ -493,6 +500,7 @@ interface UIState {
     options: Partial<GameSetupLearnedOptions>,
     text?: Partial<GameSetupRememberedText>,
   ) => void;
+  forgetGameSetupOption: (group: keyof GameSetupLearnedOptions, value: string) => void;
   setEnterToSendRP: (v: boolean) => void;
   setEnterToSendConvo: (v: boolean) => void;
   setEnterToSendGame: (v: boolean) => void;
@@ -582,6 +590,7 @@ export function pickSyncedSettings(state: UIState) {
     spotifyMobileWidgetPosition: state.spotifyMobileWidgetPosition,
     intuitiveSwipeNavigation: state.intuitiveSwipeNavigation,
     intuitiveSwipeRerollLatest: state.intuitiveSwipeRerollLatest,
+    editLastMessageOnArrowUp: state.editLastMessageOnArrowUp,
     narrationFontColor: state.narrationFontColor,
     narrationOpacity: state.narrationOpacity,
     chatFontColor: state.chatFontColor,
@@ -651,6 +660,7 @@ export const useUIStore = create<UIState>()(
       personaDetailId: null,
       regexDetailId: null,
       botBrowserOpen: false,
+      gameAssetsBrowserOpen: false,
       characterLibraryOpen: false,
       editorDirty: false,
 
@@ -691,6 +701,7 @@ export const useUIStore = create<UIState>()(
       spotifyMobileWidgetPosition: { x: 16, y: 96 },
       intuitiveSwipeNavigation: false,
       intuitiveSwipeRerollLatest: false,
+      editLastMessageOnArrowUp: true,
       narrationFontColor: "",
       narrationOpacity: 80,
       chatFontColor: "",
@@ -927,6 +938,7 @@ export const useUIStore = create<UIState>()(
       openBotBrowser: () =>
         set({
           botBrowserOpen: true,
+          gameAssetsBrowserOpen: false,
           characterLibraryOpen: false,
           regexDetailId: null,
           personaDetailId: null,
@@ -939,6 +951,22 @@ export const useUIStore = create<UIState>()(
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
       closeBotBrowser: () => set({ botBrowserOpen: false }),
+      openGameAssetsBrowser: () =>
+        set({
+          gameAssetsBrowserOpen: true,
+          botBrowserOpen: false,
+          characterLibraryOpen: false,
+          regexDetailId: null,
+          personaDetailId: null,
+          characterDetailId: null,
+          lorebookDetailId: null,
+          presetDetailId: null,
+          connectionDetailId: null,
+          agentDetailId: null,
+          toolDetailId: null,
+          ...(window.innerWidth < 768 && { rightPanelOpen: false }),
+        }),
+      closeGameAssetsBrowser: () => set({ gameAssetsBrowserOpen: false }),
 
       hasAnyDetailOpen: () => {
         const s = get();
@@ -952,7 +980,8 @@ export const useUIStore = create<UIState>()(
           s.personaDetailId ||
           s.regexDetailId ||
           s.characterLibraryOpen ||
-          s.botBrowserOpen
+          s.botBrowserOpen ||
+          s.gameAssetsBrowserOpen
         );
       },
       closeAllDetails: () =>
@@ -967,6 +996,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           characterLibraryOpen: false,
           botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           editorDirty: false,
         }),
       setEditorDirty: (dirty) => set({ editorDirty: dirty }),
@@ -1023,6 +1053,7 @@ export const useUIStore = create<UIState>()(
         }),
       setIntuitiveSwipeNavigation: (v) => set({ intuitiveSwipeNavigation: v }),
       setIntuitiveSwipeRerollLatest: (v) => set({ intuitiveSwipeRerollLatest: v }),
+      setEditLastMessageOnArrowUp: (v) => set({ editLastMessageOnArrowUp: v }),
       setNarrationFontColor: (v) => set({ narrationFontColor: v }),
       setNarrationOpacity: (v) => set({ narrationOpacity: Math.max(0, Math.min(100, v)) }),
       setChatFontColor: (v) => set({ chatFontColor: v }),
@@ -1073,6 +1104,19 @@ export const useUIStore = create<UIState>()(
             },
           };
         }),
+      forgetGameSetupOption: (group, value) =>
+        set((state) => {
+          const learned = state.learnedGameSetupOptions ?? DEFAULT_GAME_SETUP_LEARNED_OPTIONS;
+          const targetKey = normalizeLearnedGameSetupOption(value).toLowerCase();
+          if (!targetKey) return state;
+          const next = learned[group].filter(
+            (entry) => normalizeLearnedGameSetupOption(entry).toLowerCase() !== targetKey,
+          );
+          if (next.length === learned[group].length) return state;
+          return {
+            learnedGameSetupOptions: { ...learned, [group]: next },
+          };
+        }),
       setEnterToSendRP: (v) => set({ enterToSendRP: v }),
       setEnterToSendConvo: (v) => set({ enterToSendConvo: v }),
       setEnterToSendGame: (v) => set({ enterToSendGame: v }),
@@ -1110,7 +1154,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "marinara-engine-ui",
-      version: 27,
+      version: 28,
       // Debounce localStorage writes to avoid sync I/O on every state change
       storage: createJSONStorage(() => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1360,6 +1404,10 @@ export const useUIStore = create<UIState>()(
           if (persisted.roleplaySpriteScale === undefined) {
             persisted.roleplaySpriteScale = 1;
           }
+        }
+        // v27 -> v28: enable Up-Arrow recall of the last user message by default.
+        if (version <= 27 && persisted.editLastMessageOnArrowUp === undefined) {
+          persisted.editLastMessageOnArrowUp = true;
         }
         return persisted;
       },

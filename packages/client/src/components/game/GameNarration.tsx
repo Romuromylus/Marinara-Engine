@@ -31,6 +31,7 @@ import {
   VolumeX,
   Loader2,
   Wand2,
+  RotateCcw,
 } from "lucide-react";
 import { cn, copyToClipboard, getAvatarCropStyle, type AvatarCrop, type LegacyAvatarCrop } from "../../lib/utils";
 import { findNamedMapValue } from "../../lib/game-character-name-match";
@@ -49,7 +50,7 @@ import { useApplyRegex } from "../../hooks/use-apply-regex";
 import { useGameAssetStore } from "../../stores/game-asset.store";
 import { useGameModeStore } from "../../stores/game-mode.store";
 import { useUIStore } from "../../stores/ui.store";
-import { findCharacterByName, resolveMessageMacros } from "../../lib/chat-macros";
+import { createMessageMacroResolver, findCharacterByName } from "../../lib/chat-macros";
 import { animateTextHtml } from "./AnimatedText";
 import { ttsService } from "../../lib/tts-service";
 import { getOrCreateCachedTTSAudioBlob } from "../../lib/tts-audio-cache";
@@ -231,6 +232,14 @@ interface NarrationSegment {
   readableType?: "note" | "book";
   /** Full readable content for overlay display — only set when type === "readable" */
   readableContent?: string;
+}
+
+function narrationSegmentAnchorKey(segment: NarrationSegment): string {
+  if (segment.sourceMessageId && segment.sourceSegmentIndex != null) {
+    return `${segment.sourceMessageId}:${segment.sourceSegmentIndex}`;
+  }
+  if (segment.sourceMessageId) return `${segment.sourceMessageId}:${segment.id}`;
+  return segment.id;
 }
 
 type SpeakerAvatarInfo = {
@@ -924,6 +933,8 @@ export function GameNarration({
   const logEditTextareaRef = useRef<HTMLTextAreaElement>(null);
   const logEditDraftRef = useRef<{ content: string; speaker?: string }>({ content: "", speaker: undefined });
   const logScrolledRef = useRef(false);
+  const logScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingLogScrollAnchorRef = useRef<{ key: string; offsetTop: number; scrollTop: number } | null>(null);
   const stackedLogRef = useRef<HTMLDivElement | null>(null);
   const [stackedLogPinned, setStackedLogPinned] = useState(true);
   const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
@@ -932,6 +943,7 @@ export function GameNarration({
   const { data: ttsConfig } = useTTSConfig();
   const [gameVoiceVersion, setGameVoiceVersion] = useState(0);
   const [gameVoicePlayingKey, setGameVoicePlayingKey] = useState<string | null>(null);
+  const [gameVoicePausedKey, setGameVoicePausedKey] = useState<string | null>(null);
   const gameVoiceCacheRef = useRef<Map<string, GameSegmentVoiceEntry>>(new Map());
   const gameVoicePendingRef = useRef<Map<string, AbortController>>(new Map());
   const gameVoiceAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1237,9 +1249,17 @@ export function GameNarration({
   );
 
   const applyOutputRegexForSource = useCallback(
-    (text: string, sourceMessageId: string | null | undefined, sourceRole: Message["role"] | null | undefined) => {
+    (
+      text: string,
+      sourceMessageId: string | null | undefined,
+      sourceRole: Message["role"] | null | undefined,
+      resolveMacrosForText: (value: string) => string,
+    ) => {
       if (sourceRole !== "assistant" && sourceRole !== "narrator") return text;
-      return applyToAIOutput(text, sourceMessageId ? messageDepthById.get(sourceMessageId) : undefined);
+      return applyToAIOutput(text, {
+        depth: sourceMessageId ? messageDepthById.get(sourceMessageId) : undefined,
+        resolveMacros: resolveMacrosForText,
+      });
     },
     [applyToAIOutput, messageDepthById],
   );
@@ -1251,13 +1271,15 @@ export function GameNarration({
       sourceMessageId: string | null | undefined,
       sourceRole: Message["role"] | null | undefined,
     ) => {
-      const regexApplied = applyOutputRegexForSource(text, sourceMessageId, sourceRole);
-      return resolveMessageMacros(regexApplied, {
+      const macroContext = {
         userName: personaInfo?.name || "You",
         persona: personaInfo,
         primaryCharacter: resolveMacroCharacter(speaker),
         characters: macroCharacters,
-      });
+      };
+      const resolveMacrosForText = createMessageMacroResolver(macroContext);
+      const regexApplied = applyOutputRegexForSource(text, sourceMessageId, sourceRole, resolveMacrosForText);
+      return resolveMacrosForText(regexApplied);
     },
     [applyOutputRegexForSource, macroCharacters, personaInfo, resolveMacroCharacter],
   );
@@ -1634,6 +1656,7 @@ export function GameNarration({
       gameVoiceAudioRef.current = null;
     }
     setGameVoicePlayingKey(null);
+    setGameVoicePausedKey(null);
   }, []);
 
   const playGameVoiceKeys = useCallback(
@@ -1654,6 +1677,7 @@ export function GameNarration({
         const key = playableKeys[keyIndex];
         if (!key) {
           setGameVoicePlayingKey(null);
+          setGameVoicePausedKey(null);
           gameVoiceAudioRef.current = null;
           return;
         }
@@ -1675,6 +1699,7 @@ export function GameNarration({
         }
 
         setGameVoicePlayingKey(key);
+        setGameVoicePausedKey(null);
         const audio = new Audio(url);
         audio.volume = normalizedGameVoiceVolume;
         audio.muted = normalizedGameVoiceVolume <= 0;
@@ -1687,11 +1712,13 @@ export function GameNarration({
         audio.onerror = () => {
           if (gameVoiceSequenceRef.current !== sequence || gameVoiceAudioRef.current !== audio) return;
           setGameVoicePlayingKey(null);
+          setGameVoicePausedKey(null);
           gameVoiceAudioRef.current = null;
         };
         audio.play().catch(() => {
           if (gameVoiceSequenceRef.current !== sequence || gameVoiceAudioRef.current !== audio) return;
           setGameVoicePlayingKey(null);
+          setGameVoicePausedKey(null);
           gameVoiceAudioRef.current = null;
         });
       };
@@ -1703,6 +1730,24 @@ export function GameNarration({
 
   const playGameVoiceKey = useCallback((key: string) => playGameVoiceKeys([key]), [playGameVoiceKeys]);
 
+  const pauseGameVoicePlayback = useCallback(() => {
+    if (!gameVoiceAudioRef.current || !gameVoicePlayingKey || gameVoicePausedKey === gameVoicePlayingKey) return;
+    gameVoiceAudioRef.current.pause();
+    setGameVoicePausedKey(gameVoicePlayingKey);
+  }, [gameVoicePausedKey, gameVoicePlayingKey]);
+
+  const resumeGameVoicePlayback = useCallback(() => {
+    const audio = gameVoiceAudioRef.current;
+    if (!audio || !gameVoicePlayingKey || gameVoicePausedKey !== gameVoicePlayingKey) return;
+    setGameVoicePausedKey(null);
+    void audio.play().catch(() => {
+      if (gameVoiceAudioRef.current !== audio) return;
+      setGameVoicePlayingKey(null);
+      setGameVoicePausedKey(null);
+      gameVoiceAudioRef.current = null;
+    });
+  }, [gameVoicePausedKey, gameVoicePlayingKey]);
+
   useEffect(() => {
     if (!gameVoiceAudioRef.current) return;
     gameVoiceAudioRef.current.volume = normalizedGameVoiceVolume;
@@ -1712,13 +1757,19 @@ export function GameNarration({
   const toggleGameVoiceKey = useCallback(
     (key: string) => {
       if (gameVoicePlayingKey === key) {
-        stopGameVoicePlayback();
+        if (gameVoicePausedKey === key) {
+          resumeGameVoicePlayback();
+        } else {
+          pauseGameVoicePlayback();
+        }
         return;
       }
       playGameVoiceKey(key);
     },
-    [gameVoicePlayingKey, playGameVoiceKey, stopGameVoicePlayback],
+    [gameVoicePausedKey, gameVoicePlayingKey, pauseGameVoicePlayback, playGameVoiceKey, resumeGameVoicePlayback],
   );
+
+  const restartGameVoiceKey = useCallback((key: string) => playGameVoiceKey(key), [playGameVoiceKey]);
 
   const getVoiceRequestsForSegment = useCallback(
     (segment: NarrationSegment): GameSegmentVoiceRequest[] => {
@@ -1796,7 +1847,42 @@ export function GameNarration({
     editingContent === null &&
     segmentEditInfoRef.current[activeIndex] != null
   );
-  const narrationComplete = !isStreaming && segments.length > 0 && activeIndex === segments.length - 1 && doneTyping;
+  const narrationComplete =
+    !isStreaming && !scenePreparing && segments.length > 0 && activeIndex === segments.length - 1 && doneTyping;
+  const activeSegmentAnchor = active ? narrationSegmentAnchorKey(active) : null;
+  const segmentAnchorSignature = useMemo(() => segments.map(narrationSegmentAnchorKey).join("|"), [segments]);
+  const activeSegmentAnchorRef = useRef<{ key: string; index: number; sourceMessageId: string | null } | null>(null);
+
+  useLayoutEffect(() => {
+    const previous = activeSegmentAnchorRef.current;
+    if (!previous || segments.length === 0) return;
+
+    const matchingIndex = segments.findIndex((segment) => narrationSegmentAnchorKey(segment) === previous.key);
+    if (matchingIndex >= 0 && matchingIndex !== activeIndex) {
+      setActiveIndex(matchingIndex);
+      return;
+    }
+
+    const sameSourceStillVisible =
+      !!previous.sourceMessageId && segments.some((segment) => segment.sourceMessageId === previous.sourceMessageId);
+    if (matchingIndex < 0 && sameSourceStillVisible) {
+      const fallbackIndex = Math.min(previous.index, segments.length - 1);
+      if (fallbackIndex !== activeIndex) setActiveIndex(fallbackIndex);
+    }
+    // This should only react to segment-list mutations. Active-index changes from
+    // normal reading/navigation update the anchor in the next effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segmentAnchorSignature]);
+
+  useLayoutEffect(() => {
+    activeSegmentAnchorRef.current = activeSegmentAnchor
+      ? {
+          key: activeSegmentAnchor,
+          index: activeIndex,
+          sourceMessageId: active?.sourceMessageId ?? null,
+        }
+      : null;
+  }, [active?.sourceMessageId, activeIndex, activeSegmentAnchor]);
 
   // Notify parent about narration completion state. While reviewing the past via
   // wheel-nav, the past message will look "complete" — but it's not the present, so
@@ -2066,6 +2152,22 @@ export function GameNarration({
     [logEntries, visibleLogCount],
   );
   const hiddenLogCount = Math.max(0, logEntries.length - visibleLogEntries.length);
+  const captureLogScrollAnchor = useCallback(() => {
+    const container = logScrollContainerRef.current;
+    if (!container) return;
+    const containerTop = container.getBoundingClientRect().top;
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-log-anchor-key]"));
+    const anchorRow = rows.find((row) => row.getBoundingClientRect().bottom >= containerTop + 8) ?? rows[0] ?? null;
+    const key = anchorRow?.dataset.logAnchorKey;
+    pendingLogScrollAnchorRef.current =
+      anchorRow && key
+        ? {
+            key,
+            offsetTop: anchorRow.getBoundingClientRect().top - containerTop,
+            scrollTop: container.scrollTop,
+          }
+        : { key: "", offsetTop: 0, scrollTop: container.scrollTop };
+  }, []);
   const sessionHistoryTokens = useMemo(() => estimateSessionHistoryTokens(messages), [messages]);
   const loadOlderLogs = useCallback(() => {
     setVisibleLogCount((current) => Math.min(logEntries.length, current + logPageSize));
@@ -2073,6 +2175,29 @@ export function GameNarration({
   const showAllLogs = useCallback(() => {
     setVisibleLogCount(logEntries.length);
   }, [logEntries.length]);
+
+  useLayoutEffect(() => {
+    if (!logsOpen) return;
+    const anchor = pendingLogScrollAnchorRef.current;
+    if (!anchor) return;
+    pendingLogScrollAnchorRef.current = null;
+    const container = logScrollContainerRef.current;
+    if (!container) return;
+
+    requestAnimationFrame(() => {
+      const currentContainer = logScrollContainerRef.current;
+      if (!currentContainer) return;
+      const containerTop = currentContainer.getBoundingClientRect().top;
+      const rows = Array.from(currentContainer.querySelectorAll<HTMLElement>("[data-log-anchor-key]"));
+      const row = anchor.key ? rows.find((candidate) => candidate.dataset.logAnchorKey === anchor.key) : null;
+      if (!row) {
+        currentContainer.scrollTop = Math.min(anchor.scrollTop, currentContainer.scrollHeight);
+        return;
+      }
+      currentContainer.scrollTop += row.getBoundingClientRect().top - containerTop - anchor.offsetTop;
+    });
+  }, [logsOpen, visibleLogEntries]);
+
   const stackedLogEntries = useMemo(() => {
     if (!useStackedLogDisplay) return [];
 
@@ -2180,10 +2305,10 @@ export function GameNarration({
   const getSegmentStartVisibleChars = useCallback(
     (index: number) => {
       const segment = segments[index];
-      if (!segment || !gameInstantTextReveal || directionsActive) return 0;
+      if (!segment || !gameInstantTextReveal || directionsActive || scenePreparing) return 0;
       return effectDisplayLength(segment.content);
     },
-    [segments, gameInstantTextReveal, directionsActive],
+    [segments, gameInstantTextReveal, directionsActive, scenePreparing],
   );
 
   useEffect(() => {
@@ -2280,6 +2405,7 @@ export function GameNarration({
   const readableFiredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (narrationMessageChanged) return;
+    if (scenePreparing) return;
     if (!active || active.type !== "readable" || !active.readableContent || !onReadable) return;
     if (readableFiredRef.current.has(active.id)) return;
     const dispLen = effectDisplayLength(active.content);
@@ -2291,7 +2417,7 @@ export function GameNarration({
       sourceMessageId: active.sourceMessageId,
       sourceSegmentIndex: active.sourceSegmentIndex,
     });
-  }, [active, narrationMessageChanged, visibleChars, onReadable]);
+  }, [active, narrationMessageChanged, scenePreparing, visibleChars, onReadable]);
 
   useEffect(() => {
     if (!ttsConfig || !gameVoiceEnabled || isStreaming || generationFailed) return;
@@ -2530,7 +2656,7 @@ export function GameNarration({
   useEffect(() => {
     if (!active) return;
     // Pause typewriter while direction effects (fades, flashes, etc.) are playing
-    if (directionsActive) return;
+    if (directionsActive || scenePreparing) return;
     const dispLen = effectDisplayLength(active.content);
 
     // Sync internal position with React state (handles restore / skip / segment change)
@@ -2560,7 +2686,7 @@ export function GameNarration({
     }, TICK_MS);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, gameInstantTextReveal, gameTextSpeed, directionsActive]); // visibleChars intentionally excluded — managed internally
+  }, [active, gameInstantTextReveal, gameTextSpeed, directionsActive, scenePreparing]); // visibleChars intentionally excluded — managed internally
 
   const assetManifest = useGameAssetStore((s) => s.manifest);
 
@@ -2951,32 +3077,62 @@ export function GameNarration({
 
     const voiceKey = getVoiceKeyForSegment(seg);
     const voiceEntry = voiceKey ? gameVoiceCacheRef.current.get(voiceKey) : undefined;
+    const voicePaused = gameVoicePausedKey === voiceKey;
+    const voiceActive = gameVoicePlayingKey === voiceKey;
     const voiceButton =
       voiceKey && voiceEntry && voiceEntry.status !== "error" ? (
-        <button
-          type="button"
-          onClick={() => toggleGameVoiceKey(voiceKey)}
-          disabled={voiceEntry.status === "loading"}
-          className={cn(
-            "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full text-[var(--foreground)]/45 transition-colors hover:bg-[var(--muted)]/40 hover:text-sky-200 disabled:cursor-wait disabled:opacity-60 dark:text-white/45 dark:hover:bg-white/10",
-            gameVoicePlayingKey === voiceKey && "bg-sky-400/15 text-sky-200 dark:text-sky-200",
+        <span className="ml-1 inline-flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => toggleGameVoiceKey(voiceKey)}
+            disabled={voiceEntry.status === "loading"}
+            className={cn(
+              "inline-flex h-5 w-5 items-center justify-center rounded-full text-[var(--foreground)]/45 transition-colors hover:bg-[var(--muted)]/40 hover:text-sky-200 disabled:cursor-wait disabled:opacity-60 dark:text-white/45 dark:hover:bg-white/10",
+              voiceActive && "bg-sky-400/15 text-sky-200 dark:text-sky-200",
+            )}
+            title={
+              voiceEntry.status === "loading"
+                ? "Generating voice-over"
+                : voiceActive
+                  ? voicePaused
+                    ? "Resume voice-over"
+                    : "Pause voice-over"
+                  : "Play voice-over"
+            }
+          >
+            {voiceEntry.status === "loading" ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : voiceActive ? (
+              voicePaused ? (
+                <Play size={11} />
+              ) : (
+                <Pause size={11} />
+              )
+            ) : (
+              <Volume2 size={11} />
+            )}
+          </button>
+          {voiceActive && voiceEntry.status === "ready" && (
+            <>
+              <button
+                type="button"
+                onClick={() => restartGameVoiceKey(voiceKey)}
+                className="inline-flex h-5 w-5 items-center justify-center rounded-full text-sky-200 transition-colors hover:bg-[var(--muted)]/40 dark:hover:bg-white/10"
+                title="Restart voice-over"
+              >
+                <RotateCcw size={11} />
+              </button>
+              <button
+                type="button"
+                onClick={stopGameVoicePlayback}
+                className="inline-flex h-5 w-5 items-center justify-center rounded-full text-sky-200 transition-colors hover:bg-[var(--muted)]/40 dark:hover:bg-white/10"
+                title="Stop voice-over"
+              >
+                <VolumeX size={11} />
+              </button>
+            </>
           )}
-          title={
-            voiceEntry.status === "loading"
-              ? "Generating voice-over"
-              : gameVoicePlayingKey === voiceKey
-                ? "Stop voice-over"
-                : "Play voice-over"
-          }
-        >
-          {voiceEntry.status === "loading" ? (
-            <Loader2 size={11} className="animate-spin" />
-          ) : gameVoicePlayingKey === voiceKey ? (
-            <VolumeX size={11} />
-          ) : (
-            <Volume2 size={11} />
-          )}
-        </button>
+        </span>
       ) : null;
 
     if (seg.type === "dialogue") {
@@ -3729,6 +3885,7 @@ export function GameNarration({
                 if (e.currentTarget.scrollTop <= 8) loadOlderLogs();
               }}
               ref={(el) => {
+                logScrollContainerRef.current = el;
                 // Auto-scroll to bottom once so the user sees the most recent logs
                 if (el && !logScrolledRef.current) {
                   logScrolledRef.current = true;
@@ -3834,6 +3991,10 @@ export function GameNarration({
                           : sourceMessageId
                             ? `log:${sourceMessageId}`
                             : null;
+                      const logAnchorKey =
+                        sourceMessageId && hasSourceSegmentIndex
+                          ? `${sourceMessageId}:${sourceSegmentIndex}`
+                          : `${entry.messageId}:${seg.id}`;
                       const copyText = seg.readableContent ?? stripGmTagsKeepReadables(seg.content);
                       const copyButton = copyKey ? (
                         <button
@@ -3851,6 +4012,7 @@ export function GameNarration({
                         <button
                           type="button"
                           onClick={() => {
+                            captureLogScrollAnchor();
                             if (canDeleteMessage && sourceMessageId) {
                               onDeleteMessage?.(sourceMessageId);
                             } else if (canDeleteThisSegment && sourceMessageId) {
@@ -3882,32 +4044,62 @@ export function GameNarration({
 
                       const voiceKey = getVoiceKeyForSegment(seg);
                       const voiceEntry = voiceKey ? gameVoiceCacheRef.current.get(voiceKey) : undefined;
+                      const voicePaused = gameVoicePausedKey === voiceKey;
+                      const voiceActive = gameVoicePlayingKey === voiceKey;
                       const voiceButton =
                         voiceKey && voiceEntry && voiceEntry.status !== "error" ? (
-                          <button
-                            type="button"
-                            onClick={() => toggleGameVoiceKey(voiceKey)}
-                            disabled={voiceEntry.status === "loading"}
-                            className={cn(
-                              "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full text-white/45 transition-colors hover:bg-white/10 hover:text-sky-200 disabled:cursor-wait disabled:opacity-60",
-                              gameVoicePlayingKey === voiceKey && "bg-sky-400/15 text-sky-200",
+                          <span className="ml-1 inline-flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleGameVoiceKey(voiceKey)}
+                              disabled={voiceEntry.status === "loading"}
+                              className={cn(
+                                "inline-flex h-5 w-5 items-center justify-center rounded-full text-white/45 transition-colors hover:bg-white/10 hover:text-sky-200 disabled:cursor-wait disabled:opacity-60",
+                                voiceActive && "bg-sky-400/15 text-sky-200",
+                              )}
+                              title={
+                                voiceEntry.status === "loading"
+                                  ? "Generating voice-over"
+                                  : voiceActive
+                                    ? voicePaused
+                                      ? "Resume voice-over"
+                                      : "Pause voice-over"
+                                    : "Play voice-over"
+                              }
+                            >
+                              {voiceEntry.status === "loading" ? (
+                                <Loader2 size={11} className="animate-spin" />
+                              ) : voiceActive ? (
+                                voicePaused ? (
+                                  <Play size={11} />
+                                ) : (
+                                  <Pause size={11} />
+                                )
+                              ) : (
+                                <Volume2 size={11} />
+                              )}
+                            </button>
+                            {voiceActive && voiceEntry.status === "ready" && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => restartGameVoiceKey(voiceKey)}
+                                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-sky-200 transition-colors hover:bg-white/10"
+                                  title="Restart voice-over"
+                                >
+                                  <RotateCcw size={11} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={stopGameVoicePlayback}
+                                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-sky-200 transition-colors hover:bg-white/10"
+                                  title="Stop voice-over"
+                                >
+                                  <VolumeX size={11} />
+                                </button>
+                              </>
                             )}
-                            title={
-                              voiceEntry.status === "loading"
-                                ? "Generating voice-over"
-                                : gameVoicePlayingKey === voiceKey
-                                  ? "Stop voice-over"
-                                  : "Play voice-over"
-                            }
-                          >
-                            {voiceEntry.status === "loading" ? (
-                              <Loader2 size={11} className="animate-spin" />
-                            ) : gameVoicePlayingKey === voiceKey ? (
-                              <VolumeX size={11} />
-                            ) : (
-                              <Volume2 size={11} />
-                            )}
-                          </button>
+                          </span>
                         ) : null;
 
                       const editButtons = canEdit && (
@@ -4028,6 +4220,7 @@ export function GameNarration({
                           <div
                             key={seg.id}
                             {...(jumpRowProps ?? {})}
+                            data-log-anchor-key={logAnchorKey}
                             className={cn(
                               "group/logseg relative flex gap-2 rounded-lg border px-3 py-2",
                               seg.partyType === "thought"
@@ -4136,6 +4329,7 @@ export function GameNarration({
                           <div
                             key={seg.id}
                             {...(jumpRowProps ?? {})}
+                            data-log-anchor-key={logAnchorKey}
                             className={cn(
                               "group/logseg relative rounded-lg border border-cyan-400/15 bg-cyan-950/15 px-3 py-2",
                               isActiveSeg && "ring-1 ring-[var(--primary)]/40",
@@ -4162,6 +4356,7 @@ export function GameNarration({
                           <div
                             key={seg.id}
                             {...(jumpRowProps ?? {})}
+                            data-log-anchor-key={logAnchorKey}
                             className={cn(
                               "group/logseg relative rounded-lg border border-amber-400/15 bg-amber-950/15 px-3 py-2",
                               isActiveSeg && "ring-1 ring-[var(--primary)]/40",
@@ -4193,6 +4388,7 @@ export function GameNarration({
                         <div
                           key={seg.id}
                           {...(jumpRowProps ?? {})}
+                          data-log-anchor-key={logAnchorKey}
                           className={cn(
                             "group/logseg relative rounded-lg border border-white/5 bg-black/20 px-3 py-2",
                             isActiveSeg && "ring-1 ring-[var(--primary)]/40",

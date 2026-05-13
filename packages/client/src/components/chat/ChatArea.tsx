@@ -35,9 +35,10 @@ import { useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useConnections } from "../../hooks/use-connections";
 import { usePageActivity } from "../../hooks/use-page-activity";
 import { api } from "../../lib/api-client";
-import { getChatDisplayName, parseChatMetadata } from "../../lib/chat-display";
+import { getChatDisplayName, getConnectedChatDisplayName, parseChatMetadata } from "../../lib/chat-display";
 import { parseCharacterDisplayData } from "../../lib/character-display";
 import { showConfirmDialog } from "../../lib/app-dialogs";
+import { chatBackgroundMetadataToUrl, chatBackgroundUrlToMetadata } from "../../lib/backgrounds";
 import { useGameStateStore } from "../../stores/game-state.store";
 import { toast } from "sonner";
 import { BookOpen, Check, HelpCircle, MessageSquare, Theater, X } from "lucide-react";
@@ -133,6 +134,7 @@ export function ChatArea() {
   const guideGenerations = useUIStore((s) => s.guideGenerations);
   const intuitiveSwipeNavigation = useUIStore((s) => s.intuitiveSwipeNavigation);
   const intuitiveSwipeRerollLatest = useUIStore((s) => s.intuitiveSwipeRerollLatest);
+  const editLastMessageOnArrowUp = useUIStore((s) => s.editLastMessageOnArrowUp);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevScrollHeightRef = useRef(0);
@@ -477,8 +479,7 @@ export function ChatArea() {
   });
   useEffect(() => {
     if (!chat?.id) return;
-    const bg = chatMeta.background as string | null | undefined;
-    const restoredUrl = bg ? `/api/backgrounds/file/${encodeURIComponent(bg)}` : null;
+    const restoredUrl = chatBackgroundMetadataToUrl(chatMeta.background);
     restoredChatBackgroundRef.current = { chatId: chat.id, url: restoredUrl, isSyncing: true };
     useUIStore.getState().setChatBackground(restoredUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -494,7 +495,7 @@ export function ChatArea() {
   const bgPersistTimer = useRef<ReturnType<typeof setTimeout>>(null);
   useEffect(() => {
     if (!chat?.id) return;
-    const savedFilename = (chatMeta.background as string | null | undefined) ?? null;
+    const savedBackground = chatBackgroundUrlToMetadata(chatBackgroundMetadataToUrl(chatMeta.background));
     const restoredBackground = restoredChatBackgroundRef.current;
 
     if (
@@ -508,7 +509,7 @@ export function ChatArea() {
     }
 
     if (!chatBackground) {
-      if (savedFilename === null) return;
+      if (savedBackground === null) return;
       if (bgPersistTimer.current) clearTimeout(bgPersistTimer.current);
       bgPersistTimer.current = setTimeout(() => {
         updateMeta.mutate({ id: chat!.id, background: null });
@@ -516,11 +517,11 @@ export function ChatArea() {
       return;
     }
 
-    const filename = decodeURIComponent(chatBackground.replace(/^\/api\/backgrounds\/file\//, ""));
-    if (filename === savedFilename) return;
+    const nextBackground = chatBackgroundUrlToMetadata(chatBackground);
+    if (nextBackground === savedBackground) return;
     if (bgPersistTimer.current) clearTimeout(bgPersistTimer.current);
     bgPersistTimer.current = setTimeout(() => {
-      updateMeta.mutate({ id: chat!.id, background: filename });
+      updateMeta.mutate({ id: chat!.id, background: nextBackground });
     }, 500);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatBackground, chat?.id]);
@@ -924,11 +925,23 @@ export function ChatArea() {
     return null;
   }, [messages]);
 
-  const latestUserMessageForEdit = useMemo(() => {
+  const latestMessageForEdit = useMemo(() => {
     if (!messages) return null;
     for (let i = messages.length - 1; i >= 0; i--) {
       const candidate = messages[i]!;
-      if (candidate.role === "user") return candidate;
+      if (candidate.role !== "user" && candidate.role !== "assistant") continue;
+      const extra =
+        typeof candidate.extra === "string"
+          ? (() => {
+              try {
+                return JSON.parse(candidate.extra as unknown as string);
+              } catch {
+                return {};
+              }
+            })()
+          : (candidate.extra ?? {});
+      if (extra?.hiddenFromUser === true) continue;
+      return candidate;
     }
     return null;
   }, [messages]);
@@ -986,37 +999,8 @@ export function ChatArea() {
   useEffect(() => {
     if (!intuitiveSwipeNavigation || intuitiveSwipeBlocked) return;
 
-    const supportsMode = chatMode === "conversation" || isRoleplay;
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
-
-      if (event.key === "ArrowUp") {
-        if (!supportsMode || !latestUserMessageForEdit) return;
-        if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-        const target = event.target;
-        if (target instanceof Element) {
-          // Don't hijack up-arrow when the user is typing or already editing.
-          // Allow it from the chat input only when it's empty (shell-style recall).
-          if (target.tagName === "TEXTAREA") {
-            const ta = target as HTMLTextAreaElement;
-            if (ta.value.length > 0) return;
-          } else if (
-            target.tagName === "INPUT" ||
-            target.tagName === "SELECT" ||
-            target.getAttribute("contenteditable") === "true"
-          ) {
-            return;
-          }
-        }
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("marinara:start-edit-message", {
-            detail: { messageId: latestUserMessageForEdit.id },
-          }),
-        );
-        return;
-      }
 
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       if (shouldIgnoreIntuitiveSwipeTarget(event.target)) return;
@@ -1034,13 +1018,61 @@ export function ChatArea() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
-    chatMode,
     intuitiveSwipeBlocked,
     intuitiveSwipeNavigation,
-    isRoleplay,
     latestAssistantMessageForSwipes,
-    latestUserMessageForEdit,
     navigateLatestSwipe,
+  ]);
+
+  // Up-Arrow recall of the most recent message (user OR assistant) — runs
+  // independently of swipe nav so the shortcut works with that toggle off.
+  useEffect(() => {
+    if (!editLastMessageOnArrowUp || intuitiveSwipeBlocked) return;
+    const supportsMode = chatMode === "conversation" || isRoleplay;
+    if (!supportsMode) return;
+
+    const handleArrowUp = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key !== "ArrowUp") return;
+      if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (!latestMessageForEdit) return;
+      // Don't try to edit a message that's currently streaming/regenerating.
+      if (isStreaming || agentProcessing) return;
+
+      const target = event.target;
+      if (target instanceof Element) {
+        // Allow recall when the chat input textarea is focused but empty
+        // (shell-style). Otherwise leave typing/editing alone.
+        if (target.tagName === "TEXTAREA") {
+          const ta = target as HTMLTextAreaElement;
+          if (ta.value.length > 0) return;
+        } else if (
+          target.tagName === "INPUT" ||
+          target.tagName === "SELECT" ||
+          target.getAttribute("contenteditable") === "true"
+        ) {
+          return;
+        }
+      }
+
+      event.preventDefault();
+      window.dispatchEvent(
+        new CustomEvent("marinara:start-edit-message", {
+          detail: { messageId: latestMessageForEdit.id },
+        }),
+      );
+    };
+
+    window.addEventListener("keydown", handleArrowUp);
+    return () => window.removeEventListener("keydown", handleArrowUp);
+  }, [
+    agentProcessing,
+    chatMode,
+    editLastMessageOnArrowUp,
+    intuitiveSwipeBlocked,
+    isRoleplay,
+    isStreaming,
+    latestMessageForEdit,
   ]);
 
   useEffect(() => {
@@ -1520,7 +1552,7 @@ export function ChatArea() {
   const chatList =
     (allChats as Array<{ id: string; name: string; metadata?: string | Record<string, unknown> }> | undefined) ?? [];
   const connectedChatName = chat?.connectedChatId
-    ? getChatDisplayName(chatList.find((item) => item.id === chat.connectedChatId))
+    ? getConnectedChatDisplayName(chatList.find((item) => item.id === chat.connectedChatId))
     : undefined;
   const activeSceneChat = chatMeta.activeSceneChatId
     ? chatList.find((item) => item.id === chatMeta.activeSceneChatId)

@@ -397,6 +397,11 @@ export function CharacterEditor() {
     );
   };
 
+  const removeAllTags = () => {
+    if (!formData || formData.tags.length === 0) return;
+    updateField("tags", []);
+  };
+
   if (isLoading || !formData) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -471,14 +476,6 @@ export function CharacterEditor() {
       </button>
 
       <button
-        onClick={() => api.download(`/characters/${characterId}/export-png`, "character.png")}
-        className={headerActionButtonClass}
-        title="Export as PNG card"
-      >
-        <ImageDown size="1rem" />
-      </button>
-
-      <button
         onClick={() => {
           if (!characterId) return;
           duplicateCharacter.mutate(characterId, {
@@ -510,11 +507,16 @@ export function CharacterEditor() {
         title="Export Character"
         description="Native keeps Marinara metadata. Compatible exports direct Chara Card V2 JSON for other platforms."
         compatibleDescription="Exports direct Chara Card V2 JSON without the Marinara wrapper."
+        showPngOption
         onClose={() => setExportDialogOpen(false)}
         onSelect={(format: ExportFormatChoice) => {
           if (!characterId) return;
           setExportDialogOpen(false);
-          void api.download(`/characters/${characterId}/export?format=${format}`);
+          if (format === "compatible-png") {
+            void api.download(`/characters/${characterId}/export-png`, "character.png");
+          } else {
+            void api.download(`/characters/${characterId}/export?format=${format}`);
+          }
         }}
       />
       <AvatarGenerationModal
@@ -683,6 +685,7 @@ export function CharacterEditor() {
                 setNewTag={setNewTag}
                 addTag={addTag}
                 removeTag={removeTag}
+                removeAllTags={removeAllTags}
                 avatarPreview={avatarPreview}
               />
             )}
@@ -1005,6 +1008,7 @@ function MetadataTab({
   setNewTag,
   addTag,
   removeTag,
+  removeAllTags,
   avatarPreview,
 }: {
   characterId: string | null;
@@ -1016,6 +1020,7 @@ function MetadataTab({
   setNewTag: (v: string) => void;
   addTag: () => void;
   removeTag: (tag: string) => void;
+  removeAllTags: () => void;
   avatarPreview: string | null;
 }) {
   // Read existing crop in either current or legacy shape; the widget handles both
@@ -1099,10 +1104,21 @@ function MetadataTab({
 
       {/* Tags */}
       <div className="space-y-2">
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
-          Tags{" "}
-          <HelpTooltip text="Labels for organizing characters. Use tags like 'fantasy', 'sci-fi', 'OC' etc. to categorize and search." />
-        </span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
+            Tags{" "}
+            <HelpTooltip text="Labels for organizing characters. Use tags like 'fantasy', 'sci-fi', 'OC' etc. to categorize and search." />
+          </span>
+          {formData.tags.length > 0 && (
+            <button
+              type="button"
+              onClick={removeAllTags}
+              className="rounded-lg px-2 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
+            >
+              Remove All
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap gap-1.5">
           {formData.tags.map((tag) => (
             <span
