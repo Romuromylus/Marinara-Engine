@@ -4,7 +4,7 @@ import { promises as dns } from "node:dns";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve, win32 } from "node:path";
 import { tmpdir } from "node:os";
-import { gzipSync, zstdCompressSync } from "node:zlib";
+import { brotliCompressSync, gzipSync, zstdCompressSync } from "node:zlib";
 import {
   assertInsideDir,
   decodePossiblyCompressedBody,
@@ -277,9 +277,9 @@ test("safeFetch leaves raw compressed bodies alone unless decoding is opted in",
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), compressed);
 });
 
-test("decodePossiblyCompressedBody handles raw gzip and zstd bodies", () => {
+test("decodePossiblyCompressedBody handles raw gzip, brotli, and zstd JSON bodies", () => {
   const json = Buffer.from(JSON.stringify({ ok: true }));
-  const cases = [gzipSync(json), zstdCompressSync(json)];
+  const cases = [gzipSync(json), brotliCompressSync(json), zstdCompressSync(json)];
 
   for (const body of cases) {
     assert.deepEqual(JSON.parse(decodePossiblyCompressedBody(body).toString("utf8")), { ok: true });
