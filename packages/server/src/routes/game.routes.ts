@@ -3461,6 +3461,12 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!chat) throw new Error("Chat not found");
 
     const meta = parseMeta(chat.metadata);
+    // Idempotent guard: a late second click that arrives after the first /start
+    // has already flipped the status to "active" should not error out — let the
+    // client skip its duplicate generation by returning alreadyStarted: true.
+    if (meta.gameSessionStatus === "active") {
+      return { status: "active", alreadyStarted: true };
+    }
     if (meta.gameSessionStatus !== "ready") {
       throw new Error(`Cannot start game: status is "${meta.gameSessionStatus}", expected "ready"`);
     }
