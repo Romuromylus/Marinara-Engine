@@ -5786,25 +5786,22 @@ function AdvancedParametersSection({
 
   return (
     <div className="border-b border-[var(--border)]">
-      <button
-        onClick={() => setExpanded((o) => !o)}
-        className="flex w-full items-center gap-2 px-4 py-3 text-left transition-colors hover:bg-[var(--accent)]/50"
-      >
-        <span className="text-[var(--muted-foreground)]">
-          <Settings2 size="0.875rem" />
-        </span>
-        <span className="flex-1 text-xs font-semibold">Advanced Parameters</span>
-        <span onClick={(e) => e.stopPropagation()}>
-          <HelpTooltip
-            text="Override generation parameters for this chat. Only change these if you know what you're doing."
-            side="left"
+      <div className="flex items-center px-4 py-3 transition-colors hover:bg-[var(--accent)]/50">
+        <button onClick={() => setExpanded((o) => !o)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          <span className="text-[var(--muted-foreground)]">
+            <Settings2 size="0.875rem" />
+          </span>
+          <span className="flex-1 text-xs font-semibold">Advanced Parameters</span>
+          <ChevronDown
+            size="0.75rem"
+            className={cn("text-[var(--muted-foreground)] transition-transform", expanded && "rotate-180")}
           />
-        </span>
-        <ChevronDown
-          size="0.75rem"
-          className={cn("text-[var(--muted-foreground)] transition-transform", expanded && "rotate-180")}
+        </button>
+        <HelpTooltip
+          text="Override generation parameters for this chat. Only change these if you know what you're doing."
+          side="left"
         />
-      </button>
+      </div>
       {expanded && (
         <div className="px-4 pb-3 space-y-3">
           <GenerationParametersFields value={effectiveParams} onChange={setParameters} />
@@ -6055,27 +6052,22 @@ function Section({
 
   return (
     <div className="border-b border-[var(--border)]">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-4 py-3 text-left transition-colors hover:bg-[var(--accent)]/50"
-      >
-        {icon && <span className="text-[var(--muted-foreground)]">{icon}</span>}
-        <span className="flex-1 text-xs font-semibold">{label}</span>
-        {count != null && count > 0 && (
-          <span className="rounded-full bg-[var(--primary)]/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--primary)]">
-            {count}
-          </span>
-        )}
-        {help && (
-          <span onClick={(e) => e.stopPropagation()}>
-            <HelpTooltip text={help} side="left" />
-          </span>
-        )}
-        <ChevronDown
-          size="0.75rem"
-          className={cn("text-[var(--muted-foreground)] transition-transform", open && "rotate-180")}
-        />
-      </button>
+      <div className="flex items-center px-4 py-3 transition-colors hover:bg-[var(--accent)]/50">
+        <button onClick={() => setOpen((o) => !o)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          {icon && <span className="text-[var(--muted-foreground)]">{icon}</span>}
+          <span className="flex-1 text-xs font-semibold">{label}</span>
+          {count != null && count > 0 && (
+            <span className="rounded-full bg-[var(--primary)]/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--primary)]">
+              {count}
+            </span>
+          )}
+          <ChevronDown
+            size="0.75rem"
+            className={cn("text-[var(--muted-foreground)] transition-transform", open && "rotate-180")}
+          />
+        </button>
+        {help && <HelpTooltip text={help} side="left" />}
+      </div>
       {open && <div className="px-6 py-3">{children}</div>}
     </div>
   );
