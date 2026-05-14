@@ -26,6 +26,7 @@ import {
   MoreHorizontal,
   Regex,
   Settings2,
+  Sparkles,
   Square,
   ToggleLeft,
   ToggleRight,
@@ -75,6 +76,14 @@ interface Props {
   selectionMode?: boolean;
   isSelected?: boolean;
   onToggleSelected?: () => void;
+  /**
+   * When the editor's "Keyword test" panel has text in it, the editor
+   * computes which entries that text would activate and passes the verdict
+   * down per-row. `"matched"` = the entry's keys would trigger; `"constant"`
+   * = the entry activates regardless (no keys required). `undefined` = no
+   * preview active. Adds a side accent + chip; does not change behavior.
+   */
+  previewMatch?: "matched" | "constant";
 }
 
 /** Maps the (constant, selective) boolean pair into a single status enum for the inline select. */
@@ -180,6 +189,7 @@ export function LorebookEntryRow({
   selectionMode = false,
   isSelected = false,
   onToggleSelected,
+  previewMatch,
 }: Props) {
   const updateEntry = useUpdateLorebookEntry();
   const deleteEntry = useDeleteLorebookEntry();
@@ -321,7 +331,7 @@ export function LorebookEntryRow({
   return (
     <div
       className={cn(
-        "rounded-xl bg-[var(--secondary)] ring-1 ring-[var(--border)] transition-all",
+        "relative rounded-xl bg-[var(--secondary)] ring-1 ring-[var(--border)] transition-all",
         isExpanded ? "ring-amber-400/40" : "hover:ring-amber-400/30",
         selectionMode && isSelected && "bg-amber-400/10 ring-amber-400/40",
         isDragging && "opacity-40",
@@ -332,6 +342,18 @@ export function LorebookEntryRow({
       onDrop={onDrop}
       onDragEnd={onDragEnd}
     >
+      {/* Keyword-test side accent. Absolute-positioned so it overlays the
+          left edge without competing with the row's ring or border-radius. */}
+      {previewMatch && (
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-y-0 left-0 w-[3px] rounded-l-xl",
+            previewMatch === "matched" ? "bg-emerald-400" : "bg-amber-400",
+          )}
+        />
+      )}
+
       {/* ── Compact row ── */}
       <div
         className="group flex cursor-pointer items-center gap-1 px-2 py-1.5 sm:gap-2"
@@ -434,6 +456,24 @@ export function LorebookEntryRow({
         >
           <span className={cn("h-2.5 w-2.5 rounded-full", STATUS_DOT_COLOR[localStatus])} />
         </button>
+        {previewMatch && (
+          <span
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium ring-1",
+              previewMatch === "matched"
+                ? "bg-emerald-400/12 text-emerald-300 ring-emerald-400/30"
+                : "bg-amber-400/12 text-amber-300 ring-amber-400/30",
+            )}
+            title={
+              previewMatch === "matched"
+                ? "This entry's keys match the keyword-test text."
+                : "This entry is constant and would activate regardless of text."
+            }
+          >
+            <Sparkles size="0.625rem" />
+            {previewMatch === "matched" ? "Would activate" : "Always active"}
+          </span>
+        )}
         <input
           value={localName}
           onChange={(e) => setLocalName(e.target.value)}
