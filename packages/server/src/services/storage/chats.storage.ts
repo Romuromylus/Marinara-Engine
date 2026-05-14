@@ -704,6 +704,7 @@ export function createChatsStorage(db: DB) {
               thinking: null,
               generationInfo: null,
               attachments: null,
+              generationReplay: null,
             }
           : {};
         await db
