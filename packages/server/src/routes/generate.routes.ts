@@ -132,7 +132,7 @@ import { executeKnowledgeRouter } from "../services/agents/knowledge-router.js";
 import { extractFileText, getSourceFilePath } from "./knowledge-sources.routes.js";
 import { gameStateSnapshots as gameStateSnapshotsTable } from "../db/schema/index.js";
 import { chats as chatsTable } from "../db/schema/index.js";
-import { eq, and, desc } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { PROFESSOR_MARI_ID } from "@marinara-engine/shared";
 import { chunkAndEmbedMessages, recallMemories } from "../services/memory-recall.js";
 import { resolveMemoryRecallEmbeddingSource } from "../services/memory-recall-embedding.js";
@@ -149,6 +149,10 @@ import {
   parseGameStateRow,
   preserveTrackerCharacterUiFields,
   resolveBaseUrl,
+  resolveRegenerationGameStateFallbackMessageIds,
+  resolveRegenerationGameStateAnchor,
+  resolveVisibleGameStateAnchor,
+  shouldPreferLatestVisibleGameState,
   shouldEnableAgentsForGeneration,
   wrapFields,
   type PromptAttachment,
@@ -480,27 +484,6 @@ async function persistLorebookRuntimeState(args: {
     ...(args.entryStateOverrides !== undefined ? { entryStateOverrides: args.entryStateOverrides } : {}),
     ...(args.entryTimingStates !== undefined ? { entryTimingStates: args.entryTimingStates } : {}),
   });
-}
-
-async function resolveLatestGameStateForLorebooks(db: any, chatId: string): Promise<Record<string, unknown> | null> {
-  const latestRows = await db
-    .select()
-    .from(gameStateSnapshotsTable)
-    .where(eq(gameStateSnapshotsTable.chatId, chatId))
-    .orderBy(desc(gameStateSnapshotsTable.createdAt))
-    .limit(1);
-  const latest = latestRows[0];
-  if (latest) return parseGameStateRow(latest as Record<string, unknown>) as unknown as Record<string, unknown>;
-
-  const committedRows = await db
-    .select()
-    .from(gameStateSnapshotsTable)
-    .where(and(eq(gameStateSnapshotsTable.chatId, chatId), eq(gameStateSnapshotsTable.committed, 1)))
-    .orderBy(desc(gameStateSnapshotsTable.createdAt))
-    .limit(1);
-  const committed = committedRows[0];
-  if (committed) return parseGameStateRow(committed as Record<string, unknown>) as unknown as Record<string, unknown>;
-  return null;
 }
 
 /** Read a character's avatar from disk as base64, or return undefined if unavailable. */
@@ -923,6 +906,7 @@ export async function generateRoutes(app: FastifyInstance) {
       const chatMode = requestChatMode;
       const lorebookGenerationTriggers = resolveLorebookGenerationTriggers(input, chatMode);
       const supportsHiddenFromAI = chatMode === "roleplay" || chatMode === "visual_novel";
+      const preferLatestVisibleGameState = shouldPreferLatestVisibleGameState(input);
 
       // ── Conversation-start filter: find the latest "isConversationStart" marker ──
       let startIdx = 0;
@@ -950,6 +934,20 @@ export async function generateRoutes(app: FastifyInstance) {
         chatMessages = chatMessages.filter((m: any) => m.id !== input.regenerateMessageId);
         lorebookKeeperMessages = lorebookKeeperMessages.filter((m: any) => m.id !== input.regenerateMessageId);
       }
+      const visibleGameStateAnchor = input.regenerateMessageId
+        ? resolveRegenerationGameStateAnchor(scopedMessages, input.regenerateMessageId)
+        : resolveVisibleGameStateAnchor(allChatMessages);
+      const gameStateGenerationOptions = {
+        preferLatestVisible: preferLatestVisibleGameState,
+        visibleAnchor: visibleGameStateAnchor,
+        excludeMessageId: input.regenerateMessageId ?? null,
+        fallbackMessageIds: resolveRegenerationGameStateFallbackMessageIds(scopedMessages, input.regenerateMessageId),
+      };
+      const selectedGameStateSnapshotPromise = gameStateStore.getForGeneration(input.chatId, gameStateGenerationOptions);
+      const selectedGameStateForPrompt = async (): Promise<Record<string, unknown> | null> => {
+        const row = await selectedGameStateSnapshotPromise;
+        return row ? (parseGameStateRow(row as Record<string, unknown>) as unknown as Record<string, unknown>) : null;
+      };
 
       // ── Context message limit (from chat metadata, off by default) ──
       const lorebookKeeperSettings = getLorebookKeeperSettings(chatMeta);
@@ -1309,7 +1307,7 @@ export async function generateRoutes(app: FastifyInstance) {
             (chatMeta.entryStateOverrides as Record<string, { ephemeral?: number | null; enabled?: boolean }>) ??
             undefined,
           entryTimingStates: (chatMeta.entryTimingStates as Record<string, LorebookEntryTimingState>) ?? undefined,
-          gameState: chatMode === "game" ? await resolveLatestGameStateForLorebooks(app.db, input.chatId) : null,
+          gameState: chatMode === "game" ? await selectedGameStateForPrompt() : null,
           generationTriggers: lorebookGenerationTriggers,
           groupScenarioOverrideText:
             typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
@@ -3469,13 +3467,7 @@ export async function generateRoutes(app: FastifyInstance) {
         let weatherContext: string | undefined;
         let gameTime: string | undefined;
         try {
-          const snapRows = await app.db
-            .select()
-            .from(gameStateSnapshotsTable)
-            .where(eq(gameStateSnapshotsTable.chatId, input.chatId))
-            .orderBy(desc(gameStateSnapshotsTable.createdAt))
-            .limit(1);
-          const snap = snapRows[0];
+          const snap = await selectedGameStateSnapshotPromise;
           if (snap) {
             if (snap.weather)
               weatherContext = `Current weather: ${snap.weather}${snap.temperature ? `, ${snap.temperature}` : ""}`;
@@ -3510,13 +3502,7 @@ export async function generateRoutes(app: FastifyInstance) {
         // ── Passive perception hints ──
         let perceptionHintsBlock: string | undefined;
         try {
-          const snapRows2 = await app.db
-            .select()
-            .from(gameStateSnapshotsTable)
-            .where(eq(gameStateSnapshotsTable.chatId, input.chatId))
-            .orderBy(desc(gameStateSnapshotsTable.createdAt))
-            .limit(1);
-          const latSnap = snapRows2[0];
+          const latSnap = await selectedGameStateSnapshotPromise;
           const pStats = latSnap?.playerStats ? JSON.parse(latSnap.playerStats as string) : null;
           if (pStats) {
             const presentNpcs = latSnap?.presentCharacters
@@ -3611,7 +3597,7 @@ export async function generateRoutes(app: FastifyInstance) {
           const lorebookResult = await processLorebooks(
             app.db,
             toLorebookScanMessages(),
-            await resolveLatestGameStateForLorebooks(app.db, input.chatId),
+            await selectedGameStateForPrompt(),
             {
               chatId: input.chatId,
               characterIds,
@@ -3922,11 +3908,12 @@ export async function generateRoutes(app: FastifyInstance) {
       }
 
       // Get current game state (if any)
-      // Prefer committed game state (locked in when the user sent their last
-      // message), but fall back to the latest snapshot so agents still receive
-      // prior state before anything has been committed (e.g. first turn).
-      const latestGameState =
-        (await gameStateStore.getLatestCommitted(input.chatId)) ?? (await gameStateStore.getLatest(input.chatId));
+      // Prefer committed game state after a real user turn, but keep visible
+      // uncommitted tracker edits authoritative for continue/impersonate flows.
+      // Regenerate uses the previous assistant's tracker snapshot as the prompt baseline.
+      const latestGameState = await selectedGameStateSnapshotPromise;
+      const baseGameStateSnapshot = latestGameState;
+      const allowLatestGameStateFallback = !input.regenerateMessageId;
       const gameState = latestGameState ? parseGameStateRow(latestGameState as Record<string, unknown>) : null;
 
       // Build base agent context (without mainResponse — that comes after generation)
@@ -4412,24 +4399,7 @@ export async function generateRoutes(app: FastifyInstance) {
         const hasCustomTracker = active.has("custom-tracker");
 
         if (hasWorldState || hasCharTracker || hasPersonaStats || hasQuest || hasCustomTracker) {
-          // Prefer committed snapshot; fall back to latest if none committed yet
-          let snap: typeof gameStateSnapshotsTable.$inferSelect | undefined;
-          const committedRows = await app.db
-            .select()
-            .from(gameStateSnapshotsTable)
-            .where(and(eq(gameStateSnapshotsTable.chatId, input.chatId), eq(gameStateSnapshotsTable.committed, 1)))
-            .orderBy(desc(gameStateSnapshotsTable.createdAt))
-            .limit(1);
-          snap = committedRows[0];
-          if (!snap) {
-            const anyRows = await app.db
-              .select()
-              .from(gameStateSnapshotsTable)
-              .where(eq(gameStateSnapshotsTable.chatId, input.chatId))
-              .orderBy(desc(gameStateSnapshotsTable.createdAt))
-              .limit(1);
-            snap = anyRows[0];
-          }
+          const snap = latestGameState ?? undefined;
 
           if (snap) {
             const trackerParts: string[] = [];
@@ -6552,9 +6522,16 @@ export async function generateRoutes(app: FastifyInstance) {
                     const persistedMsg = refreshedMsg ?? savedMsg;
                     if (latestLocation && persistedMsg?.id) {
                       const persistedSwipeIndex = persistedMsg.activeSwipeIndex ?? 0;
-                      await gameStateStore.updateByMessage(persistedMsg.id, persistedSwipeIndex, input.chatId, {
-                        location: latestLocation,
-                      });
+                      await gameStateStore.updateByMessage(
+                        persistedMsg.id,
+                        persistedSwipeIndex,
+                        input.chatId,
+                        {
+                          location: latestLocation,
+                        },
+                        undefined,
+                        { baseSnapshot: baseGameStateSnapshot },
+                      );
                       sendSseEvent(reply, { type: "game_state_patch", data: { location: latestLocation } });
                     }
 
@@ -7178,7 +7155,9 @@ export async function generateRoutes(app: FastifyInstance) {
               // edited and are visible to the agent as the prevSnap values, but they
               // are NOT carried forward to new snapshots.  The agent naturally reads
               // the edited prevSnap values and produces its own output.
-              const prevSnap = await gameStateStore.getLatest(input.chatId);
+              const prevSnap =
+                baseGameStateSnapshot ??
+                (allowLatestGameStateFallback ? await gameStateStore.getLatest(input.chatId) : null);
 
               // Build the new snapshot from agent output, falling back to previous snapshot.
               const newDate = (gs.date as string) ?? (prevSnap?.date as string | null) ?? null;
@@ -7398,9 +7377,16 @@ export async function generateRoutes(app: FastifyInstance) {
                       }
 
                       // Re-persist with avatar paths and notify client
-                      await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {
-                        presentCharacters: chars,
-                      });
+                      await gameStateStore.updateByMessage(
+                        messageId,
+                        targetSwipeIndex,
+                        input.chatId,
+                        {
+                          presentCharacters: chars,
+                        },
+                        undefined,
+                        { baseSnapshot: baseGameStateSnapshot },
+                      );
                       try {
                         logger.debug("[game_state_patch] character-tracker (avatar update): %d chars", chars.length);
                         reply.raw.write(
@@ -7416,9 +7402,16 @@ export async function generateRoutes(app: FastifyInstance) {
                 }
               }
 
-              const updated = await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {
-                presentCharacters: chars,
-              });
+              const updated = await gameStateStore.updateByMessage(
+                messageId,
+                targetSwipeIndex,
+                input.chatId,
+                {
+                  presentCharacters: chars,
+                },
+                undefined,
+                { baseSnapshot: baseGameStateSnapshot },
+              );
               logger.info(
                 `[generate] character-tracker: updateByMessage returned ${updated ? "ok" : "null (no snapshot)"}`,
               );
@@ -7478,10 +7471,12 @@ export async function generateRoutes(app: FastifyInstance) {
 
               // Ensure a snapshot exists for this (messageId, swipeIndex).
               // If world-state didn't create one, updateByMessage clones the
-              // latest snapshot into a new row so we don't corrupt old data.
+              // generation baseline into a new row so we don't corrupt old data.
               let snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
               if (!snap) {
-                await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {});
+                await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {}, undefined, {
+                  baseSnapshot: baseGameStateSnapshot,
+                });
                 snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
               }
               if (snap) {
@@ -7548,7 +7543,9 @@ export async function generateRoutes(app: FastifyInstance) {
                 // Ensure a snapshot exists for this (messageId, swipeIndex)
                 let snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
                 if (!snap) {
-                  await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {});
+                  await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {}, undefined, {
+                    baseSnapshot: baseGameStateSnapshot,
+                  });
                   snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
                 }
                 const existingPS = snap?.playerStats
@@ -7588,7 +7585,9 @@ export async function generateRoutes(app: FastifyInstance) {
                 // Ensure a snapshot exists for this (messageId, swipeIndex)
                 let snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
                 if (!snap) {
-                  await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {});
+                  await gameStateStore.updateByMessage(messageId, targetSwipeIndex, input.chatId, {}, undefined, {
+                    baseSnapshot: baseGameStateSnapshot,
+                  });
                   snap = await gameStateStore.getByMessage(messageId, targetSwipeIndex);
                 }
                 const existingPS = snap?.playerStats
