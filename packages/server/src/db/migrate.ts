@@ -409,6 +409,7 @@ const CREATE_TABLES: string[] = [
     content TEXT NOT NULL,
     embedding TEXT,
     message_count INTEGER NOT NULL,
+    source_chat_id TEXT,
     first_message_at TEXT NOT NULL,
     last_message_at TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -717,6 +718,11 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: "api_connections",
     column: "sort_order",
     definition: "INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    table: "memory_chunks",
+    column: "source_chat_id",
+    definition: "TEXT",
   },
 ];
 

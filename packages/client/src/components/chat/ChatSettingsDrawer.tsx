@@ -3,6 +3,7 @@
 // ──────────────────────────────────────────────
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   X,
   Users,
@@ -82,6 +83,8 @@ import {
   useDeleteChatMemory,
   useClearChatMemories,
   useRefreshChatMemories,
+  useExportChatMemories,
+  useImportChatMemories,
   useChatNotes,
   useDeleteChatNote,
   useClearChatNotes,
@@ -111,9 +114,11 @@ import type {
   AgentPhase,
   ChatMode,
   ChatMemoryChunk,
+  ChatMemoryRecallExportPayload,
   ChatPreset,
   ChatPresetSettings,
   ConversationNote,
+  ExportEnvelope,
 } from "@marinara-engine/shared";
 import { useAgentConfigs, useCreateAgent, useUpdateAgent, type AgentConfigRow } from "../../hooks/use-agents";
 import { useAgentStore } from "../../stores/agent.store";
@@ -207,6 +212,16 @@ type AgentAddPreview = {
   maxTokens: number;
   runInterval: number | null;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isMemoryRecallExportEnvelope(value: unknown): value is ExportEnvelope<ChatMemoryRecallExportPayload> {
+  if (!isRecord(value) || value.type !== "marinara_memory_recall" || value.version !== 1) return false;
+  const data = value.data;
+  return isRecord(data) && Array.isArray(data.chunks);
+}
 
 function parseAgentSettings(raw: unknown): Record<string, unknown> {
   if (!raw) return {};
@@ -5506,6 +5521,10 @@ function estimateMemoryTokens(memories: ChatMemoryChunk[]): number {
   return Math.ceil(text.length / 4);
 }
 
+function formatMemoryChunkCount(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "memory chunk" : "memory chunks"}`;
+}
+
 const MEMORY_CONTENT_CLASS =
   "max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)]/50 px-3 py-2 text-[0.6875rem] leading-relaxed text-[var(--foreground)]";
 
@@ -5514,8 +5533,49 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
   const deleteMemory = useDeleteChatMemory(chatId);
   const clearMemories = useClearChatMemories(chatId);
   const refreshMemories = useRefreshChatMemories(chatId);
+  const exportMemories = useExportChatMemories(chatId);
+  const importMemories = useImportChatMemories(chatId);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const memories = useMemo(() => memoriesQuery.data ?? [], [memoriesQuery.data]);
   const totalTokens = useMemo(() => estimateMemoryTokens(memories), [memories]);
+
+  const handleExport = async () => {
+    if (memories.length === 0) {
+      toast.error("There are no recall memories to export yet.");
+      return;
+    }
+
+    try {
+      await exportMemories.mutateAsync();
+      toast.success("Memory Recall exported.");
+    } catch (err) {
+      toast.error(err instanceof Error ? `Export failed: ${err.message}` : "Export failed.");
+    }
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!isMemoryRecallExportEnvelope(parsed)) {
+        toast.error("Choose a Memory Recall export file.");
+        return;
+      }
+
+      const result = await importMemories.mutateAsync({ envelope: parsed });
+      if (result.imported > 0) {
+        toast.success(`Imported ${formatMemoryChunkCount(result.imported)}.`);
+      } else {
+        toast.info("No new recall memories were imported.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? `Import failed: ${err.message}` : "Import failed.");
+    } finally {
+      event.target.value = "";
+    }
+  };
 
   const handleDelete = async (memory: ChatMemoryChunk) => {
     const ok = await showConfirmDialog({
@@ -5553,10 +5613,35 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
             )}
           </div>
           <div className="flex items-center gap-1">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json,.marinara"
+              className="hidden"
+              onChange={handleImportFile}
+            />
+            <button
+              type="button"
+              onClick={() => void handleExport()}
+              disabled={memories.length === 0 || exportMemories.isPending}
+              className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+              title="Export memories"
+            >
+              <Download size="0.8125rem" />
+            </button>
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              disabled={importMemories.isPending}
+              className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+              title="Import memories"
+            >
+              <Upload size="0.8125rem" />
+            </button>
             <button
               type="button"
               onClick={() => refreshMemories.mutate()}
-              disabled={memoriesQuery.isFetching || refreshMemories.isPending}
+              disabled={memoriesQuery.isFetching || refreshMemories.isPending || importMemories.isPending}
               className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-50"
               title="Rebuild memories from current chat messages"
             >
