@@ -2,6 +2,8 @@
 // Chat & Message Types
 // ──────────────────────────────────────────────
 
+import type { GenerationGuideSource } from "../utils/generation-guide.js";
+
 /** The four primary chat modes the engine supports. */
 export type ChatMode = "conversation" | "roleplay" | "visual_novel" | "game";
 
@@ -167,6 +169,10 @@ export interface ChatMetadata {
   characterSchedules?: Record<string, unknown>;
   /** Week start timestamp for the current generated conversation schedules. */
   scheduleWeekStart?: string;
+  /** Extra positive prompt/tags appended to generated conversation selfie prompts. */
+  selfiePositivePrompt?: string;
+  /** Extra negative prompt/tags sent with generated conversation selfies. */
+  selfieNegativePrompt?: string;
 
   // ── Game Mode Fields ──
   /** UUID linking all sessions of one game */
@@ -320,7 +326,21 @@ export interface MessageExtra {
    * Cached pipeline injections (prose-guardian, director, knowledge-retrieval, etc.)
    * saved with this assistant message — reused when regenerating that swipe unless refreshed.
    */
-  contextInjections?: Array<{ agentType: string; text: string }> | null;
+  contextInjections?: Array<{ agentType: string; agentName?: string; text: string }> | null;
+  /**
+   * Hidden command-generation options needed to make swipes/regenerations replay
+   * the same slash-command or guided-regenerate prompt behavior.
+   */
+  generationReplay?: {
+    impersonate?: true;
+    userMessage?: string | null;
+    generationGuide?: string | null;
+    generationGuideSource?: GenerationGuideSource | null;
+    impersonatePresetId?: string | null;
+    impersonateConnectionId?: string | null;
+    impersonateBlockAgents?: boolean;
+    impersonatePromptTemplate?: string | null;
+  } | null;
 }
 
 /** Metadata about how a message was generated. */
