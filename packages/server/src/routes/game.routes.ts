@@ -3465,9 +3465,33 @@ export async function gameRoutes(app: FastifyInstance) {
       throw new Error(`Cannot start game: status is "${meta.gameSessionStatus}", expected "ready"`);
     }
 
+    // Race-recovery guard: an existing GM turn means the game has already started,
+    // even though gameSessionStatus is back at "ready". This happens when a concurrent
+    // metadata-write race transiently reverts the status from "active" to "ready" mid-
+    // stream (same root race as #321 / #821 — see PR #320 for the original audit and
+    // remaining call sites the team hasn't migrated to chats.patchMetadata yet).
+    //
+    // Without this branch, a second Start Game click during that race window would
+    // fire a duplicate /api/generate and produce two back-to-back GM intros with no
+    // user message between them. Instead: re-flip status back to "active" silently,
+    // tell the client we already started, and let it skip generateInitialGameTurn so
+    // the UI can simply progress past the Start Game screen.
+    const existingMessages = await chats.listMessages(chatId);
+    const hasGmTurn = existingMessages.some(
+      (m) => m.role === "assistant" && typeof m.content === "string" && m.content.trim().length > 0,
+    );
+    if (hasGmTurn) {
+      logger.warn(
+        "[game/start] Race recovery for chatId=%s — GM turn already exists; restoring status to active without re-firing intro",
+        chatId,
+      );
+      await chats.updateMetadata(chatId, { ...meta, gameSessionStatus: "active" });
+      return { status: "active", alreadyStarted: true };
+    }
+
     await chats.updateMetadata(chatId, { ...meta, gameSessionStatus: "active" });
 
-    return { status: "active" };
+    return { status: "active", alreadyStarted: false };
   });
 
   const pendingSessionStarts = new Map<
