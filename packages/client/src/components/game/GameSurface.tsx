@@ -4545,7 +4545,14 @@ export function GameSurface({
     startGame.mutate(
       { chatId: activeChatId },
       {
-        onSuccess: () => {
+        onSuccess: (res) => {
+          // Race recovery (#821): if the server detected an existing GM turn,
+          // it has already restored status to "active" — skip the duplicate
+          // generation and let the UI move past the Start Game screen on the
+          // next chat refetch.
+          if (res?.alreadyStarted) {
+            return;
+          }
           generateInitialGameTurn();
         },
         onError: (err) => {

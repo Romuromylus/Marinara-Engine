@@ -49,6 +49,12 @@ interface SetupResponse {
 
 interface StartGameResponse {
   status: string;
+  /**
+   * True when the server detected that a GM turn already exists for this chat
+   * (race recovery — see #821). Callers must skip generating another initial
+   * turn in this case; the existing intro is already saved.
+   */
+  alreadyStarted?: boolean;
 }
 
 interface StartSessionResponse {
