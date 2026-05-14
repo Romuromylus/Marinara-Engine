@@ -58,6 +58,7 @@ import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-appli
 type TrackerWrapFormat = "xml" | "markdown" | "none";
 type EntryStateOverrides = Record<string, { ephemeral?: number | null; enabled?: boolean }>;
 const MEMORY_RECALL_IMPORT_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
+const MEMORY_RECALL_IMPORT_BATCH_SIZE = 500;
 
 function toSafeExportName(name: string, fallback: string) {
   const safe = name
@@ -112,6 +113,12 @@ function normalizeMemoryRecallImportChunk(value: unknown, importedAt: string): C
     lastMessageAt,
     createdAt,
   };
+}
+
+function getMemoryRecallChunkImportKey(
+  chunk: Pick<ChatMemoryRecallExportChunk, "content" | "firstMessageAt" | "lastMessageAt">,
+): string {
+  return JSON.stringify([chunk.firstMessageAt, chunk.lastMessageAt, chunk.content]);
 }
 
 function readMemoryRecallImportPayload(
@@ -775,17 +782,21 @@ export async function chatsRoutes(app: FastifyInstance) {
       if (!chat) return reply.status(404).send({ error: "Chat not found" });
 
       const parsed = readMemoryRecallImportPayload(req.body);
-      if (!parsed) return reply.status(400).send({ error: "Invalid Memory Recall export file" });
+      if (!parsed) {
+        logger.warn("[memory-recall] Rejected invalid import payload for chat %s", req.params.id);
+        return reply.status(400).send({ error: "Invalid Memory Recall export file" });
+      }
       if (parsed.chunks.length === 0) {
+        logger.warn("[memory-recall] Rejected import with no usable chunks for chat %s", req.params.id);
         return reply.status(400).send({ error: "No usable memory chunks found in this export file" });
       }
 
       const replace = req.query.replace === "true";
-      if (replace) {
-        await app.db.delete(memoryChunks).where(eq(memoryChunks.chatId, req.params.id));
-      }
       const importedSourceChatId =
         parsed.sourceChatId && parsed.sourceChatId !== req.params.id ? parsed.sourceChatId : null;
+      const existingChunkIds = replace
+        ? await app.db.select({ id: memoryChunks.id }).from(memoryChunks).where(eq(memoryChunks.chatId, req.params.id))
+        : [];
 
       const existing = replace
         ? []
@@ -797,20 +808,18 @@ export async function chatsRoutes(app: FastifyInstance) {
             })
             .from(memoryChunks)
             .where(eq(memoryChunks.chatId, req.params.id));
-      const existingKeys = new Set(
-        existing.map((chunk) => `${chunk.firstMessageAt}\u0000${chunk.lastMessageAt}\u0000${chunk.content}`),
-      );
+      const existingKeys = new Set(existing.map(getMemoryRecallChunkImportKey));
 
-      let imported = 0;
       let skipped = parsed.skipped;
+      const rowsToInsert: Array<typeof memoryChunks.$inferInsert> = [];
       for (const chunk of parsed.chunks) {
-        const key = `${chunk.firstMessageAt}\u0000${chunk.lastMessageAt}\u0000${chunk.content}`;
+        const key = getMemoryRecallChunkImportKey(chunk);
         if (existingKeys.has(key)) {
           skipped++;
           continue;
         }
 
-        await app.db.insert(memoryChunks).values({
+        rowsToInsert.push({
           id: newId(),
           chatId: req.params.id,
           content: chunk.content,
@@ -822,8 +831,29 @@ export async function chatsRoutes(app: FastifyInstance) {
           createdAt: chunk.createdAt,
         });
         existingKeys.add(key);
-        imported++;
       }
+
+      for (let i = 0; i < rowsToInsert.length; i += MEMORY_RECALL_IMPORT_BATCH_SIZE) {
+        await app.db.insert(memoryChunks).values(rowsToInsert.slice(i, i + MEMORY_RECALL_IMPORT_BATCH_SIZE));
+      }
+
+      if (replace && existingChunkIds.length > 0) {
+        for (let i = 0; i < existingChunkIds.length; i += MEMORY_RECALL_IMPORT_BATCH_SIZE) {
+          const ids = existingChunkIds.slice(i, i + MEMORY_RECALL_IMPORT_BATCH_SIZE).map((chunk) => chunk.id);
+          await app.db
+            .delete(memoryChunks)
+            .where(and(eq(memoryChunks.chatId, req.params.id), inArray(memoryChunks.id, ids)));
+        }
+      }
+
+      const imported = rowsToInsert.length;
+      logger.info(
+        "[memory-recall] Imported %d memory chunks into chat %s (skipped %d, replaced=%s)",
+        imported,
+        req.params.id,
+        skipped,
+        replace,
+      );
 
       return {
         imported,

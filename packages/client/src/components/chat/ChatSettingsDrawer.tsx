@@ -5527,6 +5527,8 @@ function formatMemoryChunkCount(count: number): string {
 
 const MEMORY_CONTENT_CLASS =
   "max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)]/50 px-3 py-2 text-[0.6875rem] leading-relaxed text-[var(--foreground)]";
+const MAX_MEMORY_RECALL_IMPORT_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_MEMORY_RECALL_IMPORT_FILE_LABEL = "25 MB";
 
 function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; open: boolean; onClose: () => void }) {
   const memoriesQuery = useChatMemories(chatId, open);
@@ -5556,6 +5558,11 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (file.size > MAX_MEMORY_RECALL_IMPORT_FILE_BYTES) {
+      toast.error(`Memory Recall import files must be ${MAX_MEMORY_RECALL_IMPORT_FILE_LABEL} or smaller.`);
+      event.target.value = "";
+      return;
+    }
 
     try {
       const parsed = JSON.parse(await file.text()) as unknown;
@@ -5626,6 +5633,7 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
               disabled={memories.length === 0 || exportMemories.isPending}
               className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
               title="Export memories"
+              aria-label="Export memories"
             >
               <Download size="0.8125rem" />
             </button>
@@ -5635,6 +5643,7 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
               disabled={importMemories.isPending}
               className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
               title="Import memories"
+              aria-label="Import memories"
             >
               <Upload size="0.8125rem" />
             </button>

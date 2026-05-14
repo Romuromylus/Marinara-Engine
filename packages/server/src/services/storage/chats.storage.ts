@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Storage: Chats
 // ──────────────────────────────────────────────
-import { eq, desc, and, lt, gt, inArray, isNull } from "drizzle-orm";
+import { eq, desc, and, gt, inArray, isNull } from "drizzle-orm";
 import type { DB } from "../../db/connection.js";
 import {
   chats,
