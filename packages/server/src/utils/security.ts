@@ -1,7 +1,7 @@
 import { promises as dns } from "node:dns";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { basename, extname, relative, resolve, sep, win32 } from "node:path";
-import { gunzipSync, zstdDecompressSync } from "node:zlib";
+import { brotliDecompressSync, gunzipSync, zstdDecompressSync } from "node:zlib";
 import { Agent } from "undici";
 import { isLoopbackIp, isPrivateNetworkIp } from "../middleware/ip-allowlist.js";
 import { logger } from "../lib/logger.js";
@@ -489,14 +489,27 @@ function decodeByMagicBytes(buffer: Buffer, maxBytes: number): Buffer | null {
   if (buffer.length >= 4 && buffer[0] === 0x28 && buffer[1] === 0xb5 && buffer[2] === 0x2f && buffer[3] === 0xfd) {
     return tryDecodeCompressedBody(buffer, "zstd", maxBytes);
   }
+  if (!looksLikeProviderJsonOrSseBody(buffer)) {
+    const brotli = tryDecodeCompressedBody(buffer, "br", maxBytes);
+    if (brotli && looksLikeProviderJsonOrSseBody(brotli)) {
+      return brotli;
+    }
+  }
   return null;
 }
 
-function tryDecodeCompressedBody(buffer: Buffer, algorithm: "gzip" | "zstd", maxBytes: number): Buffer | null {
+function looksLikeProviderJsonOrSseBody(buffer: Buffer): boolean {
+  const preview = buffer.subarray(0, 32).toString("utf8").trimStart();
+  return preview.startsWith("{") || preview.startsWith("[") || preview.startsWith("data:");
+}
+
+function tryDecodeCompressedBody(buffer: Buffer, algorithm: "gzip" | "br" | "zstd", maxBytes: number): Buffer | null {
   try {
     switch (algorithm) {
       case "gzip":
         return gunzipSync(buffer, { maxOutputLength: maxBytes });
+      case "br":
+        return brotliDecompressSync(buffer, { maxOutputLength: maxBytes });
       case "zstd":
         return zstdDecompressSync(buffer, { maxOutputLength: maxBytes });
     }
