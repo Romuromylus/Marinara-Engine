@@ -2,10 +2,12 @@
 // Routes: Backup
 // ──────────────────────────────────────────────
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { basename, join, relative } from "path";
+import { basename, dirname, join, relative } from "path";
 import { existsSync, readdirSync, statSync } from "fs";
-import { cp, mkdir, copyFile, readFile, writeFile } from "fs/promises";
+import { cp, mkdir, copyFile, readFile, readdir, writeFile } from "fs/promises";
 import AdmZip from "adm-zip";
+import { FILE_BACKED_TABLES } from "../db/file-backed-store.js";
+import * as schema from "../db/schema/index.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createPromptsStorage } from "../services/storage/prompts.storage.js";
@@ -22,9 +24,17 @@ import { logger } from "../lib/logger.js";
 
 /** Directories inside DATA_DIR that should be included in every backup. */
 const BACKUP_DIRS = ["storage", "avatars", "sprites", "backgrounds", "gallery", "fonts", "knowledge-sources"];
+const PROFILE_ASSET_DIRS = BACKUP_DIRS.filter((dirName) => dirName !== "storage");
 const PROFILE_IMPORT_BODY_LIMIT_BYTES = 256 * 1024 * 1024;
 
 type ExportFormat = "native" | "compatible";
+type ProfileTableSnapshots = Record<string, Array<Record<string, unknown>>>;
+type ProfileFileAsset = { path: string; data: string; size: number };
+type ProfileStorageSnapshot = {
+  version: 1;
+  tables: ProfileTableSnapshots;
+  files: ProfileFileAsset[];
+};
 
 function resolveBackupDir(dataDir: string, dirName: string) {
   return dirName === "storage" ? getFileStorageDir() : join(dataDir, dirName);
@@ -182,6 +192,173 @@ function redactAgentSecrets(agent: any) {
   return { ...agent, settings: redactSettings(agent.settings) };
 }
 
+function symbolValue<T>(target: object, symbolName: string): T | undefined {
+  const symbol = Object.getOwnPropertySymbols(target).find((entry) => String(entry) === symbolName);
+  return symbol ? (target as Record<symbol, T>)[symbol] : undefined;
+}
+
+function isSchemaTable(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && symbolValue(value as object, "Symbol(drizzle:IsDrizzleTable)"));
+}
+
+function schemaTableName(table: Record<string, unknown>) {
+  return symbolValue<string>(table, "Symbol(drizzle:Name)") ?? null;
+}
+
+const profileTableObjects = new Map<string, Record<string, unknown>>();
+for (const candidate of Object.values(schema)) {
+  if (!isSchemaTable(candidate)) continue;
+  const tableName = schemaTableName(candidate);
+  if (tableName && FILE_BACKED_TABLES.includes(tableName as (typeof FILE_BACKED_TABLES)[number])) {
+    profileTableObjects.set(tableName, candidate);
+  }
+}
+
+function sanitizeProfileTableRows(tableName: string, rows: Array<Record<string, unknown>>) {
+  if (tableName === "api_connections") {
+    return rows.map((row) => ({ ...row, apiKeyEncrypted: "" }));
+  }
+  if (tableName === "agent_configs") {
+    return rows.map((row) => redactAgentSecrets(row));
+  }
+  return rows;
+}
+
+async function buildProfileTableSnapshot(app: FastifyInstance): Promise<ProfileTableSnapshots> {
+  const tables: ProfileTableSnapshots = {};
+
+  for (const tableName of FILE_BACKED_TABLES) {
+    const table = profileTableObjects.get(tableName);
+    if (!table) continue;
+    const rows = (await app.db.select().from(table as any)) as Array<Record<string, unknown>>;
+    tables[tableName] = sanitizeProfileTableRows(tableName, rows);
+  }
+
+  return tables;
+}
+
+function normalizeProfileAssetPath(pathValue: unknown) {
+  if (typeof pathValue !== "string" || !pathValue.trim()) return null;
+  if (pathValue.includes("\0")) return null;
+  const parts = pathValue
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+  if (parts.length < 2) return null;
+  if (!PROFILE_ASSET_DIRS.includes(parts[0]!)) return null;
+  if (parts.some((part) => part === "." || part === ".." || part.includes(":"))) return null;
+  return parts.join("/");
+}
+
+async function collectProfileAssetFiles(dataDir: string): Promise<ProfileFileAsset[]> {
+  const files: ProfileFileAsset[] = [];
+
+  for (const dirName of PROFILE_ASSET_DIRS) {
+    const src = join(dataDir, dirName);
+    if (!existsSync(src)) continue;
+    const stack = [src];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      for (const entry of await readdir(current, { withFileTypes: true })) {
+        const full = join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(full);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        const relPath = [dirName, relative(src, full)].filter(Boolean).join("/").split(/[\\/]/g).join("/");
+        const safePath = normalizeProfileAssetPath(relPath);
+        if (!safePath) continue;
+        const buffer = await readFile(full);
+        files.push({ path: safePath, data: buffer.toString("base64"), size: buffer.length });
+      }
+    }
+  }
+
+  return files;
+}
+
+async function buildProfileStorageSnapshot(app: FastifyInstance): Promise<ProfileStorageSnapshot> {
+  return {
+    version: 1,
+    tables: await buildProfileTableSnapshot(app),
+    files: await collectProfileAssetFiles(getDataDir()),
+  };
+}
+
+function isProfileStorageSnapshot(value: unknown): value is ProfileStorageSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<ProfileStorageSnapshot>;
+  return candidate.version === 1 && !!candidate.tables && typeof candidate.tables === "object";
+}
+
+async function restoreProfileAssetFiles(dataDir: string, files: ProfileFileAsset[] | undefined) {
+  let restored = 0;
+  if (!Array.isArray(files)) return restored;
+
+  for (const file of files) {
+    const safePath = normalizeProfileAssetPath(file?.path);
+    if (!safePath || typeof file.data !== "string") continue;
+    const outputPath = assertInsideDir(dataDir, join(dataDir, ...safePath.split("/")));
+    await mkdir(dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, Buffer.from(file.data, "base64"));
+    restored++;
+  }
+
+  return restored;
+}
+
+async function importProfileTableSnapshots(app: FastifyInstance, tables: ProfileTableSnapshots) {
+  const imported: Record<string, number> = {};
+
+  for (const tableName of FILE_BACKED_TABLES) {
+    const table = profileTableObjects.get(tableName);
+    const rows = tables[tableName];
+    if (!table || !Array.isArray(rows) || rows.length === 0) {
+      imported[tableName] = 0;
+      continue;
+    }
+
+    const primaryKey = (table as Record<string, unknown>).id;
+    for (const row of rows) {
+      const cleanRow = { ...row };
+      if (tableName === "api_connections") cleanRow.apiKeyEncrypted = "";
+      const insert = (app.db.insert(table as any).values(cleanRow as any) as any);
+      if (primaryKey) {
+        await insert.onConflictDoUpdate({ target: primaryKey, set: cleanRow });
+      } else {
+        await insert;
+      }
+    }
+    imported[tableName] = rows.length;
+  }
+
+  return imported;
+}
+
+function buildProfileImportStats(tableCounts: Record<string, number>, files: number) {
+  return {
+    characters: tableCounts.characters ?? 0,
+    personas: tableCounts.personas ?? 0,
+    lorebooks: tableCounts.lorebooks ?? 0,
+    presets: tableCounts.prompt_presets ?? 0,
+    agents: tableCounts.agent_configs ?? 0,
+    themes: tableCounts.custom_themes ?? 0,
+    chats: tableCounts.chats ?? 0,
+    messages: tableCounts.messages ?? 0,
+    connections: tableCounts.api_connections ?? 0,
+    files,
+    tables: tableCounts,
+  };
+}
+
+async function importProfileStorageSnapshot(app: FastifyInstance, snapshot: ProfileStorageSnapshot) {
+  const tableCounts = await importProfileTableSnapshots(app, snapshot.tables);
+  const files = await restoreProfileAssetFiles(getDataDir(), snapshot.files);
+  await flushDB();
+  return buildProfileImportStats(tableCounts, files);
+}
+
 async function buildProfileExportEnvelope(app: FastifyInstance): Promise<ExportEnvelope> {
   const chars = createCharactersStorage(app.db);
   const lbs = createLorebooksStorage(app.db);
@@ -247,6 +424,7 @@ async function buildProfileExportEnvelope(app: FastifyInstance): Promise<ExportE
       presets: presetExports,
       agents: allAgents,
       themes: allThemes,
+      fileStorage: await buildProfileStorageSnapshot(app),
     },
   };
 }
@@ -468,6 +646,11 @@ export async function backupRoutes(app: FastifyInstance) {
     }
 
     const data = envelope.data as Record<string, any>;
+    if (isProfileStorageSnapshot(data.fileStorage)) {
+      const imported = await importProfileStorageSnapshot(app, data.fileStorage);
+      return { success: true, imported };
+    }
+
     const chars = createCharactersStorage(app.db);
     const lbs = createLorebooksStorage(app.db);
     const presets = createPromptsStorage(app.db);
