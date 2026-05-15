@@ -1543,13 +1543,31 @@ function buildDefaultComfyUiWorkflow(defaults: ComfyUiDefaults): Record<string, 
   return workflow;
 }
 
-function escapeJsonString(str: string): string {
-  return str
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t");
+function replaceComfyUiPlaceholders(
+  value: unknown,
+  replacements: Record<string, string | number>,
+): unknown {
+  if (typeof value === "string") {
+    const exactReplacement = replacements[value];
+    if (exactReplacement !== undefined) return exactReplacement;
+
+    return Object.entries(replacements).reduce(
+      (resolved, [placeholder, replacement]) => resolved.replaceAll(placeholder, String(replacement)),
+      value,
+    );
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => replaceComfyUiPlaceholders(item, replacements));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, replaceComfyUiPlaceholders(entry, replacements)]),
+    );
+  }
+
+  return value;
 }
 
 async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promise<ImageGenResult> {
@@ -1571,31 +1589,31 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
     workflow = buildDefaultComfyUiWorkflow(defaults);
   }
 
-  // Replace placeholders in the workflow JSON string
-  let wfStr = JSON.stringify(workflow);
-  wfStr = wfStr.replace(/%prompt%/g, escapeJsonString(prompt));
-  wfStr = wfStr.replace(/%negative_prompt%/g, escapeJsonString(negativePrompt));
-  wfStr = wfStr.replace(/%width%/g, String(request.width ?? 512));
-  wfStr = wfStr.replace(/%height%/g, String(request.height ?? 768));
-  wfStr = wfStr.replace(/%seed%/g, String(seed));
-  wfStr = wfStr.replace(/%steps%/g, String(defaults.steps));
-  wfStr = wfStr.replace(/%cfg%/g, String(defaults.cfgScale));
-  wfStr = wfStr.replace(/%cfg_scale%/g, String(defaults.cfgScale));
-  wfStr = wfStr.replace(/%scale%/g, String(defaults.cfgScale));
-  wfStr = wfStr.replace(/%sampler%/g, escapeJsonString(defaults.sampler));
-  wfStr = wfStr.replace(/%scheduler%/g, escapeJsonString(defaults.scheduler));
-  wfStr = wfStr.replace(/%denoise%/g, String(defaults.denoisingStrength));
-  wfStr = wfStr.replace(/%denoising_strength%/g, String(defaults.denoisingStrength));
-  wfStr = wfStr.replace(/%clip_skip%/g, String(defaults.clipSkip ?? 0));
+  const replacements: Record<string, string | number> = {
+    "%prompt%": prompt,
+    "%negative_prompt%": negativePrompt,
+    "%width%": request.width ?? 512,
+    "%height%": request.height ?? 768,
+    "%seed%": seed,
+    "%steps%": defaults.steps,
+    "%cfg%": defaults.cfgScale,
+    "%cfg_scale%": defaults.cfgScale,
+    "%scale%": defaults.cfgScale,
+    "%sampler%": defaults.sampler,
+    "%scheduler%": defaults.scheduler,
+    "%denoise%": defaults.denoisingStrength,
+    "%denoising_strength%": defaults.denoisingStrength,
+    "%clip_skip%": defaults.clipSkip ?? 0,
+  };
   if (request.model) {
-    wfStr = wfStr.replace(/%model%/g, request.model.replace(/"/g, '\\"'));
+    replacements["%model%"] = request.model;
   }
   if (request.referenceImage) {
-    wfStr = wfStr.replace(/%reference_image%/g, request.referenceImage.replace(/"/g, '\\"'));
+    replacements["%reference_image%"] = request.referenceImage;
   } else if (request.referenceImages?.length) {
-    wfStr = wfStr.replace(/%reference_image%/g, request.referenceImages[0]!.replace(/"/g, '\\"'));
+    replacements["%reference_image%"] = request.referenceImages[0]!;
   }
-  const resolvedWorkflow = JSON.parse(wfStr);
+  const resolvedWorkflow = replaceComfyUiPlaceholders(workflow, replacements);
 
   // Queue the workflow
   const queueResp = await localImageBackendFetch(`${base}/prompt`, {
