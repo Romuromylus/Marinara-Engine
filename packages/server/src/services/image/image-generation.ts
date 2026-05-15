@@ -1025,7 +1025,7 @@ const NOVELAI_V4_PROMPT_HINT =
   "NovelAI V4/V4.5 prompts support roughly 512 T5 tokens and reject most Unicode prompt characters; try a shorter ASCII prompt without emoji or non-Latin text.";
 
 function isNovelAiV4Model(model: string): boolean {
-  return /nai-diffusion-(?:4|4-5)/i.test(model);
+  return /^nai-diffusion-(?:4(?:-(?:curated-preview|full))?|4-5(?:-(?:curated|full))?)$/i.test(model.trim());
 }
 
 function sanitizeNovelAiV4Prompt(value: string): string {
@@ -1067,7 +1067,7 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
 
   const url = `${baseUrl.replace(/\/+$/, "")}/ai/generate-image`;
   const model = request.model || "nai-diffusion-4-5-full";
-  const isV4 = model.includes("nai-diffusion-4");
+  const isV4 = isNovelAiV4Model(model);
   const defaults = resolveNovelAiDefaults(request);
   const prompt = prepareNovelAiPrompt(mergePromptPrefix(defaults.promptPrefix, request.prompt), "prompt", model);
   const negativePrompt = prepareNovelAiPrompt(
