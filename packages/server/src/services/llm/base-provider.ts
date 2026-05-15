@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────
 import { logger } from "../../lib/logger.js";
 import { isProviderLocalUrlsEnabled } from "../../config/runtime-config.js";
-import { safeFetch, type SafeFetchOptions } from "../../utils/security.js";
+import { requestHeadersWithIdentityEncoding, safeFetch, type SafeFetchOptions } from "../../utils/security.js";
 
 /**
  * Shared undici Agent with a 5-minute headers timeout (time to first byte)
@@ -24,6 +24,7 @@ export function llmFetch(
   const bufferResponse = init?.bufferResponse ?? false;
   return safeFetch(url, {
     ...(init ?? {}),
+    headers: requestHeadersWithIdentityEncoding(init?.headers),
     agentOptions: llmAgentOptions,
     policy: {
       allowLocal: isProviderLocalUrlsEnabled(),
