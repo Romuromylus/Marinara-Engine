@@ -5239,7 +5239,9 @@ export function GameSurface({
           gameInventory: updatedInventory,
         });
       } catch (error) {
-        setInventoryItems(previousInventory);
+        // Rollback only if no newer reorder superseded this one — otherwise
+        // a late failure from an older request would clobber newer state.
+        setInventoryItems((current) => (current === updatedInventory ? previousInventory : current));
         const message = error instanceof Error ? error.message : "Failed to reorder inventory.";
         toast.error(message);
       }
