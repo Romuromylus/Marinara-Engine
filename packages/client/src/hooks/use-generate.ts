@@ -1943,6 +1943,12 @@ export function useGenerate() {
               }
               break;
             }
+            case "agent_error": {
+              const errData = event.data as { agentType: string; error: string };
+              hasError = true;
+              showError(errData.error || "Agent retry failed");
+              break;
+            }
             case "error": {
               hasError = true;
               showError((event.data as string) || "Agent retry failed");
