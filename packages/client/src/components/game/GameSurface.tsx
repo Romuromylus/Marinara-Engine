@@ -38,15 +38,18 @@ import {
   chatKeys,
   useCreateMessage,
   useDeleteChat,
+  useUpdateChat,
   useUpdateChatMetadata,
   useUpdateMessage,
 } from "../../hooks/use-chats";
+import { useConnections } from "../../hooks/use-connections";
 import { useGenerate } from "../../hooks/use-generate";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { spriteKeys, type SpriteInfo } from "../../hooks/use-characters";
 import { api, getJsonRepairRequest, type JsonRepairRequest } from "../../lib/api-client";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { cn, type AvatarCrop, type LegacyAvatarCrop, type AvatarCropValue } from "../../lib/utils";
+import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
 import { audioManager } from "../../lib/game-audio";
 import {
   parseGmTags,
@@ -1472,6 +1475,7 @@ import {
   Loader2,
   MoreHorizontal,
   Play,
+  Plug,
   RefreshCw,
   RotateCcw,
   ScrollText,
@@ -1780,6 +1784,21 @@ export function GameSurface({
   const gameSnapshot = useGameStateStore((s) => (s.current?.chatId === activeChatId ? s.current : null));
   const chatCharacterIds = useMemo(() => getChatCharacterIds(chat.characterIds), [chat.characterIds]);
   const useSpotifyGameMusic = chatMeta.gameUseSpotifyMusic === true;
+  const { data: connectionsList } = useConnections();
+  const updateChat = useUpdateChat();
+  const languageConnections = useMemo(
+    () =>
+      filterLanguageGenerationConnections(
+        (connectionsList ?? []) as Array<{ id: string; name: string; model?: string; provider?: string }>,
+      ).sort((a, b) => (a.name || "").localeCompare(b.name || "")),
+    [connectionsList],
+  );
+  const handleStartScreenConnectionChange = useCallback(
+    (connectionId: string) => {
+      updateChat.mutate({ id: activeChatId, connectionId: connectionId || null });
+    },
+    [activeChatId, updateChat],
+  );
 
   const sceneWrapCharacterNames = useMemo(() => {
     const partyIds = mergeUniqueIds(getActivePartyIds(chatMeta), chatCharacterIds);
@@ -7445,7 +7464,28 @@ export function GameSurface({
             )}
 
             {/* Start button or generating indicator */}
-            <div className="flex-shrink-0">
+            <div className="flex w-full flex-shrink-0 flex-col items-center gap-4">
+              <label className="flex w-full max-w-sm flex-col gap-1.5 text-left">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)] dark:text-white/50">
+                  <Plug size={12} />
+                  GM / Party Model
+                </span>
+                <select
+                  value={chat.connectionId ?? ""}
+                  onChange={(e) => handleStartScreenConnectionChange(e.target.value)}
+                  disabled={isStreaming || startGame.isPending || updateChat.isPending}
+                  className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--foreground)] outline-none ring-1 ring-[var(--border)] transition-all focus:ring-[var(--primary)]/40 disabled:opacity-60 dark:bg-white/10"
+                >
+                  <option value="">None</option>
+                  <option value="random">Random</option>
+                  {languageConnections.map((connection) => (
+                    <option key={connection.id} value={connection.id}>
+                      {connection.name}
+                      {connection.model ? ` - ${connection.model}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
               {introPhase === "intro" ? (
                 <div className="flex flex-col items-center gap-3">
                   {firstTurnFullyReady && introTypewriterDone ? (
