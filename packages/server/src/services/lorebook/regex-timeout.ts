@@ -44,8 +44,11 @@ export function createTimeoutRegexExecutor(timeoutMs: number = DEFAULT_REGEX_TIM
         );
         return false;
       }
-      // Anything else (rare — invalid regex would have thrown earlier) — let testKeyword's
-      // outer catch handle it via its literal-substring fallback by re-throwing.
+      // Contract: non-timeout errors (rare — invalid regex would have thrown at compile time
+      // upstream, before we got here) are re-thrown so testKeyword's outer try/catch can swap
+      // in its literal-substring fallback. Do NOT swallow here — that catch in
+      // packages/shared/src/utils/lorebook-keyword-matching.ts is the intended landing pad,
+      // and silently returning false would mask a real executor-side bug.
       throw err;
     }
   };

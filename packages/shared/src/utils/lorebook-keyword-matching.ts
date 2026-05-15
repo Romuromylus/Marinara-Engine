@@ -14,8 +14,11 @@ export interface KeywordMatchOptions {
   useRegex: boolean;
   matchWholeWords: boolean;
   caseSensitive: boolean;
-  /** Optional override for executing the compiled regex. Server injects a vm.runInNewContext-bounded
-   *  executor so a pathological pattern that survived the static safety check can still be aborted. */
+  /** Optional override for executing user-supplied regex patterns. Server injects a
+   *  vm.runInNewContext-bounded executor so a pathological pattern that survived the
+   *  static safety check can still be aborted. Only applied to the `useRegex` path —
+   *  the matchWholeWords branch builds its regex from escaped-literal text and cannot
+   *  ReDoS, so it skips the executor (and its per-call vm overhead). */
   regexExecutor?: RegexExecutor;
 }
 
@@ -28,7 +31,6 @@ function literalMatch(keyword: string, text: string, options: KeywordMatchOption
 /** Test whether a single keyword would match the given text under the given options. */
 export function testKeyword(keyword: string, text: string, options: KeywordMatchOptions): boolean {
   if (!keyword) return false;
-  const exec = options.regexExecutor ?? defaultRegexExecutor;
 
   try {
     if (options.useRegex) {
@@ -40,6 +42,7 @@ export function testKeyword(keyword: string, text: string, options: KeywordMatch
       }
       const flags = options.caseSensitive ? "g" : "gi";
       const regex = new RegExp(keyword, flags);
+      const exec = options.regexExecutor ?? defaultRegexExecutor;
       return exec(regex, text);
     }
 
@@ -48,7 +51,8 @@ export function testKeyword(keyword: string, text: string, options: KeywordMatch
       const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const flags = options.caseSensitive ? "g" : "gi";
       const regex = new RegExp(`\\b${escaped}\\b`, flags);
-      return exec(regex, text);
+      // No regexExecutor here — pattern is built from escaped-literal text, can't ReDoS.
+      return regex.test(text);
     }
 
     return literalMatch(keyword, text, options);
