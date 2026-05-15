@@ -1672,6 +1672,9 @@ async function applyRetryResultEffects(args: {
 
     // ── ILLUSTRATOR: generate image from agent prompt ──
     if (result.success && result.type === "image_prompt" && result.data && typeof result.data === "object") {
+      const illustratorFailureName =
+        resolvedAgents.find((a) => a.resolved.id === result.agentId || a.resolved.type === "illustrator")?.cfg.name ??
+        "Illustrator";
       try {
         const illData = result.data as Record<string, unknown>;
         const shouldGenerate = illData.shouldGenerate === true;
@@ -1861,11 +1864,14 @@ async function applyRetryResultEffects(args: {
               );
             }
           } else {
-            logger.warn("[retry-agents] Illustrator wants to generate but no image generation connection is configured");
+            logger.warn(
+              "[retry-agents] Illustrator wants to generate but no image generation connection is configured",
+            );
             sendSseEvent(reply, {
               type: "agent_error",
               data: {
                 agentType: "illustrator",
+                agentName: illustratorFailureName,
                 error:
                   "No image generation connection set on the Illustrator agent, and no default Illustrator image connection is configured. Go to Settings -> Connections and mark an image generation connection as the default for Illustrator, or assign one directly in Settings -> Agents -> Illustrator.",
               },
@@ -1878,6 +1884,7 @@ async function applyRetryResultEffects(args: {
           type: "agent_error",
           data: {
             agentType: "illustrator",
+            agentName: illustratorFailureName,
             error: illErr instanceof Error ? illErr.message : "Image generation failed",
           },
         });
