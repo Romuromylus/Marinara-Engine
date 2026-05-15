@@ -1688,7 +1688,8 @@ async function applyRetryResultEffects(args: {
           const rawSavedNegativePrompt = illustratorAgent?.resolved.settings?.imageNegativePrompt;
           const imagePositivePrompt = typeof rawImagePositivePrompt === "string" ? rawImagePositivePrompt.trim() : "";
           const savedNegativePrompt = typeof rawSavedNegativePrompt === "string" ? rawSavedNegativePrompt.trim() : "";
-          let imgConnId = (illustratorAgent?.resolved.settings?.imageConnectionId as string) ?? null;
+          const configuredImgConnId = illustratorAgent?.resolved.settings?.imageConnectionId;
+          let imgConnId = typeof configuredImgConnId === "string" ? configuredImgConnId.trim() : null;
           if (!imgConnId) {
             const defaultImageConn = (await conns.list()).find(
               (c) =>
@@ -1698,6 +1699,9 @@ async function applyRetryResultEffects(args: {
           }
           if (imgConnId) {
             const imgConnFull = await conns.getWithKey(imgConnId);
+            if (!imgConnFull) {
+              throw new Error("Cannot resolve Illustrator image generation connection");
+            }
             if (imgConnFull) {
               const { generateImage, saveImageToDisk } = await import("../../services/image/image-generation.js");
               const { createGalleryStorage } = await import("../../services/storage/gallery.storage.js");
@@ -1856,6 +1860,16 @@ async function applyRetryResultEffects(args: {
                 (illData.reason as string | undefined)?.slice(0, 80) ?? imagePrompt.slice(0, 80),
               );
             }
+          } else {
+            logger.warn("[retry-agents] Illustrator wants to generate but no image generation connection is configured");
+            sendSseEvent(reply, {
+              type: "agent_error",
+              data: {
+                agentType: "illustrator",
+                error:
+                  "No image generation connection set on the Illustrator agent, and no default Illustrator image connection is configured. Go to Settings -> Connections and mark an image generation connection as the default for Illustrator, or assign one directly in Settings -> Agents -> Illustrator.",
+              },
+            });
           }
         }
       } catch (illErr) {
