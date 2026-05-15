@@ -2550,10 +2550,142 @@ function ExtensionsSettings() {
   );
 }
 
+type ProfileImportStats = {
+  characters?: number;
+  personas?: number;
+  lorebooks?: number;
+  presets?: number;
+  agents?: number;
+  themes?: number;
+  chats?: number;
+  messages?: number;
+  connections?: number;
+  files?: number;
+};
+
+type ProfileImportProgressData = {
+  phase: string;
+  label: string;
+  completedItems: number;
+  totalItems: number;
+  imported?: ProfileImportStats;
+};
+
+type ProfileImportProgressState = {
+  status: "reading" | "starting" | "running" | "success" | "error";
+  label: string;
+  completedItems: number;
+  totalItems: number;
+  startedAt: number;
+  elapsedSeconds: number;
+  imported?: ProfileImportStats;
+  error?: string;
+};
+
+type ProfileImportStreamEvent =
+  | { type: "started"; data?: { label?: string; totalItems?: number } }
+  | { type: "progress"; data?: ProfileImportProgressData }
+  | { type: "done"; data?: { success?: boolean; imported?: ProfileImportStats; error?: string; message?: string } }
+  | { type: "error"; data?: string | { error?: string; message?: string } };
+
+function formatProfileImportDuration(seconds: number) {
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  if (safeSeconds < 60) return `${safeSeconds}s`;
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function estimateProfileImportRemainingSeconds(progress: ProfileImportProgressState) {
+  if (progress.status !== "running" || progress.completedItems <= 0 || progress.totalItems <= progress.completedItems) {
+    return null;
+  }
+  const secondsPerItem = progress.elapsedSeconds / progress.completedItems;
+  return Math.max(1, Math.round(secondsPerItem * (progress.totalItems - progress.completedItems)));
+}
+
+function getProfileImportPercent(progress: ProfileImportProgressState) {
+  if (progress.status === "success") return 100;
+  if (progress.totalItems <= 0) return progress.status === "running" ? 8 : 0;
+  const percent = Math.round((progress.completedItems / progress.totalItems) * 100);
+  return Math.min(99, Math.max(progress.status === "running" ? 8 : 0, percent));
+}
+
+function formatProfileImportStats(stats?: ProfileImportStats) {
+  if (!stats) return "";
+  const entries: Array<[number | undefined, string]> = [
+    [stats.characters, "characters"],
+    [stats.personas, "personas"],
+    [stats.lorebooks, "lorebooks"],
+    [stats.presets, "presets"],
+    [stats.agents, "agents"],
+    [stats.themes, "themes"],
+    [stats.chats, "chats"],
+    [stats.messages, "messages"],
+    [stats.connections, "connections"],
+    [stats.files, "files"],
+  ];
+  return entries
+    .filter(([count]) => typeof count === "number" && count > 0)
+    .map(([count, label]) => `${count} ${label}`)
+    .join(", ");
+}
+
+function getProfileImportErrorMessage(data: unknown) {
+  if (typeof data === "string") return data;
+  if (data && typeof data === "object") {
+    const record = data as { message?: unknown; error?: unknown };
+    if (typeof record.message === "string") return record.message;
+    if (typeof record.error === "string") return record.error;
+  }
+  return "Unknown error";
+}
+
+async function* readProfileImportStream(res: Response): AsyncGenerator<ProfileImportStreamEvent> {
+  if (!res.body) throw new Error("Import started but no progress stream was returned.");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        yield JSON.parse(line.slice(6)) as ProfileImportStreamEvent;
+      } catch {
+        /* ignore malformed progress chunks */
+      }
+    }
+  }
+}
+
 function ImportSettings() {
   const openModal = useUIStore((s) => s.openModal);
   const qc = useQueryClient();
   const setActiveChatId = useChatStore((s) => s.setActiveChatId);
+  const [profileImportProgress, setProfileImportProgress] = useState<ProfileImportProgressState | null>(null);
+  const profileImportBusy =
+    profileImportProgress?.status === "reading" ||
+    profileImportProgress?.status === "starting" ||
+    profileImportProgress?.status === "running";
+
+  useEffect(() => {
+    if (!profileImportBusy) return;
+    const timer = window.setInterval(() => {
+      setProfileImportProgress((current) =>
+        current && (current.status === "reading" || current.status === "starting" || current.status === "running")
+          ? { ...current, elapsedSeconds: Math.floor((Date.now() - current.startedAt) / 1000) }
+          : current,
+      );
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [profileImportBusy]);
 
   const handleMarinaraImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2604,33 +2736,116 @@ function ImportSettings() {
   const handleProfileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const startedAt = Date.now();
+    setProfileImportProgress({
+      status: "reading",
+      label: "Reading profile file",
+      completedItems: 0,
+      totalItems: 1,
+      startedAt,
+      elapsedSeconds: 0,
+    });
     try {
       const text = await file.text();
-      const envelope = JSON.parse(text);
+      const envelope = JSON.parse(text) as { type?: string };
       if (envelope.type !== "marinara_profile") {
+        setProfileImportProgress({
+          status: "error",
+          label: "Profile import failed",
+          completedItems: 0,
+          totalItems: 1,
+          startedAt,
+          elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+          error: "Not a valid profile export file.",
+        });
         toast.error("Not a valid profile export file.");
         return;
       }
+      setProfileImportProgress((current) =>
+        current
+          ? {
+              ...current,
+              status: "starting",
+              label: "Starting profile import",
+              elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+            }
+          : current,
+      );
       const res = await fetch("/api/backup/import-profile", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Accept: "text/event-stream",
           ...getAdminSecretHeader(),
         },
         body: text,
       });
-      const data = await res.json();
-      if (data.success) {
-        qc.invalidateQueries();
-        const s = data.imported;
-        toast.success(
-          `Imported: ${s.characters} characters, ${s.personas} personas, ${s.lorebooks} lorebooks, ${s.presets} presets, ${s.agents} agents, ${s.themes ?? 0} themes`,
-        );
-      } else {
-        toast.error(`Import failed: ${data.error ?? "Unknown error"}`);
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+        throw new Error(data.message ?? data.error ?? res.statusText ?? "Unknown error");
       }
-    } catch {
-      toast.error("Import failed. Make sure this is a valid profile JSON file.");
+      for await (const event of readProfileImportStream(res)) {
+        if (event.type === "started") {
+          setProfileImportProgress((current) => ({
+            status: "running",
+            label: event.data?.label ?? "Profile import started",
+            completedItems: 0,
+            totalItems: Math.max(1, event.data?.totalItems ?? current?.totalItems ?? 1),
+            startedAt,
+            elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+          }));
+          continue;
+        }
+        if (event.type === "progress" && event.data) {
+          setProfileImportProgress((current) => ({
+            status: "running",
+            label: event.data?.label ?? "Importing profile",
+            completedItems: event.data?.completedItems ?? current?.completedItems ?? 0,
+            totalItems: Math.max(1, event.data?.totalItems ?? current?.totalItems ?? 1),
+            startedAt,
+            elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+            imported: event.data?.imported,
+          }));
+          continue;
+        }
+        if (event.type === "error") {
+          throw new Error(getProfileImportErrorMessage(event.data));
+        }
+        if (event.type === "done") {
+          if (event.data?.success === false) throw new Error(event.data.error ?? event.data.message ?? "Unknown error");
+          qc.invalidateQueries();
+          const imported = event.data?.imported;
+          const summary = formatProfileImportStats(imported);
+          setProfileImportProgress((current) => {
+            const totalItems = Math.max(1, current?.totalItems ?? 1);
+            return {
+              status: "success",
+              label: "Profile import complete",
+              completedItems: totalItems,
+              totalItems,
+              startedAt,
+              elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+              imported,
+            };
+          });
+          toast.success(summary ? `Imported: ${summary}` : "Profile imported.");
+        }
+      }
+    } catch (err) {
+      const message =
+        err instanceof SyntaxError
+          ? "Import failed. Make sure this is a valid profile JSON file."
+          : `Import failed: ${err instanceof Error ? err.message : "network/server error"}`;
+      setProfileImportProgress({
+        status: "error",
+        label: "Profile import failed",
+        completedItems: 0,
+        totalItems: 1,
+        startedAt,
+        elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+        error: message.replace(/^Import failed:\s*/, ""),
+      });
+      toast.error(message);
     }
     e.target.value = "";
   };
@@ -2643,11 +2858,86 @@ function ImportSettings() {
       </div>
 
       {/* Profile import */}
-      <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 px-3 py-3 text-xs font-semibold ring-1 ring-emerald-500/30 transition-all hover:ring-emerald-500/50 active:scale-[0.98]">
-        <Download size="1rem" />
-        Import Profile (JSON)
-        <input type="file" accept=".json" onChange={handleProfileImport} className="hidden" />
+      <label
+        className={cn(
+          "flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 px-3 py-3 text-xs font-semibold ring-1 ring-emerald-500/30 transition-all hover:ring-emerald-500/50 active:scale-[0.98]",
+          profileImportBusy && "pointer-events-none opacity-75",
+        )}
+      >
+        {profileImportBusy ? <Loader2 size="1rem" className="animate-spin" /> : <Download size="1rem" />}
+        {profileImportBusy ? "Importing Profile..." : "Import Profile (JSON)"}
+        <input
+          type="file"
+          accept=".json"
+          onChange={handleProfileImport}
+          disabled={profileImportBusy}
+          className="hidden"
+        />
       </label>
+
+      {profileImportProgress && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={cn(
+            "flex flex-col gap-2 rounded-lg border px-3 py-2 text-xs",
+            profileImportProgress.status === "error"
+              ? "border-[var(--destructive)]/40 bg-[var(--destructive)]/10 text-[var(--destructive)]"
+              : profileImportProgress.status === "success"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                : "border-emerald-500/30 bg-emerald-500/10 text-[var(--foreground)]",
+          )}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              {profileImportProgress.status === "success" ? (
+                <Check size="0.875rem" className="shrink-0" />
+              ) : profileImportProgress.status === "error" ? (
+                <AlertTriangle size="0.875rem" className="shrink-0" />
+              ) : (
+                <Loader2 size="0.875rem" className="shrink-0 animate-spin text-emerald-500" />
+              )}
+              <span className="truncate font-medium">{profileImportProgress.label}</span>
+            </div>
+            <span className="shrink-0 text-[0.6875rem] text-[var(--muted-foreground)]">
+              {formatProfileImportDuration(profileImportProgress.elapsedSeconds)}
+            </span>
+          </div>
+
+          {profileImportProgress.status !== "error" && (
+            <>
+              <div className="h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all duration-300",
+                    profileImportProgress.status === "success" ? "bg-emerald-500" : "bg-emerald-400",
+                  )}
+                  style={{ width: `${getProfileImportPercent(profileImportProgress)}%` }}
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[0.6875rem] text-[var(--muted-foreground)]">
+                <span>
+                  {profileImportProgress.completedItems}/{profileImportProgress.totalItems} items
+                </span>
+                {estimateProfileImportRemainingSeconds(profileImportProgress) !== null && (
+                  <span>
+                    ETA {formatProfileImportDuration(estimateProfileImportRemainingSeconds(profileImportProgress) ?? 0)}
+                  </span>
+                )}
+              </div>
+              {formatProfileImportStats(profileImportProgress.imported) && (
+                <div className="text-[0.6875rem] text-[var(--muted-foreground)]">
+                  Imported so far: {formatProfileImportStats(profileImportProgress.imported)}
+                </div>
+              )}
+            </>
+          )}
+
+          {profileImportProgress.status === "error" && profileImportProgress.error && (
+            <div className="text-[0.6875rem]">{profileImportProgress.error}</div>
+          )}
+        </div>
+      )}
 
       {/* Marinara import */}
       <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-pink-500/20 to-orange-500/20 px-3 py-3 text-xs font-semibold ring-1 ring-pink-500/30 transition-all hover:ring-pink-500/50 active:scale-[0.98]">
@@ -3228,9 +3518,7 @@ function AdvancedSettings() {
                 {manualUpdateCommand && (
                   <span className="text-[0.625rem] text-[var(--muted-foreground)]">
                     Manual update:{" "}
-                    <code className="break-all rounded bg-[var(--background)] px-1 py-0.5">
-                      {manualUpdateCommand}
-                    </code>
+                    <code className="break-all rounded bg-[var(--background)] px-1 py-0.5">{manualUpdateCommand}</code>
                   </span>
                 )}
               </div>
@@ -3332,7 +3620,10 @@ function AdvancedSettings() {
               <ChevronDown
                 size="0.875rem"
                 aria-hidden="true"
-                className={cn("transition-transform", showQuickRepliesMenu && quickRepliesDrawerOpen ? "" : "-rotate-90")}
+                className={cn(
+                  "transition-transform",
+                  showQuickRepliesMenu && quickRepliesDrawerOpen ? "" : "-rotate-90",
+                )}
               />
             </span>
           </button>
