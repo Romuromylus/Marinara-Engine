@@ -2407,7 +2407,7 @@ function upsertGameNpcAvatarEntries(currentNpcs: GameNpc[], avatarEntries: Scene
       const existing = nextNpcs[existingIndex]!;
       let nextNpc = existing;
 
-      if (!existing.avatarUrl) {
+      if (existing.avatarUrl !== entry.avatarUrl) {
         nextNpc = { ...nextNpc, avatarUrl: entry.avatarUrl };
       }
       if (!nextNpc.description && entry.description) {
@@ -7182,7 +7182,7 @@ export async function gameRoutes(app: FastifyInstance) {
         if (avatarUrl) {
           generatedNpcAvatars.push({
             name: npc.name,
-            avatarUrl: forceNpcAvatar ? `${avatarUrl.split("?")[0]}?v=${Date.now()}` : avatarUrl,
+            avatarUrl: `${avatarUrl.split("?")[0]}?v=${Date.now()}`,
           });
         }
       }
