@@ -70,16 +70,16 @@ test("testKeyword still matches safe regex patterns end-to-end", () => {
 });
 
 test("vmRegexExecutor aborts catastrophic backtracking under timeout", () => {
-  // Construct the canonical ReDoS pair at runtime so isPatternSafe doesn't see the source.
-  // (We're testing the SECOND line of defense — assume isPatternSafe was bypassed.)
-  const evilSource = "^" + "(a|aa)+".slice(0) + "$"; // literal "^(a|aa)+$"
-  const regex = new RegExp(evilSource);
+  // The canonical alternation-overlap ReDoS shape passes isPatternSafe (star-height 1)
+  // but still backtracks catastrophically on the right input. This is exactly the case
+  // the executor's timeout is for — the static check can't predict input-dependent blow-up.
+  const regex = /^(a|aa)+$/;
   const exec = createTimeoutRegexExecutor(50);
   const start = Date.now();
   const result = exec(regex, "a".repeat(28) + "!");
   const elapsed = Date.now() - start;
-  // Either we got a quick false (timeout fired) or, on faster hardware, the regex completed —
-  // but it MUST not run for orders of magnitude past the timeout.
+  // Either timeout fired (result false, elapsed ~50-200ms) or the regex completed quickly
+  // on faster hardware — either way it must NOT pin the thread for orders of magnitude past the timeout.
   assert.equal(result, false);
   assert.ok(elapsed < 1000, `expected timeout to abort within ~1s, took ${elapsed}ms`);
 });

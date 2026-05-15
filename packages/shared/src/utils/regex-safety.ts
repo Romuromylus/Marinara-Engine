@@ -50,7 +50,6 @@ export function isPatternSafe(source: string, options: PatternSafetyOptions = {}
   // regex parser to catch the common ReDoS shapes.
 
   let i = 0;
-  let inCharClass = false;
   let groupDepth = 0;
   // For each open group, the running max star height of atoms inside it.
   const groupInnerHeight: number[] = [];
@@ -87,23 +86,15 @@ export function isPatternSafe(source: string, options: PatternSafetyOptions = {}
       return false; // Trailing backslash
     }
 
-    if (inCharClass) {
-      if (c === "]") inCharClass = false;
-      i += 1;
-      continue;
-    }
-
     if (c === "[") {
-      inCharClass = true;
-      // Character class is one atom; check for quantifier after the closing ]
-      // We'll re-check height when we hit ]; simpler to look ahead.
+      // Character class is one atom; consume the whole class via lookahead and
+      // pick up any quantifier sitting after the closing `]`.
       const closeIdx = findCharClassClose(source, i);
       if (closeIdx === -1) return false;
       const after = source[closeIdx + 1];
       const quantHeight = isQuantifierStart(after) ? 1 : 0;
       recordAtomHeight(quantHeight);
       i = closeIdx + 1;
-      inCharClass = false;
       if (quantHeight > 0) {
         const consumed = consumeQuantifier(source, i, maxRepetition);
         if (consumed === null) return false;
@@ -161,7 +152,7 @@ export function isPatternSafe(source: string, options: PatternSafetyOptions = {}
     }
   }
 
-  if (groupDepth !== 0 || inCharClass) return false; // Unbalanced
+  if (groupDepth !== 0) return false; // Unbalanced
   if (topLevelHeight > maxStarHeight) return false;
   return true;
 }
