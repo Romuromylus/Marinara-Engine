@@ -1178,6 +1178,11 @@ export function GameNarration({
     | { kind: "assistant"; messageId: string; segmentIndex: number; segment: NarrationSegment; role: Message["role"] }
     | { kind: "user"; messageId: string; segment: NarrationSegment };
 
+  const getFlatLogEntryKey = useCallback((entry: FlatLogEntry) => {
+    if (entry.kind === "assistant") return `${entry.messageId}:${entry.segmentIndex}`;
+    return `${entry.messageId}:0`;
+  }, []);
+
   const flatLogEntries = useMemo<FlatLogEntry[]>(() => {
     const out: FlatLogEntry[] = [];
     for (const msg of messages) {
@@ -4228,6 +4233,19 @@ export function GameNarration({
                             if (canDeleteMessage && sourceMessageId) {
                               onDeleteMessage?.(sourceMessageId);
                             } else if (canDeleteThisSegment && sourceMessageId) {
+                              if (messageOffset > 0 && pastReviewEntry) {
+                                const deletedKey = `${sourceMessageId}:${sourceSegmentIndex}`;
+                                const currentKey = getFlatLogEntryKey(pastReviewEntry);
+                                const deletedLogIndex = flatLogEntries.findIndex(
+                                  (entry) => getFlatLogEntryKey(entry) === deletedKey,
+                                );
+                                const currentLogIndex = flatLogEntries.findIndex(
+                                  (entry) => getFlatLogEntryKey(entry) === currentKey,
+                                );
+                                if (deletedLogIndex >= currentLogIndex && currentLogIndex >= 0) {
+                                  onStepForward?.();
+                                }
+                              }
                               onDeleteSegment?.(sourceMessageId, sourceSegmentIndex);
                             }
                           }}
