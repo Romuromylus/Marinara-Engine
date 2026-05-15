@@ -3,40 +3,58 @@
 // preview cannot drift from the real activation rules.
 
 import type { SelectiveLogic } from "../types/lorebook.js";
+import { isPatternSafe } from "./regex-safety.js";
+
+/** Pluggable executor for compiled regex test calls. Server passes a vm-timeout-bounded executor. */
+export type RegexExecutor = (regex: RegExp, text: string) => boolean;
+
+const defaultRegexExecutor: RegexExecutor = (regex, text) => regex.test(text);
 
 export interface KeywordMatchOptions {
   useRegex: boolean;
   matchWholeWords: boolean;
   caseSensitive: boolean;
+  /** Optional override for executing the compiled regex. Server injects a vm.runInNewContext-bounded
+   *  executor so a pathological pattern that survived the static safety check can still be aborted. */
+  regexExecutor?: RegexExecutor;
+}
+
+function literalMatch(keyword: string, text: string, options: KeywordMatchOptions): boolean {
+  const needle = options.caseSensitive ? keyword : keyword.toLowerCase();
+  const haystack = options.caseSensitive ? text : text.toLowerCase();
+  return haystack.includes(needle);
 }
 
 /** Test whether a single keyword would match the given text under the given options. */
 export function testKeyword(keyword: string, text: string, options: KeywordMatchOptions): boolean {
   if (!keyword) return false;
+  const exec = options.regexExecutor ?? defaultRegexExecutor;
 
   try {
     if (options.useRegex) {
+      // Static ReDoS guard: refuse to compile patterns with nested quantifiers,
+      // pathological repetition counts, or oversized sources. Fall back to literal
+      // substring match — same posture as the existing invalid-regex catch below.
+      if (!isPatternSafe(keyword)) {
+        return literalMatch(keyword, text, options);
+      }
       const flags = options.caseSensitive ? "g" : "gi";
       const regex = new RegExp(keyword, flags);
-      return regex.test(text);
+      return exec(regex, text);
     }
 
-    const needle = options.caseSensitive ? keyword : keyword.toLowerCase();
-    const haystack = options.caseSensitive ? text : text.toLowerCase();
-
     if (options.matchWholeWords) {
+      const needle = options.caseSensitive ? keyword : keyword.toLowerCase();
       const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const flags = options.caseSensitive ? "g" : "gi";
       const regex = new RegExp(`\\b${escaped}\\b`, flags);
-      return regex.test(text);
+      return exec(regex, text);
     }
 
-    return haystack.includes(needle);
+    return literalMatch(keyword, text, options);
   } catch {
-    // Invalid regex — fall back to plain substring
-    const needle = options.caseSensitive ? keyword : keyword.toLowerCase();
-    const haystack = options.caseSensitive ? text : text.toLowerCase();
-    return haystack.includes(needle);
+    // Invalid regex or executor failure — fall back to plain substring
+    return literalMatch(keyword, text, options);
   }
 }
 
