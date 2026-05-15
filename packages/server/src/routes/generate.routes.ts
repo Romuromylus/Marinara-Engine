@@ -5165,6 +5165,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   type: "agent_error",
                   data: {
                     agentType: "knowledge-retrieval",
+                    agentName: knowledgeRetrievalAgent!.name,
                     error: err instanceof Error ? err.message : "Knowledge retrieval failed",
                   },
                 });
@@ -7079,7 +7080,11 @@ export async function generateRoutes(app: FastifyInstance) {
             reply.raw.write(
               `data: ${JSON.stringify({
                 type: "agents_retry_failed",
-                data: stillFailed.map((r) => ({ agentType: r.agentType, error: r.error })),
+                data: stillFailed.map((r) => ({
+                  agentType: r.agentType,
+                  agentName: resolvedAgents.find((agent) => agent.type === r.agentType)?.name ?? r.agentType,
+                  error: r.error,
+                })),
               })}\n\n`,
             );
           }
@@ -7200,6 +7205,7 @@ export async function generateRoutes(app: FastifyInstance) {
                       type: "agent_error",
                       data: {
                         agentType: "background",
+                        agentName: currentBackgroundAgent?.name ?? "Background",
                         error:
                           "No image generation connection set on the Background agent, and no default agent image connection is configured. Assign one in Settings → Agents → Background.",
                       },
@@ -7254,6 +7260,7 @@ export async function generateRoutes(app: FastifyInstance) {
                         type: "agent_error",
                         data: {
                           agentType: "background",
+                          agentName: currentBackgroundAgent?.name ?? "Background",
                           error: "Background image generation failed. Check the image connection and server logs.",
                         },
                       });
@@ -7266,6 +7273,7 @@ export async function generateRoutes(app: FastifyInstance) {
                     type: "agent_error",
                     data: {
                       agentType: "background",
+                      agentName: currentBackgroundAgent?.name ?? "Background",
                       error: `Background image generation failed: ${bgData.error}`,
                     },
                   });
@@ -8197,6 +8205,7 @@ export async function generateRoutes(app: FastifyInstance) {
                         type: "agent_error",
                         data: {
                           agentType: "illustrator",
+                          agentName: illustratorAgent?.name ?? "Illustrator",
                           error: `Image generation failed: ${illErr instanceof Error ? illErr.message : String(illErr)}`,
                         },
                       })}\n\n`,
@@ -8210,6 +8219,7 @@ export async function generateRoutes(app: FastifyInstance) {
                     type: "agent_error",
                     data: {
                       agentType: "illustrator",
+                      agentName: illustratorAgent?.name ?? "Illustrator",
                       error:
                         "No image generation connection set on the Illustrator agent, and no default Illustrator image connection is configured. Go to Settings → Connections and mark an image generation connection as the default for Illustrator, or assign one directly in Settings → Agents → Illustrator.",
                     },

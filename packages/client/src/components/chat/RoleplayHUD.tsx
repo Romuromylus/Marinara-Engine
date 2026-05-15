@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { api } from "../../lib/api-client";
+import type { AgentFailure } from "../../lib/agent-failures";
 import { TrackerPanelIcon } from "../ui/TrackerPanelIcon";
 import { useGameStateStore } from "../../stores/game-state.store";
 import { useAgentStore } from "../../stores/agent.store";
@@ -134,6 +135,7 @@ export function RoleplayHUD({
   const thoughtBubbles = useAgentStore((s) => s.thoughtBubbles);
   const isAgentProcessing = useAgentStore((s) => s.isProcessing);
   const failedAgentTypes = useAgentStore((s) => s.failedAgentTypes);
+  const failedAgentFailures = useAgentStore((s) => s.failedAgentFailures);
   const dismissThoughtBubble = useAgentStore((s) => s.dismissThoughtBubble);
   const clearThoughtBubbles = useAgentStore((s) => s.clearThoughtBubbles);
   const resetAgentStore = useAgentStore((s) => s.reset);
@@ -252,6 +254,7 @@ export function RoleplayHUD({
         onRetriggerTrackers={onRetriggerTrackers}
         onRetryFailedAgents={onRetryFailedAgents}
         failedAgentTypes={failedAgentTypes}
+        failedAgentFailures={failedAgentFailures}
         showInjectionsTab={showInjectionsTab}
         showSecretPlotTab={showSecretPlotTab}
       />
@@ -465,6 +468,7 @@ interface ActionsGroupProps {
   onRetriggerTrackers?: () => void;
   onRetryFailedAgents?: () => void;
   failedAgentTypes: string[];
+  failedAgentFailures: AgentFailure[];
   showInjectionsTab?: boolean;
   showSecretPlotTab?: boolean;
 }
@@ -486,6 +490,7 @@ function ActionsGroup({
   onRetriggerTrackers,
   onRetryFailedAgents,
   failedAgentTypes,
+  failedAgentFailures,
   showInjectionsTab,
   showSecretPlotTab,
 }: ActionsGroupProps) {
@@ -561,6 +566,7 @@ function ActionsGroup({
             onRetriggerTrackers={onRetriggerTrackers}
             onRetryFailedAgents={onRetryFailedAgents}
             failedAgentTypes={failedAgentTypes}
+            failedAgentFailures={failedAgentFailures}
             onClose={() => setAgentsOpen(false)}
             showInjectionsTab={showInjectionsTab}
             showSecretPlotTab={showSecretPlotTab}

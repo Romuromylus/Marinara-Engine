@@ -6,6 +6,7 @@ import type { AvatarCropValue } from "../lib/utils";
 import { useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "../lib/api-client";
+import { formatAgentFailuresToast, toAgentFailure } from "../lib/agent-failures";
 import { chatBackgroundMetadataToUrl } from "../lib/backgrounds";
 import { agentKeys } from "./use-agents";
 import type { PendingCardUpdate } from "../stores/agent.store";
@@ -557,7 +558,7 @@ export function useGenerate() {
   const setCyoaChoices = useAgentStore((s) => s.setCyoaChoices);
   const clearCyoaChoices = useAgentStore((s) => s.clearCyoaChoices);
   const enqueuePendingCardUpdate = useAgentStore((s) => s.enqueuePendingCardUpdate);
-  const setFailedAgentTypes = useAgentStore((s) => s.setFailedAgentTypes);
+  const setFailedAgentFailures = useAgentStore((s) => s.setFailedAgentFailures);
   const clearFailedAgentTypes = useAgentStore((s) => s.clearFailedAgentTypes);
   const setGameState = useGameStateStore((s) => s.setGameState);
 
@@ -1359,8 +1360,10 @@ export function useGenerate() {
             }
 
             case "agent_error": {
-              const errData = event.data as { agentType: string; error: string };
-              toast.error(errData.error);
+              const errData = event.data as { agentType: string; agentName?: string | null; error: string };
+              const failure = toAgentFailure(errData);
+              setFailedAgentFailures([failure]);
+              showError(formatAgentFailuresToast([failure]));
               break;
             }
 
@@ -1521,12 +1524,14 @@ export function useGenerate() {
             }
 
             case "agents_retry_failed": {
-              const failedList = event.data as Array<{ agentType: string; error: string | null }>;
-              const types = failedList.map((f) => f.agentType);
-              setFailedAgentTypes(types);
-              showError(
-                `${types.length} agent${types.length > 1 ? "s" : ""} failed after retry. Use the retry button in the chat header to try again.`,
-              );
+              const failedList = event.data as Array<{
+                agentType: string;
+                agentName?: string | null;
+                error: string | null;
+              }>;
+              const failures = failedList.map(toAgentFailure);
+              setFailedAgentFailures(failures);
+              showError(formatAgentFailuresToast(failures));
               break;
             }
           }
@@ -1740,7 +1745,7 @@ export function useGenerate() {
       clearCyoaChoices,
       enqueuePendingCardUpdate,
       clearFailedAgentTypes,
-      setFailedAgentTypes,
+      setFailedAgentFailures,
       setGameState,
     ],
   );
@@ -1773,6 +1778,7 @@ export function useGenerate() {
         }
 
         let hasError = false;
+        const failedRetryFailures: Array<ReturnType<typeof toAgentFailure>> = [];
         for await (const event of api.streamEvents(
           "/generate/retry-agents",
           {
@@ -1907,17 +1913,22 @@ export function useGenerate() {
               }
               if (!result.success && result.error) {
                 hasError = true;
-                showError(`${result.agentName ?? result.agentType} failed: ${result.error}`);
+                const failure = toAgentFailure(result);
+                failedRetryFailures.push(failure);
+                setFailedAgentFailures(failedRetryFailures);
+                showError(formatAgentFailuresToast([failure]));
               }
               break;
             }
             case "agents_retry_failed": {
-              const failedList = event.data as Array<{ agentType: string; error: string | null }>;
-              const types = failedList.map((f) => f.agentType);
-              setFailedAgentTypes(types);
-              showError(
-                `${types.length} agent${types.length > 1 ? "s" : ""} failed after retry. Use the retry button in the chat header to try again.`,
-              );
+              const failedList = event.data as Array<{
+                agentType: string;
+                agentName?: string | null;
+                error: string | null;
+              }>;
+              const failures = failedList.map(toAgentFailure);
+              setFailedAgentFailures(failures);
+              showError(formatAgentFailuresToast(failures));
               break;
             }
             case "game_state":
@@ -1944,9 +1955,11 @@ export function useGenerate() {
               break;
             }
             case "agent_error": {
-              const errData = event.data as { agentType: string; error: string };
+              const errData = event.data as { agentType: string; agentName?: string | null; error: string };
               hasError = true;
-              showError(errData.error || "Agent retry failed");
+              const failure = toAgentFailure(errData);
+              setFailedAgentFailures([failure]);
+              showError(formatAgentFailuresToast([failure]));
               break;
             }
             case "error": {
@@ -1988,7 +2001,7 @@ export function useGenerate() {
       clearFailedAgentTypes,
       clearThoughtBubbles,
       setCyoaChoices,
-      setFailedAgentTypes,
+      setFailedAgentFailures,
       setProcessing,
       setGameState,
       qc,
