@@ -115,6 +115,7 @@ import { GameWidgetPanel, GameWidgetSessionPrepModal, MobileWidgetPanel } from "
 import { WeatherEffects } from "../chat/WeatherEffects";
 import { GameInventory } from "./GameInventory";
 import { GameReadableDisplay } from "./GameReadableDisplay";
+import { buildMissingSceneAssetGenerationPayload } from "./game-asset-generation-payload";
 import { ChatGalleryDrawer } from "../chat/ChatGalleryDrawer";
 import type { ReadableTag } from "../../lib/game-tag-parser";
 import type { DirectionCommand, GameNpc } from "@marinara-engine/shared";
@@ -995,16 +996,6 @@ function addInventoryUnit<T extends { name: string; quantity: number }>(items: T
 
 function normalizeInventoryName(value: string): string {
   return value.trim().replace(/\s+/g, " ");
-}
-
-function getMissingBackgroundTag(
-  backgroundTag: string | undefined | null,
-  manifest: Record<string, { path: string }> | null,
-): string | null {
-  const cleaned = backgroundTag?.trim();
-  if (!cleaned || cleaned === "black" || cleaned === "none") return null;
-  const resolved = resolveAssetTag(cleaned, "backgrounds", manifest);
-  return manifest?.[resolved] ? null : cleaned;
 }
 
 function interactiveCommandKey(chatId: string, messageId: string): string {
@@ -2829,28 +2820,25 @@ export function GameSurface({
     chatMeta.gameImageConnectionId.trim().length > 0;
 
   const missingSceneAssetGeneration = useMemo(() => {
-    if (!gameImageGenerationEnabled) return null;
-    if (!activeChatId) return null;
-
-    const unresolvedBackground = getMissingBackgroundTag(
-      currentBackground || (chatMeta.gameSceneBackground as string | undefined),
-      assetManifest?.assets ?? null,
-    );
-
-    if (!unresolvedBackground && npcsNeedingAvatars.length === 0) return null;
-
-    return {
-      chatId: activeChatId,
-      backgroundTag: unresolvedBackground ?? undefined,
-      npcsNeedingAvatars: npcsNeedingAvatars.length > 0 ? npcsNeedingAvatars : undefined,
-    };
+    return buildMissingSceneAssetGenerationPayload({
+      gameImageGenerationEnabled,
+      activeChatId,
+      currentBackground,
+      savedSceneBackground: chatMeta.gameSceneBackground as string | undefined,
+      assetMap: assetManifest?.assets ?? null,
+      sceneAssetNpcs,
+      npcAvatarLookup,
+      npcsNeedingAvatars,
+    });
   }, [
     activeChatId,
     assetManifest,
     chatMeta.gameSceneBackground,
     currentBackground,
     gameImageGenerationEnabled,
+    npcAvatarLookup,
     npcsNeedingAvatars,
+    sceneAssetNpcs,
   ]);
 
   const retryableAssetGeneration = pendingAssetGeneration ?? missingSceneAssetGeneration;
