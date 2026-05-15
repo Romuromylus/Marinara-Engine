@@ -36,6 +36,13 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+export function shouldAbortOnPassiveGenerationDisconnect(args: {
+  chatMode: string;
+  impersonate?: boolean;
+}): boolean {
+  return args.chatMode !== "conversation" || args.impersonate === true;
+}
+
 export function mergeCustomParameters(
   base: Record<string, unknown> | null | undefined,
   next: Record<string, unknown> | null | undefined,
@@ -235,6 +242,16 @@ export function shouldEnableAgentsForGeneration({
   impersonateBlockAgents: boolean;
 }): boolean {
   return chatEnableAgents && chatMode !== "conversation" && !(impersonate && impersonateBlockAgents);
+}
+
+export function shouldInjectIdentityFallback({
+  chatMode,
+  presetId,
+}: {
+  chatMode: string;
+  presetId: string | null | undefined;
+}): boolean {
+  return chatMode !== "game" && !presetId;
 }
 
 /** Parse connection/chat stored generation parameters without injecting schema defaults. */
