@@ -26,7 +26,7 @@ type MissingSceneAssetGenerationInput = {
   npcsNeedingAvatars: Array<{ name: string; description: string }>;
 };
 
-function normalizeSceneAssetNameForGeneration(value: string): string {
+export function normalizeSceneAssetNameForGeneration(value: string): string {
   return value.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 }
 

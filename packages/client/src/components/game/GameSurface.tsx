@@ -115,7 +115,10 @@ import { GameWidgetPanel, GameWidgetSessionPrepModal, MobileWidgetPanel } from "
 import { WeatherEffects } from "../chat/WeatherEffects";
 import { GameInventory } from "./GameInventory";
 import { GameReadableDisplay } from "./GameReadableDisplay";
-import { buildMissingSceneAssetGenerationPayload } from "./game-asset-generation-payload";
+import {
+  buildMissingSceneAssetGenerationPayload,
+  normalizeSceneAssetNameForGeneration,
+} from "./game-asset-generation-payload";
 import { ChatGalleryDrawer } from "../chat/ChatGalleryDrawer";
 import type { ReadableTag } from "../../lib/game-tag-parser";
 import type { DirectionCommand, GameNpc } from "@marinara-engine/shared";
@@ -780,7 +783,7 @@ function extractNarrationNpcCandidates(
     const name = rawName.trim();
     if (!isLikelyNarrationNpcName(name)) return;
 
-    const normalizedName = normalizeSceneAssetName(name);
+    const normalizedName = normalizeSceneAssetNameForGeneration(name);
     if (
       !normalizedName ||
       excluded.has(normalizedName) ||
