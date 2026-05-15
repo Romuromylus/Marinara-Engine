@@ -4697,14 +4697,13 @@ export function ChatSettingsDrawer({
             </div>
           </Section>
 
-          {/* Function Calling — hidden for conversation mode */}
-          {!isConversation && (
-            <Section
-              label="Function Calling"
-              icon={<Wrench size="0.875rem" />}
-              count={activeToolIds.length}
-              help="When enabled, the AI can call built-in tools like dice rolls, game state updates, and lorebook searches during conversation."
-            >
+          {/* Function Calling */}
+          <Section
+            label="Function Calling"
+            icon={<Wrench size="0.875rem" />}
+            count={activeToolIds.length}
+            help="When enabled, the AI can call built-in tools like dice rolls, game state updates, and lorebook searches during conversation."
+          >
               <div className="space-y-2">
                 <button
                   onClick={() => {
@@ -4867,7 +4866,6 @@ export function ChatSettingsDrawer({
                 )}
               </div>
             </Section>
-          )}
 
           {/* Memory Recall — roleplay/game modes: show after Function Calling */}
           {!isConversation && import.meta.env.VITE_MARINARA_LITE !== "true" && (
