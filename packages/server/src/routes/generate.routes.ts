@@ -147,7 +147,9 @@ import {
   resolveRegenerationGameStateAnchor,
   resolveVisibleGameStateAnchor,
   shouldPreferLatestVisibleGameState,
+  shouldAbortOnPassiveGenerationDisconnect,
   shouldEnableAgentsForGeneration,
+  shouldInjectIdentityFallback,
   wrapFields,
   type PromptAttachment,
   type SimpleMessage,
@@ -646,6 +648,131 @@ const REVIEWABLE_WRITER_AGENT_TYPES = new Set(
   ).map((agent) => agent.id),
 );
 
+type RuntimeAgentSectionType = string;
+
+const RUNTIME_AGENT_SECTION_TOKEN_PREFIX = "__MARINARA_RUNTIME_AGENT_SECTION__";
+
+interface RuntimeAgentSectionTokens {
+  placeholder: string;
+  start: string;
+  end: string;
+}
+
+function toRuntimeAgentSectionType(
+  agentType: string,
+  eligibleAgentTypes: ReadonlySet<string>,
+): RuntimeAgentSectionType | null {
+  return eligibleAgentTypes.has(agentType) ? agentType : null;
+}
+
+function makeRuntimeAgentSectionTokens(
+  agentType: RuntimeAgentSectionType,
+  nonce: string,
+): RuntimeAgentSectionTokens {
+  return {
+    placeholder: `${RUNTIME_AGENT_SECTION_TOKEN_PREFIX}${nonce}__${agentType}__VALUE__`,
+    start: `${RUNTIME_AGENT_SECTION_TOKEN_PREFIX}${nonce}__${agentType}__START__`,
+    end: `${RUNTIME_AGENT_SECTION_TOKEN_PREFIX}${nonce}__${agentType}__END__`,
+  };
+}
+
+function replaceRuntimeAgentSection(
+  messages: Array<{ content: string }>,
+  tokens: RuntimeAgentSectionTokens,
+  text: string,
+): boolean {
+  let replaced = false;
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    if (!message.content.includes(tokens.placeholder)) continue;
+    messages[i] = {
+      ...message,
+      content: message.content
+        .split(tokens.start)
+        .join("")
+        .split(tokens.end)
+        .join("")
+        .split(tokens.placeholder)
+        .join(text),
+    };
+    replaced = true;
+  }
+  return replaced;
+}
+
+export function splitRuntimeHandledAgentInjectionsForTest(
+  messages: Array<{ content: string }>,
+  tokenMap: ReadonlyMap<RuntimeAgentSectionType, RuntimeAgentSectionTokens>,
+  injections: AgentInjection[],
+): { fallbackInjections: AgentInjection[]; handledTypes: Set<string> } {
+  const fallbackInjections: AgentInjection[] = [];
+  const handledTypes = new Set<string>();
+  for (const injection of injections) {
+    const tokens = tokenMap.get(injection.agentType);
+    const handledByPresetSection =
+      tokens !== undefined && replaceRuntimeAgentSection(messages, tokens, injection.text);
+    if (handledByPresetSection) {
+      handledTypes.add(injection.agentType);
+    } else {
+      fallbackInjections.push(injection);
+    }
+  }
+  return { fallbackInjections, handledTypes };
+}
+
+const splitRuntimeHandledAgentInjections = splitRuntimeHandledAgentInjectionsForTest;
+
+export function clearUnusedRuntimeAgentSectionsForTest(
+  messages: Array<{ content: string }>,
+  tokenEntries: Iterable<[RuntimeAgentSectionType, RuntimeAgentSectionTokens]>,
+): void {
+  let changed = false;
+  for (const [, tokens] of tokenEntries) {
+    const sectionPattern = new RegExp(
+      escapeRegExp(tokens.start) + "[\\s\\S]*?" + escapeRegExp(tokens.end),
+      "g",
+    );
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]!;
+      if (!message.content.includes(tokens.start)) continue;
+      const content = message.content.replace(sectionPattern, "").trim();
+      if (content) {
+        messages[i] = { ...message, content };
+      } else {
+        messages.splice(i, 1);
+      }
+      changed = true;
+    }
+  }
+  if (changed) {
+    pruneEmptyPromptWrappers(messages);
+  }
+}
+
+const clearUnusedRuntimeAgentSections = clearUnusedRuntimeAgentSectionsForTest;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function pruneEmptyPromptWrappers(messages: Array<{ content: string }>): void {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const content = messages[i]!.content.trim();
+    if (isEmptyPromptWrapper(content)) {
+      messages.splice(i, 1);
+    } else if (content !== messages[i]!.content) {
+      messages[i] = { ...messages[i]!, content };
+    }
+  }
+}
+
+function isEmptyPromptWrapper(content: string): boolean {
+  if (!content) return true;
+  const xmlMatch = content.match(/^<([A-Za-z][\w.-]*)>\s*<\/\1>$/);
+  if (xmlMatch) return true;
+  return /^#{1,6}\s+\S.*$/m.test(content) && content.split(/\r?\n/).slice(1).every((line) => !line.trim());
+}
+
 function normalizeChatTopP(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   if (value <= 0) return 1;
@@ -883,8 +1010,24 @@ export async function generateRoutes(app: FastifyInstance) {
     startSseReply(reply, { "X-Accel-Buffering": "no" });
 
     let generationComplete = false;
+    let clientDisconnected = false;
+    const originalSseWrite = reply.raw.write.bind(reply.raw);
+    reply.raw.write = ((chunk: any, encodingOrCallback?: any, callback?: any) => {
+      if (clientDisconnected || reply.raw.destroyed) return false;
+      try {
+        return originalSseWrite(chunk, encodingOrCallback, callback);
+      } catch {
+        return false;
+      }
+    }) as typeof reply.raw.write;
+
     const onClose = () => {
       if (generationComplete) return;
+      clientDisconnected = true;
+      if (!shouldAbortOnPassiveGenerationDisconnect({ chatMode: requestChatMode, impersonate: input.impersonate })) {
+        logger.info("[generate] Conversation client disconnected; generation will continue for chat: %s", input.chatId);
+        return;
+      }
       logger.info("[abort] Client disconnected — aborting generation");
       abortController.abort();
       if (activeGenerations) activeGenerations.delete(input.chatId);
@@ -1131,6 +1274,8 @@ export async function generateRoutes(app: FastifyInstance) {
       let assistantPrefill = "";
       let customParameters: Record<string, unknown> = {};
       let wrapFormat: "xml" | "markdown" | "none" = "xml";
+      const runtimeAgentSectionTypes = new Set<RuntimeAgentSectionType>();
+      const runtimeAgentSectionTokens = new Map<RuntimeAgentSectionType, RuntimeAgentSectionTokens>();
       const connectionMaxContext = normalizeMaxContext(conn.maxContext);
       const knownModelContext = normalizeMaxContext(findKnownModel(conn.provider as APIProvider, conn.model)?.context);
       let effectiveMaxContext = minContextLimit(connectionMaxContext, knownModelContext);
@@ -1150,6 +1295,16 @@ export async function generateRoutes(app: FastifyInstance) {
         : [];
       const chatActiveAgentIds: string[] = filterGameInternalAgentIds(chatMode, persistedChatActiveAgentIds).filter(
         (agentId) => !(gameSpotifyMusicEnabled && agentId === "spotify"),
+      );
+      const runtimeSectionEligibleAgentTypes = new Set(
+        BUILT_IN_AGENTS.filter(
+          (agent) =>
+            chatActiveAgentIds.includes(agent.id) &&
+            agent.phase === "pre_generation" &&
+            agent.id !== "html" &&
+            resolveAgentResultType({ type: agent.id, settings: getDefaultBuiltInAgentSettings(agent.id) }) ===
+              "context_injection",
+        ).map((agent) => agent.id),
       );
       const chatActiveLorebookIds: string[] = Array.isArray(chatMeta.activeLorebookIds)
         ? (chatMeta.activeLorebookIds as string[])
@@ -1286,6 +1441,34 @@ export async function generateRoutes(app: FastifyInstance) {
           presets.listGroups(presetId),
           presets.listChoiceBlocksForPreset(presetId),
         ]);
+        for (const section of sections) {
+          if (section.enabled !== "true" || section.isMarker !== "true" || !section.markerConfig) continue;
+          try {
+            const markerConfig = JSON.parse(section.markerConfig) as { type?: unknown; agentType?: unknown };
+            const runtimeType =
+              markerConfig.type === "agent_data" && typeof markerConfig.agentType === "string"
+                ? toRuntimeAgentSectionType(markerConfig.agentType, runtimeSectionEligibleAgentTypes)
+                : null;
+            if (runtimeType) runtimeAgentSectionTypes.add(runtimeType);
+          } catch {
+            /* ignore malformed marker config */
+          }
+        }
+        const runtimeAgentNonce = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+        const runtimeAgentData = Object.fromEntries(
+          Array.from(runtimeAgentSectionTypes).map((agentType) => {
+            const tokens = makeRuntimeAgentSectionTokens(agentType, runtimeAgentNonce);
+            runtimeAgentSectionTokens.set(agentType, tokens);
+            return [
+              agentType,
+              {
+                text: tokens.placeholder,
+                startToken: tokens.start,
+                endToken: tokens.end,
+              },
+            ];
+          }),
+        );
 
         const assemblerInput: AssemblerInput = {
           db: app.db,
@@ -1329,6 +1512,7 @@ export async function generateRoutes(app: FastifyInstance) {
             typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
               ? (chatMeta.groupScenarioText as string).trim()
               : null,
+          runtimeAgentData,
         };
 
         const assembled = await assemblePrompt(assemblerInput);
@@ -3134,10 +3318,10 @@ export async function generateRoutes(app: FastifyInstance) {
         return "Narrator";
       };
 
-      // ── Fallback: inject character & persona info if the preset didn't include them ──
+      // ── Fallback: inject character & persona info only when no prompt preset is active ──
       // In game mode the GM prompt already includes party members and player persona
       // in the <party> section, so skip fallback injection to avoid duplication.
-      if (chatMode !== "game") {
+      if (shouldInjectIdentityFallback({ chatMode, presetId })) {
         const allContent = finalMessages.map((m) => m.content).join("\n");
         const fallbackCharInfo = manualPromptTargetCharId
           ? charInfo.filter((c) => c.id === manualPromptTargetCharId)
@@ -5149,9 +5333,15 @@ export async function generateRoutes(app: FastifyInstance) {
           }
         }
 
+        const runtimeHandledPreGen = splitRuntimeHandledAgentInjections(
+          finalMessages,
+          runtimeAgentSectionTokens,
+          contextInjections,
+        );
+
         // Inject pre-gen agent context at depth 0 (very bottom of prompt)
-        if (contextInjections.length > 0) {
-          const wrapped = formatAgentInjections(contextInjections, wrapFormat);
+        if (runtimeHandledPreGen.fallbackInjections.length > 0) {
+          const wrapped = formatAgentInjections(runtimeHandledPreGen.fallbackInjections, wrapFormat);
           finalMessages = injectAtDepth(finalMessages, [{ content: wrapped, role: "system", depth: 0 }]);
         }
 
@@ -5160,7 +5350,14 @@ export async function generateRoutes(app: FastifyInstance) {
           const krText =
             typeof krResult.data === "string" ? krResult.data : ((krResult.data as { text?: string })?.text ?? "");
           if (krText) {
-            appendSeparateAgentInjection("knowledge-retrieval", krText);
+            const tokens = runtimeAgentSectionTokens.get("knowledge-retrieval");
+            const handledByPresetSection =
+              !runtimeHandledPreGen.handledTypes.has("knowledge-retrieval") &&
+              tokens !== undefined &&
+              replaceRuntimeAgentSection(finalMessages, tokens, krText);
+            if (!handledByPresetSection) {
+              appendSeparateAgentInjection("knowledge-retrieval", krText);
+            }
             contextInjections.push({ agentType: "knowledge-retrieval", text: krText });
           }
         }
@@ -5172,10 +5369,18 @@ export async function generateRoutes(app: FastifyInstance) {
               ? routerResult.data
               : ((routerResult.data as { text?: string })?.text ?? "");
           if (routerText) {
-            appendSeparateAgentInjection("knowledge-router", routerText);
+            const tokens = runtimeAgentSectionTokens.get("knowledge-router");
+            const handledByPresetSection =
+              !runtimeHandledPreGen.handledTypes.has("knowledge-router") &&
+              tokens !== undefined &&
+              replaceRuntimeAgentSection(finalMessages, tokens, routerText);
+            if (!handledByPresetSection) {
+              appendSeparateAgentInjection("knowledge-router", routerText);
+            }
             contextInjections.push({ agentType: "knowledge-router", text: routerText });
           }
         }
+        clearUnusedRuntimeAgentSections(finalMessages, runtimeAgentSectionTokens);
       } else if (input.regenerateMessageId) {
         // Regeneration — try to reuse cached context injections from the original generation.
         // This must run regardless of whether `hasPreGenAgents` is true, because the cached
@@ -5251,10 +5456,16 @@ export async function generateRoutes(app: FastifyInstance) {
         // Without this split, KR/Router cached output would be replayed in the wrong prompt
         // position with different wrapping than the original generation, subtly changing the
         // model's behavior on regenerate/swipe.
-        const cachedPipelineInjections = contextInjections.filter(
+        const runtimeHandledCached = splitRuntimeHandledAgentInjections(
+          finalMessages,
+          runtimeAgentSectionTokens,
+          contextInjections,
+        );
+
+        const cachedPipelineInjections = runtimeHandledCached.fallbackInjections.filter(
           (inj) => !SEPARATE_INJECTION_AGENTS.has(inj.agentType),
         );
-        const cachedSeparateInjections = contextInjections.filter((inj) =>
+        const cachedSeparateInjections = runtimeHandledCached.fallbackInjections.filter((inj) =>
           SEPARATE_INJECTION_AGENTS.has(inj.agentType),
         );
 
@@ -5264,8 +5475,17 @@ export async function generateRoutes(app: FastifyInstance) {
         }
 
         for (const inj of cachedSeparateInjections) {
-          appendSeparateAgentInjection(inj.agentType as "knowledge-retrieval" | "knowledge-router", inj.text);
+          const runtimeType = toRuntimeAgentSectionType(inj.agentType, runtimeSectionEligibleAgentTypes);
+          const tokens = runtimeType ? runtimeAgentSectionTokens.get(runtimeType) : undefined;
+          const handledByPresetSection =
+            tokens !== undefined && replaceRuntimeAgentSection(finalMessages, tokens, inj.text);
+          if (!handledByPresetSection) {
+            appendSeparateAgentInjection(inj.agentType as "knowledge-retrieval" | "knowledge-router", inj.text);
+          }
         }
+        clearUnusedRuntimeAgentSections(finalMessages, runtimeAgentSectionTokens);
+      } else {
+        clearUnusedRuntimeAgentSections(finalMessages, runtimeAgentSectionTokens);
       }
 
       // ────────────────────────────────────────
@@ -9379,7 +9599,9 @@ export async function generateRoutes(app: FastifyInstance) {
       }
       reply.raw.off("close", onClose);
       if (activeGenerations) activeGenerations.delete(input.chatId);
-      reply.raw.end();
+      if (!clientDisconnected && !reply.raw.destroyed) {
+        reply.raw.end();
+      }
     }
   });
 
