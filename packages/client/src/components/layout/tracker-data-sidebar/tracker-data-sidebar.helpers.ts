@@ -9,6 +9,7 @@ import type {
 } from "@marinara-engine/shared";
 import type { SpriteInfo } from "../../../hooks/use-characters";
 import {
+  applyTrackerCardPaintOpacity,
   getTrackerCardFinish,
   getTrackerCardPaintOpacity,
   getTrackerCardPortraitStageBackground,
@@ -472,54 +473,15 @@ function scaleOpacity(value: string, opacity: number) {
   return (Number(value) * opacityWeight(opacity)).toFixed(3);
 }
 
-function splitCssArgs(value: string) {
-  const args: string[] = [];
-  let current = "";
-  let depth = 0;
-
-  for (const char of value) {
-    if (char === "(") depth += 1;
-    if (char === ")") depth = Math.max(0, depth - 1);
-
-    if (char === "," && depth === 0) {
-      args.push(current.trim());
-      current = "";
-      continue;
-    }
-
-    current += char;
-  }
-
-  if (current.trim()) args.push(current.trim());
-  return args;
-}
-
-function applyPaintOpacity(value: string, opacity: number) {
-  const paintOpacity = clampPercent(opacity);
-  if (paintOpacity >= 100) return value;
-
-  const gradientMatch = value.match(/^linear-gradient\((.*)\)$/i);
-  if (!gradientMatch) {
-    return `color-mix(in srgb, ${value} ${paintOpacity}%, transparent)`;
-  }
-
-  const args = splitCssArgs(gradientMatch[1] ?? "");
-  if (args.length < 2) return value;
-
-  const [direction, ...stops] = args;
-  const transparentStops = stops.map((stop) => `color-mix(in srgb, ${stop} ${paintOpacity}%, transparent)`);
-  return `linear-gradient(${direction}, ${transparentStops.join(", ")})`;
-}
-
 function getBackgroundPaintLayer(value: string, opacity = 100) {
   return value.toLowerCase().includes("gradient(")
-    ? applyPaintOpacity(value, opacity)
-    : `linear-gradient(${applyPaintOpacity(value, opacity)}, ${applyPaintOpacity(value, opacity)})`;
+    ? applyTrackerCardPaintOpacity(value, opacity)
+    : `linear-gradient(${applyTrackerCardPaintOpacity(value, opacity)}, ${applyTrackerCardPaintOpacity(value, opacity)})`;
 }
 
 function getGradientPaintLayer(value: string | null | undefined, opacity = 100) {
   const text = getCssPaintValue(value);
-  return text?.toLowerCase().includes("gradient(") ? applyPaintOpacity(text, opacity) : null;
+  return text?.toLowerCase().includes("gradient(") ? applyTrackerCardPaintOpacity(text, opacity) : null;
 }
 
 function getPaintedBackground(base: string, layers: Array<string | null | undefined>) {

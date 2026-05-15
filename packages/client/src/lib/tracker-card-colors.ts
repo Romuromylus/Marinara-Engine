@@ -200,6 +200,10 @@ export function getTrackerCardFinish(
 }
 
 export function getTrackerCardPaintOpacity(config: TrackerCardColorConfig | null | undefined): TrackerCardPaintOpacity {
+  if (normalizeTrackerCardColorMode(config?.mode) === "default") {
+    return TRACKER_CARD_PAINT_OPACITY_DEFAULTS;
+  }
+
   return {
     nameColorOpacity:
       getClampedFinishValue(config?.nameColorOpacity) ?? TRACKER_CARD_PAINT_OPACITY_DEFAULTS.nameColorOpacity,
@@ -222,6 +226,99 @@ function opacityWeight(value: number) {
 
 function scalePercent(value: number, opacity: number) {
   return Math.round(value * opacityWeight(opacity));
+}
+
+function splitCssArgs(value: string) {
+  const args: string[] = [];
+  let current = "";
+  let depth = 0;
+
+  for (const char of value) {
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+
+    if (char === "," && depth === 0) {
+      args.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) args.push(current.trim());
+  return args;
+}
+
+function splitCssWhitespace(value: string) {
+  const parts: string[] = [];
+  let current = "";
+  let depth = 0;
+
+  for (const char of value) {
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+
+    if (/\s/.test(char) && depth === 0) {
+      if (current.trim()) parts.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function isLinearGradientPrelude(value: string) {
+  const text = value.trim().toLowerCase();
+  return (
+    text.startsWith("to ") ||
+    text.startsWith("in ") ||
+    /^[-+]?(?:\d+|\d*\.\d+)(?:deg|grad|rad|turn)$/.test(text)
+  );
+}
+
+function isGradientPositionHint(value: string) {
+  const text = value.trim().toLowerCase();
+  return (
+    text === "0" ||
+    /^[-+]?(?:\d+|\d*\.\d+)(?:%|px|rem|em|vh|vw|vmin|vmax|ch|ex|lh|rlh|cm|mm|q|in|pt|pc)?$/.test(text) ||
+    text.startsWith("calc(")
+  );
+}
+
+function applyOpacityToLinearGradientStop(stop: string, paintOpacity: number) {
+  const parts = splitCssWhitespace(stop);
+  if (parts.length === 0 || isGradientPositionHint(parts[0]!)) return stop;
+
+  const [color, ...positions] = parts;
+  return [`color-mix(in srgb, ${color} ${paintOpacity}%, transparent)`, ...positions].join(" ");
+}
+
+export function applyTrackerCardPaintOpacity(value: string, opacity: number) {
+  const paintOpacity = Math.max(0, Math.min(100, Math.round(opacity)));
+  if (paintOpacity >= 100) return value;
+
+  const linearGradientMatch = value.match(/^linear-gradient\((.*)\)$/i);
+  if (!linearGradientMatch) {
+    return value.toLowerCase().includes("gradient(")
+      ? value
+      : `color-mix(in srgb, ${value} ${paintOpacity}%, transparent)`;
+  }
+
+  const args = splitCssArgs(linearGradientMatch[1] ?? "");
+  if (args.length < 2) return value;
+
+  const firstArg = args[0]!;
+  const hasPrelude = isLinearGradientPrelude(firstArg);
+  const stops = hasPrelude ? args.slice(1) : args;
+  if (stops.length < 2) return value;
+
+  const transparentStops = stops.map((stop) => applyOpacityToLinearGradientStop(stop, paintOpacity));
+  return `linear-gradient(${hasPrelude ? `${firstArg}, ` : ""}${transparentStops.join(", ")})`;
 }
 
 export function getTrackerCardPortraitStageVars({
