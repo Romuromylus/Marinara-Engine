@@ -259,8 +259,10 @@ export type CharacterCommand =
 // Param block matcher: any char that isn't `"` or `]`, OR a complete
 // double-quoted string (with `\"`-style escapes). Lets a `]` inside a
 // quoted parameter value (e.g. `description="Status: [VIP]"`) sit inside
-// the command instead of terminating it early.
-const QUOTED_PARAM_BLOCK = '(?:[^"\\]]|"(?:\\\\.|[^"])*")*';
+// the command instead of terminating it early. The inner alternative
+// excludes `\\` so backslash is only consumed by the escape branch —
+// otherwise an escape-heavy value can trigger catastrophic backtracking.
+const QUOTED_PARAM_BLOCK = '(?:[^"\\]]|"(?:\\\\.|[^"\\\\])*")*';
 
 /** Regex patterns for each command type */
 const SCHEDULE_UPDATE_RE = new RegExp(`\\[schedule_update:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
