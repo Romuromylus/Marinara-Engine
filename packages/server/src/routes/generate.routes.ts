@@ -990,7 +990,7 @@ export async function generateRoutes(app: FastifyInstance) {
       releaseActiveGeneration();
       return reply.status(400).send({ error: "No base URL configured for this connection" });
     }
-    const chatMeta = parseExtra(chat.metadata) as Record<string, unknown>;
+    let chatMeta = parseExtra(chat.metadata) as Record<string, unknown>;
     let memoryRecallEmbeddingSource: Awaited<ReturnType<typeof resolveMemoryRecallEmbeddingSource>> | null = null;
     try {
       memoryRecallEmbeddingSource = await resolveMemoryRecallEmbeddingSource(app.db, {
@@ -1254,12 +1254,38 @@ export async function generateRoutes(app: FastifyInstance) {
       const chatChoices: Record<string, string | string[]> =
         overrideDefaultChoices ?? ((chatMeta.presetChoices ?? {}) as Record<string, string | string[]>);
 
+      // ── Professor Mari fetch follow-up loop ──
+      // After Mari executes a [fetch:], the fetched data is persisted to
+      // chatMeta.mariContext but only injected into the prompt at the START
+      // of a generation pass. Without a follow-up turn she goes silent
+      // ("snackbar without follow-up", #898). The loop re-runs the generation
+      // up to MAX_FOLLOW_UP_ITERATIONS additional times if a fetch fired in
+      // the previous pass, so Mari can speak to the data she just pulled.
+      let runningMessagesForFollowUp = [...mappedMessages];
+      let followUpIteration = 0;
+      const MAX_FOLLOW_UP_ITERATIONS = 2;
+
+      // Hoisted out of the loop so the SSE flush, OOC posting, and
+      // illustration await at the end see state from the latest iteration.
+      let firstSavedMsg: any = null;
+      let lastSavedMsg: any = null;
+      let pendingIllustration: Promise<void> | null = null;
+      const collectedCommands: Array<{
+        command: CharacterCommand;
+        characterId: string | null;
+        messageId: string;
+        swipeIndex: number;
+      }> = [];
+      const collectedOocMessages: string[] = [];
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
       let finalMessages: Array<{
         role: "system" | "user" | "assistant";
         content: string;
         images?: string[];
         providerMetadata?: Record<string, unknown>;
-      }> = mappedMessages;
+      }> = [...runningMessagesForFollowUp];
       let conversationCommandsReminder: string | null = null;
       const conversationCommandsEnabled = chatMode === "conversation" && chatMeta.characterCommands !== false;
       let temperature = 1;
@@ -5712,7 +5738,10 @@ export async function generateRoutes(app: FastifyInstance) {
       // were already resolved earlier for the agent pipeline and are reused here.
 
       // ── Impersonate: inject instruction to respond as the user's character ──
-      if (input.impersonate) {
+      // Only on the user's actual turn (iteration 0). A Mari follow-up pass
+      // is a continuation of the assistant's prior message, not a new user
+      // turn, so re-injecting impersonate/prefill would scramble the prompt.
+      if (input.impersonate && followUpIteration === 0) {
         const impersonateInstruction = buildImpersonateInstruction({
           customPrompt: input.impersonatePromptTemplate || chatMeta.impersonatePrompt,
           direction: input.userMessage,
@@ -5722,7 +5751,7 @@ export async function generateRoutes(app: FastifyInstance) {
         finalMessages.push({ role: "user", content: impersonateInstruction });
       }
 
-      if (assistantPrefill.trim()) {
+      if (assistantPrefill.trim() && followUpIteration === 0) {
         finalMessages.push({ role: "assistant", content: assistantPrefill });
         logger.debug(
           "[generate] Injected assistant prefill (%d chars) as final assistant message",
@@ -6796,15 +6825,8 @@ export async function generateRoutes(app: FastifyInstance) {
       }
 
       // ── Run generation ──
-      let firstSavedMsg: any = null;
-      let lastSavedMsg: any = null;
-      const collectedCommands: Array<{
-        command: CharacterCommand;
-        characterId: string | null;
-        messageId: string;
-        swipeIndex: number;
-      }> = [];
-      const collectedOocMessages: string[] = [];
+      // (firstSavedMsg/lastSavedMsg/collectedCommands/collectedOocMessages
+      // are declared above the follow-up loop so they survive iterations.)
 
       const normalizedGenerationGuide = typeof input.generationGuide === "string" ? input.generationGuide.trim() : "";
       const generationGuideInstruction = normalizedGenerationGuide
@@ -6988,8 +7010,8 @@ export async function generateRoutes(app: FastifyInstance) {
       const hasPostProcessingAgents = resolvedAgents.some((a) => a.phase === "post_processing");
       const combinedResponse = allResponses.join("\n\n");
       let lorebookKeeperProcessedMessageId = "";
-      // Illustration runs asynchronously so it doesn't block other agents
-      let pendingIllustration: Promise<void> | null = null;
+      // Illustration runs asynchronously so it doesn't block other agents.
+      // (pendingIllustration is hoisted above the follow-up loop.)
       const hasPostWork = hasPostProcessingAgents || parallelResults.length > 0;
       if (hasPostWork && combinedResponse && !abortController.signal.aborted) {
         reply.raw.write(`data: ${JSON.stringify({ type: "agent_start", data: { phase: "post_generation" } })}\n\n`);
@@ -9547,6 +9569,74 @@ export async function generateRoutes(app: FastifyInstance) {
         }
       }
 
+      // ── Trigger follow-up generation if Professor Mari just fetched data ──
+      // Mari's fetched payload was persisted to chatMeta.mariContext by the
+      // command handler above, but mariContext is only read into the prompt
+      // at the start of a generation pass — without a follow-up turn she'd
+      // go silent right after the fetch snackbar.
+      const fetchCommandsThisTurn = collectedCommands.filter((c) => c.command.type === "fetch");
+      if (
+        fetchCommandsThisTurn.length > 0 &&
+        chatMode === "conversation" &&
+        !input.impersonate &&
+        !input.regenerateMessageId &&
+        !abortController.signal.aborted &&
+        followUpIteration < MAX_FOLLOW_UP_ITERATIONS
+      ) {
+        const mariFetched = fetchCommandsThisTurn.some(
+          (c) =>
+            c.characterId === PROFESSOR_MARI_ID ||
+            (c.characterId === null && characterIds.includes(PROFESSOR_MARI_ID)),
+        );
+        if (mariFetched) {
+          followUpIteration++;
+          logger.info(
+            "[generate] Professor Mari executed fetch; triggering follow-up generation (iteration %d)",
+            followUpIteration,
+          );
+
+          // Carry the just-streamed assistant turn into the next prompt so
+          // Mari sees her own prior message before speaking again.
+          const lastResponseText = allResponses.join("\n\n");
+          if (lastResponseText) {
+            runningMessagesForFollowUp.push({ role: "assistant", content: lastResponseText });
+          }
+
+          // Re-read chat metadata so the freshly-persisted mariContext is
+          // visible to the next pass.
+          const freshChat = await chats.getById(input.chatId);
+          if (freshChat) {
+            chatMeta = parseExtra(freshChat.metadata) as Record<string, unknown>;
+          }
+
+          // Reset hoisted per-iteration accumulators before continuing.
+          // (firstSavedMsg stays — it's "first across the whole turn".
+          //  lastSavedMsg, pendingIllustration are overwritten naturally.)
+          collectedCommands.length = 0;
+          collectedOocMessages.length = 0;
+
+          continue;
+        }
+      }
+
+      // ── Background: chunk & embed new messages for memory recall ──
+      // Runs once on the final iteration (fire-and-forget). Lives inside the
+      // loop because charInfo is scoped here; only executes when we break.
+      {
+        const charNameMap: Record<string, string> = {};
+        for (const ci of charInfo) {
+          charNameMap[ci.id] = ci.name;
+        }
+        chunkAndEmbedMessages(
+          app.db,
+          input.chatId,
+          { userName: personaName, characterNames: charNameMap },
+          { embeddingSource: memoryRecallEmbeddingSource },
+        ).catch((err) => logger.error(err, "[memory-recall] Background chunking failed"));
+      }
+      break;
+      } // end of Professor Mari follow-up loop
+
       // ── Post OOC messages to connected conversation (Roleplay → Conversation) ──
       if (collectedOocMessages.length > 0 && chat.connectedChatId && !abortController.signal.aborted) {
         try {
@@ -9580,21 +9670,6 @@ export async function generateRoutes(app: FastifyInstance) {
 
       // Signal completion
       sendSseEvent(reply, { type: "done", data: "" });
-
-      // ── Background: chunk & embed new messages for memory recall ──
-      // Always chunk (so memories are available if the user enables recall later)
-      {
-        const charNameMap: Record<string, string> = {};
-        for (const ci of charInfo) {
-          charNameMap[ci.id] = ci.name;
-        }
-        chunkAndEmbedMessages(
-          app.db,
-          input.chatId,
-          { userName: personaName, characterNames: charNameMap },
-          { embeddingSource: memoryRecallEmbeddingSource },
-        ).catch((err) => logger.error(err, "[memory-recall] Background chunking failed"));
-      }
     } catch (err) {
       const message =
         err instanceof Error
