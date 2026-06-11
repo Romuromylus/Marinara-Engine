@@ -102,6 +102,7 @@ import {
   stepCadenceValue,
 } from "../../lib/agent-cadence";
 import { getCharacterTitle, parseCharacterDisplayData } from "../../lib/character-display";
+import { isLorebookScopeActiveForChat } from "../../lib/lorebook-scope";
 import { useUIStore } from "../../stores/ui.store";
 import {
   useChatPresets,
@@ -316,6 +317,8 @@ export function ChatSettingsDrawer({
   const roleplaySpriteScale = useUIStore((s) => s.roleplaySpriteScale);
   const imageSelfieWidth = useUIStore((s) => s.imageSelfieWidth);
   const imageSelfieHeight = useUIStore((s) => s.imageSelfieHeight);
+  const imageStyleProfiles = useUIStore((s) => s.imageStyleProfiles);
+  const openToolDetail = useUIStore((s) => s.openToolDetail);
 
   const { data: allCharacters } = useCharacters();
   const { data: characterGroups } = useCharacterGroups();
@@ -402,7 +405,7 @@ export function ChatSettingsDrawer({
       const reasons: LorebookActiveReason[] = [];
       const isPinned = pinnedIds.has(lorebook.id);
 
-      if (lorebook.enabled !== false) {
+      if (lorebook.enabled !== false && isLorebookScopeActiveForChat(lorebook.scope, chat.id)) {
         if (isPinned) reasons.push("Chat");
         if (lorebook.isGlobal) reasons.push("Global");
         if (
@@ -1035,6 +1038,14 @@ export function ChatSettingsDrawer({
     updateMeta.mutate({ id: chat.id, activeToolIds: current });
   };
 
+  const handleCreateCustomTool = () => {
+    setShowToolPicker(false);
+    setPendingToolIds([]);
+    setToolSearch("");
+    openToolDetail("__new__");
+    onClose();
+  };
+
   const currentPromptPresetHasVariables = (currentPromptPresetFull?.choiceBlocks?.length ?? 0) > 0;
   const currentPromptPresetHasLorebookMarker = useMemo(() => {
     const sections = currentPromptPresetFull?.sections ?? [];
@@ -1055,21 +1066,10 @@ export function ChatSettingsDrawer({
     });
   }, [currentPromptPresetFull?.sections]);
   const hasScopedOrGlobalLorebooks = useMemo(() => {
-    return (
-      (lorebooks ?? []) as Array<{
-        id: string;
-        enabled?: boolean;
-        isGlobal?: boolean;
-        characterId?: string | null;
-        characterIds?: string[];
-        personaId?: string | null;
-        personaIds?: string[];
-        chatId?: string | null;
-        sourceAgentId?: string | null;
-      }>
-    ).some(
+    return ((lorebooks ?? []) as Lorebook[]).some(
       (lorebook) =>
         lorebook.enabled !== false &&
+        isLorebookScopeActiveForChat(lorebook.scope, chat.id) &&
         !(
           isGame &&
           !gameLorebookKeeperEnabled &&
@@ -2854,6 +2854,44 @@ export function ChatSettingsDrawer({
                       />
                     </div>
                   </button>
+                  <button
+                    onClick={() =>
+                      updateMeta.mutate({
+                        id: chat.id,
+                        groupSpeakerNamesInHistory: metadata.groupSpeakerNamesInHistory !== true,
+                      })
+                    }
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-all",
+                      metadata.groupSpeakerNamesInHistory === true
+                        ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30"
+                        : "bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                    )}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="text-[0.6875rem] font-medium">Name Prefix History</span>
+                      <p className="mt-0.5 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+                        {metadata.groupSpeakerNamesInHistory === true
+                          ? "History turns are sent as Name: message before merged role blocks."
+                          : "History turns keep their stored text before role merging."}
+                      </p>
+                    </div>
+                    <div
+                      className={cn(
+                        "ml-3 h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                        metadata.groupSpeakerNamesInHistory === true
+                          ? "bg-[var(--primary)]"
+                          : "bg-[var(--muted-foreground)]/50",
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                          metadata.groupSpeakerNamesInHistory === true && "translate-x-3.5",
+                        )}
+                      />
+                    </div>
+                  </button>
                 </div>
               )}
 
@@ -3141,6 +3179,23 @@ export function ChatSettingsDrawer({
                       </option>
                     ))}
                   </select>
+                  <label className="block">
+                    <span className="mb-1 block text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                      Image style
+                    </span>
+                    <select
+                      value={(metadata.imageStyleProfileId as string) ?? ""}
+                      onChange={(e) => updateMeta.mutate({ id: chat.id, imageStyleProfileId: e.target.value || null })}
+                      className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                    >
+                      <option value="">Use global or connection default</option>
+                      {imageStyleProfiles.profiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <p className="text-[0.55rem] text-[var(--muted-foreground)]">
                     Used for character selfies when Commands are enabled. The Illustrator agent uses its own connection
                     from the Agents tab.
@@ -3617,7 +3672,8 @@ export function ChatSettingsDrawer({
                 onClose={() => setShowLbPicker(false)}
                 placeholder="Search lorebooks…"
               >
-                {((lorebooks ?? []) as Array<{ id: string; name: string }>)
+                {((lorebooks ?? []) as Lorebook[])
+                  .filter((lb) => isLorebookScopeActiveForChat(lb.scope, chat.id))
                   .filter((lb) => !activeLorebookIdSet.has(lb.id))
                   .filter((lb) => lb.name.toLowerCase().includes(lbSearch.toLowerCase()))
                   .map((lb) => (
@@ -3634,12 +3690,14 @@ export function ChatSettingsDrawer({
                       <Plus size="0.75rem" className="text-[var(--muted-foreground)]" />
                     </button>
                   ))}
-                {((lorebooks ?? []) as Array<{ id: string; name: string }>)
+                {((lorebooks ?? []) as Lorebook[])
+                  .filter((lb) => isLorebookScopeActiveForChat(lb.scope, chat.id))
                   .filter((lb) => !activeLorebookIdSet.has(lb.id))
                   .filter((lb) => lb.name.toLowerCase().includes(lbSearch.toLowerCase())).length === 0 && (
                   <p className="px-3 py-2 text-[0.6875rem] text-[var(--muted-foreground)]">
-                    {((lorebooks ?? []) as Array<{ id: string }>).filter((lb) => !activeLorebookIdSet.has(lb.id))
-                      .length === 0
+                    {((lorebooks ?? []) as Lorebook[])
+                      .filter((lb) => isLorebookScopeActiveForChat(lb.scope, chat.id))
+                      .filter((lb) => !activeLorebookIdSet.has(lb.id)).length === 0
                       ? "All available lorebooks are already active here."
                       : "No matches."}
                   </p>
@@ -4497,6 +4555,25 @@ export function ChatSettingsDrawer({
                         </select>
                         <label className="flex flex-col gap-1">
                           <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                            Image style
+                          </span>
+                          <select
+                            value={(metadata.imageStyleProfileId as string) ?? ""}
+                            onChange={(e) =>
+                              updateMeta.mutate({ id: chat.id, imageStyleProfileId: e.target.value || null })
+                            }
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)]"
+                          >
+                            <option value="">Use global or connection default</option>
+                            {imageStyleProfiles.profiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>
+                                {profile.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
                             Scene image instructions
                           </span>
                           <textarea
@@ -5124,16 +5201,26 @@ export function ChatSettingsDrawer({
 
                   {/* Add tool picker */}
                   {!showToolPicker ? (
-                    <button
-                      onClick={() => {
-                        setShowToolPicker(true);
-                        setToolSearch("");
-                        setPendingToolIds([]);
-                      }}
-                      className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
-                    >
-                      <Plus size="0.75rem" /> Add Functions
-                    </button>
+                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowToolPicker(true);
+                          setToolSearch("");
+                          setPendingToolIds([]);
+                        }}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+                      >
+                        <Plus size="0.75rem" /> Add Functions
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCreateCustomTool}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+                      >
+                        <FilePlus2 size="0.75rem" /> New Custom Function
+                      </button>
+                    </div>
                   ) : (
                     <PickerDropdown
                       search={toolSearch}
@@ -5141,22 +5228,31 @@ export function ChatSettingsDrawer({
                       onClose={() => setShowToolPicker(false)}
                       placeholder="Search functions…"
                       footer={
-                        pendingToolIds.length > 0 ? (
-                          <div className="border-t border-[var(--border)] px-3 py-2">
-                            <button
-                              onClick={() => {
-                                const next = [...activeToolIds, ...pendingToolIds];
-                                updateMeta.mutate({ id: chat.id, activeToolIds: next });
-                                setPendingToolIds([]);
-                                setShowToolPicker(false);
-                              }}
-                              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
-                            >
-                              <Plus size="0.75rem" /> Add {pendingToolIds.length} Function
-                              {pendingToolIds.length > 1 ? "s" : ""}
-                            </button>
-                          </div>
-                        ) : undefined
+                        <div className="grid gap-2 border-t border-[var(--border)] px-3 py-2 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            onClick={handleCreateCustomTool}
+                            className="flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                          >
+                            <FilePlus2 size="0.75rem" /> New Custom Function
+                          </button>
+                          <button
+                            type="button"
+                            disabled={pendingToolIds.length === 0}
+                            onClick={() => {
+                              const next = [...activeToolIds, ...pendingToolIds];
+                              updateMeta.mutate({ id: chat.id, activeToolIds: next });
+                              setPendingToolIds([]);
+                              setShowToolPicker(false);
+                            }}
+                            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
+                          >
+                            <Plus size="0.75rem" />
+                            {pendingToolIds.length > 0
+                              ? `Add ${pendingToolIds.length} Function${pendingToolIds.length === 1 ? "" : "s"}`
+                              : "Add Selected"}
+                          </button>
+                        </div>
                       }
                     >
                       {availableTools

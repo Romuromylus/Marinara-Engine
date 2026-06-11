@@ -19,10 +19,11 @@ import {
   EyeOff,
 } from "lucide-react";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import type { Message, MessageExtra } from "@marinara-engine/shared";
+import { formatTextQuotes, type Message, type MessageExtra } from "@marinara-engine/shared";
 import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { cn, copyToClipboard, getAvatarCropStyle, parseAvatarCropJson } from "../../lib/utils";
+import { applyTextareaQuoteFormat } from "../../lib/textarea-quotes";
 import { applyInlineMarkdown, renderMarkdownBlocks } from "../../lib/markdown";
 import { chatKeys } from "../../hooks/use-chats";
 import { resolveMessageMacros } from "../../lib/chat-macros";
@@ -304,6 +305,9 @@ interface ConversationMessageProps {
   isGrouped?: boolean;
   hideActions?: boolean;
   noHoverGroup?: boolean;
+  hideTimestamp?: boolean;
+  hideUserAvatar?: boolean;
+  plainUserMessages?: boolean;
   forceShowActions?: boolean;
   onDelete?: (messageId: string) => void;
   onRegenerate?: (messageId: string) => void;
@@ -332,6 +336,9 @@ export const ConversationMessage = memo(function ConversationMessage({
   isGrouped,
   hideActions,
   noHoverGroup,
+  hideTimestamp,
+  hideUserAvatar,
+  plainUserMessages,
   forceShowActions,
   onDelete,
   onRegenerate,
@@ -366,6 +373,7 @@ export const ConversationMessage = memo(function ConversationMessage({
   const chatFontSize = useUIStore((s) => s.chatFontSize);
   const chatFontColor = useUIStore((s) => s.chatFontColor);
   const showMessageNumbers = useUIStore((s) => s.showMessageNumbers);
+  const quoteFormat = useUIStore((s) => s.quoteFormat);
   const messageTextStyle = useMemo<CSSProperties>(
     () => ({
       fontSize: `${chatFontSize}px`,
@@ -450,8 +458,18 @@ export const ConversationMessage = memo(function ConversationMessage({
 
   // Character info
   const charInfo = message.characterId && scopedCharacterMap ? scopedCharacterMap.get(message.characterId) : null;
+  const fallbackChatCharacterEntry = useMemo(() => {
+    if (!scopedCharacterMap) return null;
+    const orderedIds = chatCharacterIds?.length ? chatCharacterIds : Array.from(scopedCharacterMap.keys());
+    for (const id of orderedIds) {
+      const info = scopedCharacterMap.get(id);
+      if (info) return { id, info };
+    }
+    return null;
+  }, [chatCharacterIds, scopedCharacterMap]);
+  const resolvedCharacterInfo = charInfo ?? fallbackChatCharacterEntry?.info ?? null;
   const primaryCharInfo =
-    charInfo ??
+    resolvedCharacterInfo ??
     (scopedCharacterMap
       ? (Array.from(scopedCharacterMap.values()).find(
           (candidate): candidate is NonNullable<typeof candidate> => !!candidate,
@@ -461,51 +479,68 @@ export const ConversationMessage = memo(function ConversationMessage({
   // For user messages, prefer per-message persona snapshot (stored when message was sent)
   // to preserve the correct persona name/avatar even after switching personas.
   // Fall back to the current personaInfo prop for older messages without snapshots.
-  const msgPersona = isUser && extra.personaSnapshot ? extra.personaSnapshot : null;
-  const avatarUrl = isUser ? (msgPersona?.avatarUrl ?? personaInfo?.avatarUrl ?? null) : (charInfo?.avatarUrl ?? null);
+  const msgPersona = isUser && !plainUserMessages && extra.personaSnapshot ? extra.personaSnapshot : null;
+  const avatarUrl = isUser
+    ? plainUserMessages
+      ? null
+      : (msgPersona?.avatarUrl ?? personaInfo?.avatarUrl ?? null)
+    : (resolvedCharacterInfo?.avatarUrl ?? null);
   const personaAvatarCrop = isUser
-    ? (parseAvatarCropJson(msgPersona?.avatarCrop) ?? personaInfo?.avatarCrop ?? null)
+    ? plainUserMessages
+      ? null
+      : (parseAvatarCropJson(msgPersona?.avatarCrop) ?? personaInfo?.avatarCrop ?? null)
     : null;
-  const avatarCropStyle = isUser ? getAvatarCropStyle(personaAvatarCrop) : getAvatarCropStyle(charInfo?.avatarCrop);
+  const avatarCropStyle = isUser
+    ? getAvatarCropStyle(personaAvatarCrop)
+    : getAvatarCropStyle(resolvedCharacterInfo?.avatarCrop);
   const displayName = isUser
-    ? (msgPersona?.name ?? personaInfo?.name ?? "You")
+    ? plainUserMessages
+      ? "You"
+      : (msgPersona?.name ?? personaInfo?.name ?? "You")
     : (primaryCharInfo?.name ?? "Assistant");
-  const nameColor = isUser ? (msgPersona?.nameColor ?? personaInfo?.nameColor) : charInfo?.nameColor;
+  const nameColor = isUser
+    ? plainUserMessages
+      ? undefined
+      : (msgPersona?.nameColor ?? personaInfo?.nameColor)
+    : resolvedCharacterInfo?.nameColor;
   const renderedContent = useMemo(
     () =>
-      resolveMessageMacros(message.content, {
-        userName: msgPersona?.name ?? personaInfo?.name ?? "You",
-        persona: {
-          name: msgPersona?.name ?? personaInfo?.name ?? "You",
-          description: msgPersona?.description ?? personaInfo?.description,
-          personality: msgPersona?.personality ?? personaInfo?.personality,
-          backstory: msgPersona?.backstory ?? personaInfo?.backstory,
-          appearance: msgPersona?.appearance ?? personaInfo?.appearance,
-          scenario: msgPersona?.scenario ?? personaInfo?.scenario,
-        },
-        primaryCharacter: primaryCharInfo ?? { name: displayName },
-        characters: scopedCharacterMap
-          ? Array.from(scopedCharacterMap.values())
-          : displayName
-            ? [{ name: displayName }]
-            : [],
-      }),
+      formatTextQuotes(
+        resolveMessageMacros(message.content, {
+          userName: displayName,
+          persona: {
+            name: displayName,
+            description: plainUserMessages ? undefined : (msgPersona?.description ?? personaInfo?.description),
+            personality: plainUserMessages ? undefined : (msgPersona?.personality ?? personaInfo?.personality),
+            backstory: plainUserMessages ? undefined : (msgPersona?.backstory ?? personaInfo?.backstory),
+            appearance: plainUserMessages ? undefined : (msgPersona?.appearance ?? personaInfo?.appearance),
+            scenario: plainUserMessages ? undefined : (msgPersona?.scenario ?? personaInfo?.scenario),
+          },
+          primaryCharacter: primaryCharInfo ?? { name: displayName },
+          characters: scopedCharacterMap
+            ? Array.from(scopedCharacterMap.values())
+            : displayName
+              ? [{ name: displayName }]
+              : [],
+        }),
+        quoteFormat,
+      ),
     [
       displayName,
       message.content,
       msgPersona?.appearance,
       msgPersona?.backstory,
       msgPersona?.description,
-      msgPersona?.name,
       msgPersona?.personality,
       msgPersona?.scenario,
       personaInfo?.appearance,
       personaInfo?.backstory,
       personaInfo?.description,
-      personaInfo?.name,
       personaInfo?.personality,
       personaInfo?.scenario,
+      plainUserMessages,
       primaryCharInfo,
+      quoteFormat,
       scopedCharacterMap,
     ],
   );
@@ -628,7 +663,7 @@ export const ConversationMessage = memo(function ConversationMessage({
 
   const startEditing = useCallback(() => {
     setEditing(true);
-    setEditValue(message.content);
+    setEditValue(formatTextQuotes(message.content, quoteFormat));
     requestAnimationFrame(() => {
       const el = editRef.current;
       if (el) {
@@ -637,7 +672,7 @@ export const ConversationMessage = memo(function ConversationMessage({
         el.focus();
       }
     });
-  }, [message.content]);
+  }, [message.content, quoteFormat]);
 
   useEffect(() => {
     if (!onEdit) return;
@@ -655,12 +690,12 @@ export const ConversationMessage = memo(function ConversationMessage({
   editValueRef.current = editValue;
 
   const handleSaveEdit = useCallback(() => {
-    const val = editValueRef.current.trim();
+    const val = formatTextQuotes(editValueRef.current.trim(), quoteFormat);
     if (val !== message.content) {
       onEdit?.(message.id, val);
     }
     setEditing(false);
-  }, [message.content, message.id, onEdit]);
+  }, [message.content, message.id, onEdit, quoteFormat]);
 
   // System messages — minimal display
   if (isSystem) {
@@ -700,6 +735,8 @@ export const ConversationMessage = memo(function ConversationMessage({
   const isHiddenExpanded =
     isHiddenFromAI && (!collapseHiddenMessages || manuallyExpandedHidden || editing || !!isStreaming);
   const isHiddenCollapsed = isHiddenFromAI && collapseHiddenMessages && !isHiddenExpanded;
+  const shouldHideUserAvatar = isUser && hideUserAvatar;
+
   const hiddenFromAIHeader = isHiddenFromAI ? (
     <HiddenFromAIConversationButton
       canCollapse={collapseHiddenMessages}
@@ -824,7 +861,7 @@ export const ConversationMessage = memo(function ConversationMessage({
                             >
                               {segName}
                             </span>
-                            {isFirst && (
+                            {isFirst && !hideTimestamp && (
                               <span className="text-[0.6875rem] text-[var(--muted-foreground)]/60">
                                 {formatTimestamp(message.createdAt)}
                               </span>
@@ -1047,7 +1084,7 @@ export const ConversationMessage = memo(function ConversationMessage({
       )}
 
       {/* Avatar column — fixed 40px width */}
-      <div className="mari-message-avatar w-10 flex-shrink-0">
+      <div className={cn("mari-message-avatar w-10 flex-shrink-0", shouldHideUserAvatar && "hidden")}>
         {!isGrouped && (
           <>
             <div className="relative h-10 w-10 overflow-hidden rounded-full bg-[var(--accent)]">
@@ -1086,9 +1123,11 @@ export const ConversationMessage = memo(function ConversationMessage({
             >
               {displayName}
             </span>
-            <span className="mari-message-timestamp text-[0.6875rem] text-[var(--muted-foreground)]/60">
-              {formatTimestamp(message.createdAt)}
-            </span>
+            {!hideTimestamp && (
+              <span className="mari-message-timestamp text-[0.6875rem] text-[var(--muted-foreground)]/60">
+                {formatTimestamp(message.createdAt)}
+              </span>
+            )}
           </div>
         )}
 
@@ -1101,7 +1140,8 @@ export const ConversationMessage = memo(function ConversationMessage({
               ref={editRef}
               value={editValue}
               onChange={(e) => {
-                setEditValue(e.target.value);
+                const nextValue = applyTextareaQuoteFormat(e.currentTarget, quoteFormat);
+                setEditValue(nextValue);
                 const el = e.target;
                 el.style.height = "auto";
                 el.style.height = `${Math.min(el.scrollHeight, 300)}px`;

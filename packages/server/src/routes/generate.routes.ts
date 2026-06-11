@@ -23,6 +23,8 @@ import {
   appendChatSummaryEntryToMetadata,
   applyQuestUpdatesToPlayerStats,
   buildQuestJournalData,
+  compactQuestProgressForContext,
+  isClaudeAdaptiveOnlyNoSamplingModel,
 } from "@marinara-engine/shared";
 import type {
   AgentContext,
@@ -60,6 +62,7 @@ import { injectAtDepth } from "../services/lorebook/prompt-injector.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { resolveConnectionImageDefaults } from "../services/image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../services/image/image-generation-settings.js";
+import { compileImagePrompt } from "../services/image/image-prompt-compiler.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
 import { resolveSpotifyCredentials, spotifyHasScope } from "../services/spotify/spotify.service.js";
 import { buildSpotifyDjConstraints } from "../services/spotify/spotify-dj-constraints.js";
@@ -71,7 +74,6 @@ import {
   resolveMacrosWithVariableSnapshot,
   type AssemblerInput,
 } from "../services/prompt/index.js";
-import { mergeAdjacentMessages } from "../services/prompt/merger.js";
 import { wrapContent } from "../services/prompt/format-engine.js";
 import {
   fitMessagesToContext,
@@ -115,6 +117,10 @@ import {
   type FetchCommand,
 } from "../services/conversation/character-commands.js";
 import {
+  ILLUSTRATOR_TEXT_NEGATIVE_PROMPT,
+  resolveIllustratorCharacterReferences,
+} from "./generate/illustrator-references.js";
+import {
   ConversationSpotifyCommandError,
   isSilentConversationSpotifyCommandError,
   playConversationSpotifyCommand,
@@ -154,7 +160,9 @@ import { postToDiscordWebhook } from "../services/discord-webhook.js";
 import {
   appendGenerationTailMessages,
   canUseMessageForUserRegeneration,
+  dedupeLastMessageWrappers,
   findLastIndex,
+  findTrackerContextInsertIndex,
   appendReadableAttachmentsToContent,
   buildUserMessageRegenerationPromptFromSource,
   buildUserMessageRegenerationSourceMessage,
@@ -167,8 +175,10 @@ import {
   parseStoredGenerationParameters,
   parseGameStateRow,
   preserveTrackerCharacterUiFields,
+  prefixGroupIndividualHistorySpeakers,
   resolveActiveCharacterIds,
   resolveBaseUrl,
+  resolveCharacterNameMap,
   resolvePromptCharacterIdsForTarget,
   resolveRegenerationGameStateFallbackMessageIds,
   resolveRegenerationGameStateAnchor,
@@ -187,6 +197,8 @@ import {
 } from "./generate/generate-route-utils.js";
 import {
   buildAvailableSpriteCharacter,
+  completeRequiredSpriteExpressionEntries,
+  normalizeRequiredSpriteExpressionIds,
   normalizeSpriteDisplayModes,
   validateSpriteExpressionEntries,
 } from "./generate/expression-agent-utils.js";
@@ -244,7 +256,7 @@ import {
   withActiveGameMapMeta,
 } from "../services/game/map-position.service.js";
 import { applyAllSegmentEdits, stripGmCommandTags } from "../services/game/segment-edits.js";
-import { listPartySprites, readPreferredFullBodySpriteBase64 } from "../services/game/sprite.service.js";
+import { listPartySprites } from "../services/game/sprite.service.js";
 import {
   generatePerceptionHints,
   formatPerceptionHints,
@@ -355,6 +367,41 @@ export function normalizeHapticAgentCommands(data: Record<string, unknown>): Arr
   return [];
 }
 
+const SELFIE_WORD_RE = /\b(?:selfie|photo|pic|picture|image)\b/i;
+const USER_SELFIE_REQUEST_RE =
+  /\b(?:send|show|share|take|snap|give|attach|post|can\s+i\s+see|could\s+i\s+see|let\s+me\s+see|want|wanna)\b[\s\S]{0,120}\b(?:selfie|photo|pic|picture)\b|\b(?:selfie|photo|pic|picture)\b[\s\S]{0,80}\b(?:please|pls|send|show|share|take|snap)\b/i;
+const ASSISTANT_SELFIE_CLAIM_RE =
+  /\b(?:send|sent|sending|share|shares|shared|attach|attaches|attached|post|posts|posted|take|takes|took|snap|snaps|snapped)\b[\s\S]{0,120}\b(?:selfie|photo|pic|picture)\b|\[\s*[^\]]{0,80}\b(?:send|sends|sent|share|shares|take|takes|snap|snaps)\b[^\]]{0,120}\b(?:selfie|photo|pic|picture)\b[^\]]*\]/i;
+
+function inferSelfieContextFromResponse(response: string): string | undefined {
+  const compact = response.replace(/\s+/g, " ").trim();
+  if (!compact) return undefined;
+  const bracketMatch = compact.match(/\[[^\]]*\b(?:selfie|photo|pic|picture)\b[^\]]*\]/i);
+  const source = bracketMatch?.[0] ?? compact;
+  return source
+    .replace(/^\[/, "")
+    .replace(/\]$/, "")
+    .replace(/^.*?\b(?:selfie|photo|pic|picture)\b[:\s-]*/i, "")
+    .trim()
+    .slice(0, 240);
+}
+
+function recoverImplicitSelfieCommand(args: {
+  response: string;
+  latestUserMessage?: string | null;
+  imageGenerationEnabled: boolean;
+  existingCommands: CharacterCommand[];
+}): SelfieCommand | null {
+  if (!args.imageGenerationEnabled) return null;
+  if (args.existingCommands.some((command) => command.type === "selfie")) return null;
+  const response = args.response.trim();
+  if (!SELFIE_WORD_RE.test(response)) return null;
+  const userAskedForSelfie = USER_SELFIE_REQUEST_RE.test(args.latestUserMessage ?? "");
+  const assistantClaimsSelfie = ASSISTANT_SELFIE_CLAIM_RE.test(response);
+  if (!userAskedForSelfie && !assistantClaimsSelfie) return null;
+  return { type: "selfie", context: inferSelfieContextFromResponse(response) };
+}
+
 const COMPLETE_OUTPUT_END_RE = /[.!?…。！？]["'”’)\]}»›]*$/;
 const COMPLETE_SENTENCE_RE = /[.!?…。！？](?:["'”’)\]}»›]+)?(?=\s|$)/g;
 
@@ -418,6 +465,26 @@ function prefixConversationUserTurn(content: string, personaName: string): strin
 
 function formatConversationPromptTurn(content: string, role: string, personaName: string): string {
   return role === "user" ? prefixConversationUserTurn(content, personaName) : content.trim();
+}
+
+async function findLastUserMessageIdBefore(
+  chats: ReturnType<typeof createChatsStorage>,
+  chatId: string,
+  beforeMessageId?: string | null,
+): Promise<string | null> {
+  const rows = await chats.listMessages(chatId);
+  const beforeIndex = beforeMessageId ? rows.findIndex((message: any) => message.id === beforeMessageId) : -1;
+  const startIndex = beforeIndex >= 0 ? beforeIndex - 1 : rows.length - 1;
+  for (let index = startIndex; index >= 0; index -= 1) {
+    const message = rows[index] as any;
+    if (message?.role === "user" && typeof message.id === "string") return message.id;
+  }
+  return null;
+}
+
+function resolveAgentRuntimePhase(agentType: string, configuredPhase: string): string {
+  if (agentType === "echo-chamber") return "parallel";
+  return configuredPhase;
 }
 
 function resolveLorebookGenerationTriggers(
@@ -561,28 +628,6 @@ function rememberKnowledgeRouterActivatedLorebookIds(
   for (const entry of result.budgetSkippedEntries) {
     targetExcludedFromKeywordScan.add(entry.id);
   }
-}
-
-/** Read a character's avatar from disk as base64, or return undefined if unavailable. */
-function readAvatarBase64(avatarPath: string | null | undefined): string | undefined {
-  if (!avatarPath) return undefined;
-  // avatarPath is like /api/avatars/file/<filename> — extract just the filename
-  const filename = avatarPath.split("?")[0]?.split("/").pop();
-  if (!filename || filename.includes("..") || filename.includes("/") || filename.includes("\\")) return undefined;
-  const diskPath = join(DATA_DIR, "avatars", filename);
-  try {
-    if (!existsSync(diskPath)) return undefined;
-    return readFileSync(diskPath).toString("base64");
-  } catch {
-    return undefined;
-  }
-}
-
-function readBestCharacterReferenceBase64(
-  characterId: string | null | undefined,
-  avatarPath: string | null | undefined,
-): string | undefined {
-  return readPreferredFullBodySpriteBase64(characterId)?.base64 ?? readAvatarBase64(avatarPath);
 }
 
 function normalizeDmTargetName(value: string): string {
@@ -936,6 +981,7 @@ type SpotifyRuntimeAgent = ResolvedAgent & {
   __spotifyPlayApplied?: boolean;
   __spotifyPlayError?: string | null;
   __spotifyToolError?: string | null;
+  __spotifyPlaybackPending?: boolean;
   __spotifyPlayUris?: string[];
   __spotifyCandidateTracks?: SpotifyRuntimeTrack[];
   __spotifyCurrentAfterPlayUri?: string | null;
@@ -1080,11 +1126,7 @@ function normalizeSpotifyAgentResult(result: AgentResult): AgentResult {
 }
 
 function shouldDeferSpotifyAgentEvent(result: AgentResult): boolean {
-  if (result.agentType !== "spotify" || !result.success || !result.data || typeof result.data !== "object") {
-    return false;
-  }
-
-  return (result.data as Record<string, unknown>).parseError === true;
+  return result.agentType === "spotify";
 }
 
 function isBlockingSpotifyToolError(error: string | null | undefined): error is string {
@@ -1297,6 +1339,7 @@ async function applySpotifyAgentPlaybackFallback(
         queued,
         currentUri: agent.__spotifyCurrentAfterPlayUri ?? null,
         device: agent.__spotifyDevice ?? null,
+        playbackPending: agent.__spotifyPlaybackPending === true,
         display:
           agent.__spotifyPlayDisplay ??
           (queued && queued > 1 ? `🎵 Queued ${queued} tracks: ${mood}` : `🎵 Started Spotify playback: ${mood}`),
@@ -1610,33 +1653,24 @@ function reassignHistoryLastMessageWrapper(messages: GenerationPromptMessage[]):
     messages[index] = { ...messages[index]!, content: stripped };
   }
 
-  let lastUserHistoryIndex = -1;
-  for (let i = historyIndexes.length - 1; i >= 0; i--) {
-    const index = historyIndexes[i]!;
-    if (messages[index]!.role === "user") {
-      lastUserHistoryIndex = index;
-      break;
-    }
-  }
-  if (lastUserHistoryIndex < 0) return;
-
-  const historyBeforeLast = historyIndexes.filter((index) => index < lastUserHistoryIndex);
+  const lastHistoryIndex = historyIndexes[historyIndexes.length - 1]!;
+  const historyBeforeLast = historyIndexes.filter((index) => index < lastHistoryIndex);
   if (hasXmlWrappers) {
     if (historyBeforeLast.length > 0) {
       const firstHistoryIndex = historyBeforeLast[0]!;
-      const lastHistoryIndex = historyBeforeLast[historyBeforeLast.length - 1]!;
+      const lastChatHistoryIndex = historyBeforeLast[historyBeforeLast.length - 1]!;
       messages[firstHistoryIndex] = {
         ...messages[firstHistoryIndex]!,
         content: `<chat_history>\n${messages[firstHistoryIndex]!.content}`,
       };
-      messages[lastHistoryIndex] = {
-        ...messages[lastHistoryIndex]!,
-        content: `${messages[lastHistoryIndex]!.content}\n</chat_history>`,
+      messages[lastChatHistoryIndex] = {
+        ...messages[lastChatHistoryIndex]!,
+        content: `${messages[lastChatHistoryIndex]!.content}\n</chat_history>`,
       };
     }
-    messages[lastUserHistoryIndex] = {
-      ...messages[lastUserHistoryIndex]!,
-      content: `<last_message>\n${messages[lastUserHistoryIndex]!.content}\n</last_message>`,
+    messages[lastHistoryIndex] = {
+      ...messages[lastHistoryIndex]!,
+      content: `<last_message>\n${messages[lastHistoryIndex]!.content}\n</last_message>`,
     };
     return;
   }
@@ -1648,9 +1682,9 @@ function reassignHistoryLastMessageWrapper(messages: GenerationPromptMessage[]):
       content: `## Chat History\n${messages[firstHistoryIndex]!.content}`,
     };
   }
-  messages[lastUserHistoryIndex] = {
-    ...messages[lastUserHistoryIndex]!,
-    content: `## Last Message\n${messages[lastUserHistoryIndex]!.content}`,
+  messages[lastHistoryIndex] = {
+    ...messages[lastHistoryIndex]!,
+    content: `## Last Message\n${messages[lastHistoryIndex]!.content}`,
   };
 }
 
@@ -1775,6 +1809,7 @@ export async function generateRoutes(app: FastifyInstance) {
     // ── Discord webhook URL (parsed once, used for mirroring below) ──
     const discordWebhookUrl = typeof earlyMeta.discordWebhookUrl === "string" ? earlyMeta.discordWebhookUrl : "";
     let pendingUserDiscordMsg = "";
+    let currentTurnUserMessageId: string | null = null;
 
     // Save user message — skip for impersonate (no real user message to save)
     if (!input.impersonate && (input.userMessage || input.attachments?.length)) {
@@ -1797,6 +1832,7 @@ export async function generateRoutes(app: FastifyInstance) {
         characterId: null,
         content: input.userMessage ?? "",
       });
+      currentTurnUserMessageId = userMsg?.id ?? null;
       if (requestChatMode === "conversation") {
         recordUserActivity(input.chatId);
       }
@@ -2188,6 +2224,11 @@ export async function generateRoutes(app: FastifyInstance) {
           : null;
       const chatChoices: Record<string, string | string[]> =
         overrideDefaultChoices ?? ((chatMeta.presetChoices ?? {}) as Record<string, string | string[]>);
+      let groupHistoryCharacterNamesByIdPromise: Promise<Map<string, string>> | null = null;
+      const getGroupHistoryCharacterNamesById = () => {
+        groupHistoryCharacterNamesByIdPromise ??= resolveCharacterNameMap(allCharacterIds, (id) => chars.getById(id));
+        return groupHistoryCharacterNamesByIdPromise;
+      };
 
       // ── Professor Mari fetch follow-up loop ──
       // After Mari executes a [fetch:], the fetched data is persisted to
@@ -2223,7 +2264,7 @@ export async function generateRoutes(app: FastifyInstance) {
         let finalMessages: GenerationPromptMessage[] = [...runningMessagesForFollowUp];
         let conversationCommandsReminder: string | null = null;
         const conversationCommandsEnabled = chatMode === "conversation" && chatMeta.characterCommands !== false;
-        let temperature = 1;
+        let temperature: number | undefined = 1;
         let maxTokens = 4096;
         let topP: number | undefined = 1;
         let topK = 0;
@@ -2308,6 +2349,12 @@ export async function generateRoutes(app: FastifyInstance) {
           promptGroupChatMode === "individual" &&
           promptGroupResponseOrder !== "manual" &&
           input.impersonate !== true;
+        const shouldPrefixGroupHistorySpeakers =
+          chatMeta.groupSpeakerNamesInHistory === true &&
+          characterIds.length > 1 &&
+          chatMode !== "conversation" &&
+          chatMode !== "game" &&
+          promptGroupChatMode === "individual";
         const promptMacroContext = await buildPromptMacroContext({
           db: app.db,
           characterIds: promptCharacterIds,
@@ -2330,6 +2377,11 @@ export async function generateRoutes(app: FastifyInstance) {
             promptMacroContext,
             deferCharacterMacros ? { deferCharacterMacros: "names" } : undefined,
           );
+        let promptRegexScripts: Awaited<ReturnType<typeof regexScriptsStore.list>> | null = null;
+        const getPromptRegexScripts = async () => {
+          promptRegexScripts ??= await regexScriptsStore.list();
+          return promptRegexScripts;
+        };
 
         // ── Apply regex scripts to prompt message content ──
         // Macro context is available now, so regex find/replace/trim fields can use prompt macros.
@@ -2340,14 +2392,16 @@ export async function generateRoutes(app: FastifyInstance) {
         // before it lands in runningMessagesForFollowUp, so each message still
         // gets exactly one pass.
         if (followUpIteration === 0) {
-          const regexScripts = await regexScriptsStore.list();
+          const regexScripts = await getPromptRegexScripts();
           applyRegexScriptsToPromptMessages(mappedMessages, regexScripts, {
             resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
+            targetCharacterId: promptTargetCharacterId,
           });
           if (regenerateUserSourceMessage) {
             const sourceMessages = [regenerateUserSourceMessage];
             applyRegexScriptsToPromptMessages(sourceMessages, regexScripts, {
               resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
+              targetCharacterId: promptTargetCharacterId,
             });
           }
 
@@ -2363,6 +2417,21 @@ export async function generateRoutes(app: FastifyInstance) {
               "\n\n",
             );
           }
+          if (shouldPrefixGroupHistorySpeakers) {
+            const characterNamesById = await getGroupHistoryCharacterNamesById();
+            mappedMessages.splice(
+              0,
+              mappedMessages.length,
+              ...prefixGroupIndividualHistorySpeakers(mappedMessages, {
+                personaName,
+                characterNamesById,
+              }),
+            );
+          }
+        }
+        if (followUpIteration === 0) {
+          runningMessagesForFollowUp = [...mappedMessages];
+          finalMessages = [...runningMessagesForFollowUp];
         }
         if (regenerateUserSourceMessage) {
           regenerateUserMessage = buildUserMessageRegenerationPromptFromSource(regenerateUserSourceMessage);
@@ -3145,6 +3214,7 @@ export async function generateRoutes(app: FastifyInstance) {
             if (hasImageGen) {
               commandLines.push(
                 `- [selfie] or [selfie: context="description of what the selfie shows"] - you send a photo of yourself. Use this when the user asks for a selfie, photo, or pic, or when you want to share what you look like right now.`,
+                `   If you say you are sending, sharing, taking, or attaching a selfie/photo/pic, include [selfie] in that same response. Do not only narrate the action.`,
                 ``,
               );
             }
@@ -3848,22 +3918,26 @@ export async function generateRoutes(app: FastifyInstance) {
         applyParameterOverrides(connectionParams);
         applyParameterOverrides(chatParams);
 
-        // Resolve "maximum" reasoning effort to the highest level for the current model.
-        // GPT-5.4/5.5 and Claude Opus 4.7+ support "xhigh" — all others get "high".
-        let resolvedEffort: "low" | "medium" | "high" | "xhigh" | null =
+        const modelLower = (conn.model ?? "").toLowerCase();
+        const providerLower = (conn.provider ?? "").toLowerCase();
+
+        // Resolve "maximum" reasoning effort to the highest provider-facing level.
+        // Native Anthropic/Claude subscription adaptive-only models use "max";
+        // OpenAI-compatible Claude routes keep "xhigh". All other models get "high".
+        let resolvedEffort: "low" | "medium" | "high" | "xhigh" | "max" | null =
           reasoningEffort !== "maximum" ? reasoningEffort : null;
         if (reasoningEffort === "maximum") {
-          const modelLower = (conn.model ?? "").toLowerCase();
+          const isNativeAnthropicAdaptiveOnly =
+            (providerLower === "anthropic" || providerLower === "claude_subscription") &&
+            isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
           const supportsXhigh =
             modelLower.startsWith("gpt-5.5") ||
             modelLower.startsWith("gpt-5.4") ||
             modelLower === "grok-4.20-multi-agent" ||
-            /claude-opus-4-(?:[7-9]|\d{2,})/.test(modelLower);
-          resolvedEffort = supportsXhigh ? "xhigh" : "high";
+            isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
+          resolvedEffort = isNativeAnthropicAdaptiveOnly ? "max" : supportsXhigh ? "xhigh" : "high";
         }
 
-        const modelLower = (conn.model ?? "").toLowerCase();
-        const providerLower = (conn.provider ?? "").toLowerCase();
         const isXaiAutoReasoningModel =
           (providerLower === "xai" && (modelLower.startsWith("grok-4.3") || modelLower.startsWith("grok-4-1-fast"))) ||
           (providerLower === "openrouter" && modelLower.startsWith("x-ai/grok-"));
@@ -3886,10 +3960,11 @@ export async function generateRoutes(app: FastifyInstance) {
         // ── Claude 4.5+ sampling parameter restrictions ──
         const modelLc = (conn.model ?? "").toLowerCase();
 
-        // Claude Opus 4.7+: ALL sampling params removed (temperature, top_p, top_k
+        // Claude adaptive-only models: ALL sampling params removed (temperature, top_p, top_k
         // return 400). Strip everything regardless of provider (covers reverse proxies).
-        const isClaudeNoSampling = /claude-opus-4-(?:[7-9]|\d{2,})/.test(modelLc);
+        const isClaudeNoSampling = isClaudeAdaptiveOnlyNoSamplingModel(modelLc);
         if (isClaudeNoSampling) {
+          temperature = undefined;
           topP = undefined;
           topK = 0;
           frequencyPenalty = 0;
@@ -4034,7 +4109,7 @@ export async function generateRoutes(app: FastifyInstance) {
             id: cfg.id,
             type: cfg.type,
             name: cfg.name,
-            phase: cfg.phase as string,
+            phase: resolveAgentRuntimePhase(cfg.type as string, cfg.phase as string),
             promptTemplate: cfg.promptTemplate as string,
             connectionId: effectiveConnectionId,
             settings,
@@ -4075,7 +4150,7 @@ export async function generateRoutes(app: FastifyInstance) {
             id: `builtin:${builtIn.id}`,
             type: builtIn.id,
             name: builtIn.name,
-            phase: builtIn.phase,
+            phase: resolveAgentRuntimePhase(builtIn.id, builtIn.phase),
             promptTemplate: "",
             connectionId: defaultAgentConn?.id ?? null,
             settings: builtInSettings,
@@ -4518,8 +4593,8 @@ export async function generateRoutes(app: FastifyInstance) {
             `- No GPTisms/AI Slop. BAN and NEVER output generic structures (such as "if X, then Y", or "not X, but Y"), and literature clichés (NO: "physical punches," "practiced things," "predatory instincts," "mechanical precisions," or "jaws working"). Combat them with the human touch.`,
             `- Describe what DOES happen, rather than what doesn't (for example, go for "remains still" instead of "doesn't move"). Mention what occurs, or show the consequences of happenings ("the water sits untouched" instead of "isn't being drunk").`,
             `- CRITICAL! Do not repeat, echo, parrot, or restate distinctive words, phrases, and dialogues. When reacting to speech, show interpretation or response, NOT repetition.`,
-            `EXAMPLE: "Are you a gooner?"`,
-            `BAD: "Gooner?"`,
+            `EXAMPLE: "Are you even listening?"`,
+            `BAD: "Listening?"`,
             `GOOD: A flat look. "What type of question is that?"`,
             `</output_format>`,
           ].join("\n");
@@ -5280,6 +5355,20 @@ export async function generateRoutes(app: FastifyInstance) {
           signal: abortController.signal,
         };
 
+        if (personaId) {
+          agentContext.memory._personaId = personaId;
+          agentContext.memory._personaAvatarPath =
+            persona && typeof persona.avatarPath === "string" ? persona.avatarPath : null;
+        }
+        const getLatestUserExpressionSource = () =>
+          (
+            [...agentContext.recentMessages].reverse().find((message) => message.role === "user" && message.content.trim())
+              ?.content ??
+            currentUserInputContent() ??
+            input.userMessage ??
+            ""
+          ).trim();
+
         // ── Interval gating: Narrative Director only intervenes every N assistant messages ──
         const directorAgent = resolvedAgents.find((a) => a.type === "director");
         if (directorAgent) {
@@ -5398,7 +5487,13 @@ export async function generateRoutes(app: FastifyInstance) {
               const spriteCharacter = buildAvailableSpriteCharacter(char.id, char.name, sprites, spriteDisplayModes);
               if (spriteCharacter) perChar.push(spriteCharacter);
             }
-            if (personaId && (!restrictToSelectedSprites || selectedSpriteIds.has(personaId))) {
+            const includePersonaSprite =
+              !!personaId &&
+              (Boolean(getLatestUserExpressionSource()) ||
+                !restrictToSelectedSprites ||
+                selectedSpriteIds.has(personaId) ||
+                chatMeta.expressionAvatarsEnabled === true);
+            if (personaId && includePersonaSprite) {
               const sprites = listCharacterSprites(personaId);
               if (sprites) {
                 const spritePersona = buildAvailableSpriteCharacter(
@@ -5425,6 +5520,22 @@ export async function generateRoutes(app: FastifyInstance) {
           agentContext.memory._currentBackground = chatMeta.background ?? null;
           if (backgroundAgent.settings?.autoGenerateBackgrounds === true) {
             agentContext.memory._backgroundGenerationEnabled = true;
+          }
+          if (backgroundAgent.settings?.autoGenerateBackgrounds === true) {
+            const setupConfigForBackground =
+              chatMeta.gameSetupConfig &&
+              typeof chatMeta.gameSetupConfig === "object" &&
+              !Array.isArray(chatMeta.gameSetupConfig)
+                ? (chatMeta.gameSetupConfig as Record<string, unknown>)
+                : null;
+            agentContext.memory._backgroundWorldContext = {
+              genre: (setupConfigForBackground?.genre as string | undefined) ?? null,
+              setting: (setupConfigForBackground?.setting as string | undefined) ?? null,
+              location: gameState?.location ?? null,
+              weather: gameState?.weather ?? null,
+              timeOfDay: gameState?.time ?? null,
+              worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
+            };
           }
           try {
             const { readdirSync, readFileSync, existsSync } = await import("fs");
@@ -5783,13 +5894,16 @@ export async function generateRoutes(app: FastifyInstance) {
                 }
 
                 if (hasQuest && Array.isArray(stats.activeQuests) && stats.activeQuests.length > 0) {
-                  const questLines = stats.activeQuests.map((q: any) => {
+                  const activeQuestsForContext = compactQuestProgressForContext(stats.activeQuests);
+                  const questLines = activeQuestsForContext.map((q) => {
                     const objectives = Array.isArray(q.objectives)
-                      ? q.objectives.map((o: any) => `  ${o.completed ? "[x]" : "[ ]"} ${o.text}`).join("\n")
+                      ? q.objectives.map((o) => `  [ ] ${o.text}`).join("\n")
                       : "";
-                    return `- ${q.name}${q.completed ? " (completed)" : ""}${objectives ? "\n" + objectives : ""}`;
+                    return `- ${q.name}${objectives ? "\n" + objectives : ""}`;
                   });
-                  trackerParts.push(wrapContent(questLines.join("\n"), "Active Quests", wrapFormat));
+                  if (questLines.length > 0) {
+                    trackerParts.push(wrapContent(questLines.join("\n"), "Active Quests", wrapFormat));
+                  }
                 }
 
                 if (hasPersonaStats && Array.isArray(stats.inventory) && stats.inventory.length > 0) {
@@ -5828,6 +5942,7 @@ export async function generateRoutes(app: FastifyInstance) {
               }
 
               if (trackerParts.length > 0) {
+                dedupeLastMessageWrappers(finalMessages);
                 const contextBlock =
                   wrapFormat === "none"
                     ? trackerParts.join("\n\n")
@@ -5835,16 +5950,13 @@ export async function generateRoutes(app: FastifyInstance) {
                       ? `<context>\n${trackerParts.map((p) => "    " + p.replace(/\n/g, "\n    ")).join("\n")}\n</context>`
                       : `# Context\n*(Established state as of the last message. Do not re-describe — advance from here.)*\n${trackerParts.join("\n")}`;
 
-                // Insert as system message right before the last user message.
-                // When strict role formatting merges post-chat sections (like
-                // Output Format) into the last user message, this ensures the
-                // tracker context appears before those instructions.
-                const lastUserIdx = findLastIndex(finalMessages, "user");
-                if (lastUserIdx >= 0) {
-                  finalMessages.splice(lastUserIdx, 0, { role: "system", content: contextBlock });
-                } else {
-                  finalMessages.splice(finalMessages.length, 0, { role: "system", content: contextBlock });
-                }
+                // Insert as a user injection outside chat history, directly
+                // before the latest real chat message.
+                finalMessages.splice(findTrackerContextInsertIndex(finalMessages), 0, {
+                  role: "user",
+                  content: contextBlock,
+                  contextKind: "injection",
+                });
               }
             }
           }
@@ -5855,8 +5967,9 @@ export async function generateRoutes(app: FastifyInstance) {
         // navigated away), a write error must NOT crash the agent pipeline —
         // otherwise Promise.allSettled in executePhase silently drops the
         // entire group's results, causing agents to appear as "not triggered".
-        const sendAgentEvent = (result: AgentResult) => {
-          if (shouldDeferSpotifyAgentEvent(result)) return;
+        const shouldDeferExpressionAgentEvent = (result: AgentResult) =>
+          result.success && result.agentType === "expression" && result.type === "sprite_change";
+        const sendAgentResultEvent = (result: AgentResult) => {
           trySendSseEvent(reply, {
             type: "agent_result",
             data: {
@@ -5869,6 +5982,12 @@ export async function generateRoutes(app: FastifyInstance) {
               durationMs: result.durationMs,
             },
           });
+        };
+        const sendAgentEvent = (result: AgentResult, options: { finalized?: boolean } = {}) => {
+          if (!options.finalized && (shouldDeferSpotifyAgentEvent(result) || shouldDeferExpressionAgentEvent(result))) {
+            return;
+          }
+          sendAgentResultEvent(result);
         };
 
         for (const warning of agentConnectionWarnings) {
@@ -5918,6 +6037,7 @@ export async function generateRoutes(app: FastifyInstance) {
         let toolDefs: LLMToolDefinition[] | undefined;
         const allToolDefs: LLMToolDefinition[] = [];
         const agentOnlyToolNames = new Set([
+          "save_lorebook_entry",
           "read_chat_summary",
           "append_chat_summary",
           "read_chat_variable",
@@ -6137,6 +6257,98 @@ export async function generateRoutes(app: FastifyInstance) {
           chatMeta,
           onUpdateMetadata: updateChatMetadataForTools,
         };
+        const resolveAgentWritableLorebookId = (agentSettings: Record<string, unknown>): string | null => {
+          const enabledTools = Array.isArray(agentSettings.enabledTools) ? agentSettings.enabledTools : [];
+          const lorebookWriteEnabled =
+            agentSettings.lorebookWriteEnabled === true || enabledTools.includes("save_lorebook_entry");
+          if (!lorebookWriteEnabled) return null;
+          for (const key of ["writableLorebookId", "targetLorebookId"]) {
+            const value = agentSettings[key];
+            if (typeof value === "string" && value.trim()) return value.trim();
+          }
+          const writableIds = agentSettings.writableLorebookIds;
+          if (Array.isArray(writableIds)) {
+            const first = writableIds.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+            if (first) return first.trim();
+          }
+          return null;
+        };
+        const createLorebookEntryWriter = (agent: ResolvedAgent, agentSettings: Record<string, unknown>) => {
+          const writableLorebookId = resolveAgentWritableLorebookId(agentSettings);
+          if (!writableLorebookId) return undefined;
+          return async (entry: {
+            name: string;
+            content: string;
+            description?: string;
+            keys: string[];
+            tag?: string;
+            mode: "create" | "replace" | "append";
+          }) => {
+            const targetLorebook = await lorebooksStore.getById(writableLorebookId);
+            if (!targetLorebook) {
+              return { error: "Selected lorebook is no longer available.", lorebookId: writableLorebookId };
+            }
+
+            const existingEntries = await lorebooksStore.listEntries(writableLorebookId);
+            const normalizedName = entry.name.trim().toLocaleLowerCase();
+            const existing = existingEntries.find(
+              (candidate: any) =>
+                typeof candidate.name === "string" && candidate.name.trim().toLocaleLowerCase() === normalizedName,
+            ) as any;
+            const keys = Array.from(new Set(entry.keys.map((key) => key.trim()).filter(Boolean)));
+
+            if (!existing || entry.mode === "create") {
+              const created = await lorebooksStore.createEntry({
+                lorebookId: writableLorebookId,
+                name: entry.name,
+                content: entry.content,
+                description: entry.description ?? "",
+                keys,
+                tag: entry.tag ?? "",
+                enabled: true,
+                constant: false,
+                selective: false,
+                position: 0,
+                depth: 4,
+                role: "system",
+              });
+              return {
+                applied: true,
+                action: "created",
+                lorebookId: writableLorebookId,
+                lorebookName: (targetLorebook as any).name,
+                entryId: (created as any)?.id ?? null,
+                name: entry.name,
+                sourceAgentId: agent.id,
+              };
+            }
+
+            const existingContent = typeof existing.content === "string" ? existing.content : "";
+            const nextContent =
+              entry.mode === "append" && existingContent.trim()
+                ? existingContent.includes(entry.content)
+                  ? existingContent
+                  : `${existingContent.trim()}\n\n${entry.content}`
+                : entry.content;
+            const existingKeys = Array.isArray(existing.keys) ? existing.keys.filter((key: unknown): key is string => typeof key === "string") : [];
+            const updated = await lorebooksStore.updateEntry(existing.id, {
+              content: nextContent,
+              description: entry.description ?? existing.description ?? "",
+              keys: Array.from(new Set([...existingKeys, ...keys])),
+              ...(entry.tag !== undefined ? { tag: entry.tag } : {}),
+              enabled: true,
+            });
+            return {
+              applied: true,
+              action: entry.mode === "append" ? "appended" : "replaced",
+              lorebookId: writableLorebookId,
+              lorebookName: (targetLorebook as any).name,
+              entryId: (updated as any)?.id ?? existing.id,
+              name: entry.name,
+              sourceAgentId: agent.id,
+            };
+          };
+        };
 
         // ── Resolve tool context for all agents ──
         // This enables built-in and custom tools for any agent in the pipeline.
@@ -6161,12 +6373,14 @@ export async function generateRoutes(app: FastifyInstance) {
           );
           if (agentTools.length === 0) continue;
           const allowedToolNames = new Set(agentTools.map((td) => td.function.name));
+          const saveLorebookEntry = createLorebookEntryWriter(agent, agentSettings);
           if (agent.type === "spotify") {
             const spotifyAgent = agent as SpotifyRuntimeAgent;
             spotifyAgent.__spotifyToolCalls = new Set<string>();
             spotifyAgent.__spotifyPlayApplied = false;
             spotifyAgent.__spotifyPlayError = null;
             spotifyAgent.__spotifyToolError = null;
+            spotifyAgent.__spotifyPlaybackPending = false;
             spotifyAgent.__spotifyPlayUris = [];
             spotifyAgent.__spotifyCandidateTracks = [];
             spotifyAgent.__spotifyCurrentAfterPlayUri = null;
@@ -6190,6 +6404,7 @@ export async function generateRoutes(app: FastifyInstance) {
               }
               const results = await executeToolCalls([call], {
                 ...baseToolExecutionContext,
+                saveLorebookEntry,
               });
               const result = results[0]?.result ?? "Tool execution failed";
               if (agent.type === "spotify" && call.function.name === "spotify_play") {
@@ -6202,6 +6417,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   if (parsed.applied === true) {
                     spotifyAgent.__spotifyPlayApplied = true;
                     spotifyAgent.__spotifyPlayError = null;
+                    spotifyAgent.__spotifyPlaybackPending = parsed.playbackPending === true;
                     spotifyAgent.__spotifyPlayUris = readSpotifyTrackUris(parsed);
                     spotifyAgent.__spotifyCurrentAfterPlayUri = readSpotifyPlaybackTrackUri(parsed);
                     spotifyAgent.__spotifyPlayDisplay = readSpotifyStringField(parsed, "display") || null;
@@ -6823,7 +7039,11 @@ export async function generateRoutes(app: FastifyInstance) {
               const dirBlock = wrapContent(dirLines, "scene_directions", wrapFormat);
 
               if (wrapFormat === "xml") {
-                const ctxIdx = finalMessages.findIndex((m) => m.role === "system" && m.content.includes("<context>"));
+                const ctxIdx = finalMessages.findIndex(
+                  (m) =>
+                    (m.contextKind === "injection" || m.role === "system") &&
+                    m.content.includes("<context>"),
+                );
                 if (ctxIdx >= 0) {
                   const ctxMsg = finalMessages[ctxIdx]!;
                   finalMessages[ctxIdx] = {
@@ -6835,30 +7055,34 @@ export async function generateRoutes(app: FastifyInstance) {
                   };
                 } else {
                   const contextBlock = `<context>\n    ${dirBlock.replace(/\n/g, "\n    ")}\n</context>`;
-                  const lastUserIdx = findLastIndex(finalMessages, "user");
-                  finalMessages.splice(lastUserIdx >= 0 ? lastUserIdx : finalMessages.length, 0, {
-                    role: "system",
+                  finalMessages.splice(findTrackerContextInsertIndex(finalMessages), 0, {
+                    role: "user",
                     content: contextBlock,
+                    contextKind: "injection",
                   });
                 }
               } else if (wrapFormat === "markdown") {
-                const ctxIdx = finalMessages.findIndex((m) => m.role === "system" && m.content.includes("# Context"));
+                const ctxIdx = finalMessages.findIndex(
+                  (m) =>
+                    (m.contextKind === "injection" || m.role === "system") &&
+                    m.content.includes("# Context"),
+                );
                 if (ctxIdx >= 0) {
                   const ctxMsg = finalMessages[ctxIdx]!;
                   finalMessages[ctxIdx] = { ...ctxMsg, content: ctxMsg.content + "\n" + dirBlock };
                 } else {
                   const contextBlock = `# Context\n${dirBlock}`;
-                  const lastUserIdx = findLastIndex(finalMessages, "user");
-                  finalMessages.splice(lastUserIdx >= 0 ? lastUserIdx : finalMessages.length, 0, {
-                    role: "system",
+                  finalMessages.splice(findTrackerContextInsertIndex(finalMessages), 0, {
+                    role: "user",
                     content: contextBlock,
+                    contextKind: "injection",
                   });
                 }
               } else {
-                const lastUserIdx = findLastIndex(finalMessages, "user");
-                finalMessages.splice(lastUserIdx >= 0 ? lastUserIdx : finalMessages.length, 0, {
-                  role: "system",
+                finalMessages.splice(findTrackerContextInsertIndex(finalMessages), 0, {
+                  role: "user",
                   content: dirBlock,
+                  contextKind: "injection",
                 });
               }
             }
@@ -6984,6 +7208,15 @@ export async function generateRoutes(app: FastifyInstance) {
         let fullThinking = "";
         let providerThinking = "";
         let allResponses: string[] = [];
+        const generatedExpressionTargetIds = new Set<string>();
+        const recordExpressionTarget = (savedMsg: any, fallbackCharacterId: string | null) => {
+          const savedRole = typeof savedMsg?.role === "string" ? savedMsg.role : input.impersonate ? "user" : "assistant";
+          if (savedRole === "assistant" && fallbackCharacterId) {
+            generatedExpressionTargetIds.add(fallbackCharacterId);
+          } else if (savedRole === "user" && personaId) {
+            generatedExpressionTargetIds.add(personaId);
+          }
+        };
 
         const onThinking = (chunk: string) => {
           providerThinking += chunk;
@@ -7237,13 +7470,25 @@ export async function generateRoutes(app: FastifyInstance) {
             isGroupChat && groupChatMode === "individual" && chatMode !== "conversation" && targetCharId
               ? scopeIndividualGroupMessagesForTarget(messagesForGen, targetCharId, charInfo)
               : messagesForGen;
-          const preparedMessagesForGen = scopedMessagesForGen.map((message) => ({
+          const targetScopedMessagesForGen =
+            !promptTargetCharacterId && targetCharId
+              ? scopedMessagesForGen.map((message) => ({ ...message }))
+              : scopedMessagesForGen;
+          if (!promptTargetCharacterId && targetCharId) {
+            applyRegexScriptsToPromptMessages(targetScopedMessagesForGen, await getPromptRegexScripts(), {
+              resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
+              targetCharacterId: targetCharId,
+              targetedOnly: true,
+            });
+          }
+          const preparedMessagesForGen = targetScopedMessagesForGen.map((message) => ({
             ...message,
             content: (targetCharacterProfile
               ? resolveDeferredCharacterMacros(message.content, targetCharacterProfile, promptMacroContext)
               : message.content
             ).replace(/\n([ \t]*\n){2,}/g, "\n\n"),
           }));
+          dedupeLastMessageWrappers(preparedMessagesForGen);
           if (
             deferCharacterMacros &&
             preparedMessagesForGen.some((message) => hasDeferredCharacterMacros(message.content))
@@ -7265,6 +7510,31 @@ export async function generateRoutes(app: FastifyInstance) {
               ...(message.providerMetadata ? { providerMetadata: message.providerMetadata } : {}),
             }));
 
+          const mergeProviderAdjacentMessages = (messages: ChatMessage[]): ChatMessage[] => {
+            const merged: ChatMessage[] = [];
+            for (const message of messages) {
+              if (!message.content.trim()) continue;
+
+              const last = merged[merged.length - 1];
+              if (last && last.role === message.role) {
+                last.content = `${last.content}\n\n${message.content}`;
+                delete last.contextKind;
+                if (message.images?.length) {
+                  last.images = [...(last.images ?? []), ...message.images];
+                }
+                if (message.providerMetadata) {
+                  last.providerMetadata = message.providerMetadata;
+                }
+              } else {
+                merged.push({
+                  ...message,
+                  ...(message.images?.length ? { images: [...message.images] } : {}),
+                });
+              }
+            }
+            return merged;
+          };
+
           const prepareProviderMessages = (messages: ChatMessage[]): ChatMessage[] => {
             // Convert mid-prompt system messages to user role after context fitting.
             // This keeps prompt/injection system blocks protected while trimming history,
@@ -7278,7 +7548,7 @@ export async function generateRoutes(app: FastifyInstance) {
               if (m.role === "system") return { ...m, role: "user" as const };
               return m;
             });
-            return mergeAdjacentMessages(converted as any) as ChatMessage[];
+            return mergeProviderAdjacentMessages(converted);
           };
 
           let finalPromptSent: ChatMessage[] = [];
@@ -7337,7 +7607,8 @@ export async function generateRoutes(app: FastifyInstance) {
               const effModel = conn.model.toLowerCase();
               const tempSuppressed =
                 (conn.provider === "openai" || conn.provider === "openrouter") &&
-                (/^(o1|o3|o4)/.test(effModel) || (effModel.startsWith("gpt-5") && !!resolvedEffort));
+                (/^(o1|o3|o4)/.test(effModel) || (effModel.startsWith("gpt-5") && !!resolvedEffort)) ||
+                isClaudeNoSampling;
               const effTemp = tempSuppressed ? "N/A" : temperature;
               const effTopP = tempSuppressed ? "N/A" : topP;
 
@@ -7716,18 +7987,34 @@ export async function generateRoutes(app: FastifyInstance) {
                 debugLog("[debug] Thinking tokens (%d chars):\n%s", fullThinking.length, fullThinking);
               }
               if (usage) {
+                const hiddenCompletionTokens = getHiddenCompletionTokens(usage);
                 const visibleCompletionTokens = getVisibleCompletionTokens(usage);
+                const hiddenThinkingUnreported = fullThinking.trim().length > 0 && hiddenCompletionTokens == null;
                 debugLog(
                   "[debug] Token usage — prompt: %s  completion: %s  visibleCompletion: %s  reasoning: %s  total: %s  cached: %s  cacheWrite: %s  finish: %s",
                   usage.promptTokens ?? "N/A",
                   usage.completionTokens ?? "N/A",
-                  visibleCompletionTokens ?? "N/A",
-                  usage.completionReasoningTokens ?? "N/A",
+                  hiddenThinkingUnreported
+                    ? "unknown (provider did not split hidden thinking)"
+                    : (visibleCompletionTokens ?? "N/A"),
+                  usage.completionReasoningTokens ?? (hiddenThinkingUnreported ? "unreported" : "N/A"),
                   usage.totalTokens ?? "N/A",
                   usage.cachedPromptTokens ?? "N/A",
                   usage.cacheWritePromptTokens ?? "N/A",
                   finishReason ?? "N/A",
                 );
+                if (
+                  fullThinking.trim().length > 0 &&
+                  typeof usage.completionTokens === "number" &&
+                  typeof effectiveMaxTokensForSend === "number" &&
+                  usage.completionTokens >= effectiveMaxTokensForSend
+                ) {
+                  debugLog(
+                    "[debug] Completion budget warning — hidden thinking was present and completion usage reached maxTokens=%s; visible response may be short even when finish=%s.",
+                    effectiveMaxTokensForSend,
+                    finishReason ?? "N/A",
+                  );
+                }
               }
             }
 
@@ -7786,6 +8073,17 @@ export async function generateRoutes(app: FastifyInstance) {
                   parsed.commands.length,
                   parsed.commands.map((c) => c.type),
                 );
+              }
+              const recoveredSelfieCommand = recoverImplicitSelfieCommand({
+                response: fullResponse,
+                latestUserMessage: input.userMessage,
+                imageGenerationEnabled:
+                  typeof chatMeta.imageGenConnectionId === "string" && chatMeta.imageGenConnectionId.trim().length > 0,
+                existingCommands: parsedCommands,
+              });
+              if (recoveredSelfieCommand) {
+                parsedCommands = [...parsedCommands, recoveredSelfieCommand];
+                logger.info("[generate] Recovered implicit selfie command for chat %s", input.chatId);
               }
             }
             if (roleplayDmCommandsEnabled) {
@@ -7855,13 +8153,14 @@ export async function generateRoutes(app: FastifyInstance) {
             // ── Strip character name prefix in individual group mode ──
             // LLMs often prefix the response with the character name even when told not to.
             // Also strip any leftover <speaker> tags from individual mode responses.
-            if (chatMode === "conversation" && isGroupChat && groupChatMode === "individual" && targetCharId) {
+            if (isGroupChat && groupChatMode === "individual" && targetCharId) {
               const charRow = charInfo.find((c) => c.id === targetCharId);
               if (charRow) {
                 const cName = charRow.name;
+                const escapedName = cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
                 // Strip <speaker="Name">...</speaker> wrapper if present
                 const speakerWrap = new RegExp(
-                  `^\\s*<speaker="${cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}">[\\s\\S]*?<\\/speaker>\\s*$`,
+                  `^\\s*<speaker="${escapedName}">[\\s\\S]*?<\\/speaker>\\s*$`,
                   "i",
                 );
                 const speakerMatch = fullResponse.match(speakerWrap);
@@ -7872,10 +8171,13 @@ export async function generateRoutes(app: FastifyInstance) {
                     .trim();
                   contentReplaced = true;
                 }
-                // Strip plain name prefix: "Dottore\n", "Dottore:\n", "Dottore: "
-                const namePrefix = new RegExp(`^\\s*${cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:?\\s*\n`, "i");
-                if (namePrefix.test(fullResponse)) {
-                  fullResponse = fullResponse.replace(namePrefix, "");
+                // Strip plain name prefixes: "Dottore: text" or "Dottore\ntext".
+                const beforeNamePrefixStrip = fullResponse;
+                fullResponse = fullResponse
+                  .replace(new RegExp(`^\\s*${escapedName}\\s*:\\s*`, "i"), "")
+                  .replace(new RegExp(`^\\s*${escapedName}\\s*\\n+`, "i"), "")
+                  .trimStart();
+                if (fullResponse !== beforeNamePrefixStrip) {
                   contentReplaced = true;
                 }
               }
@@ -8149,6 +8451,7 @@ export async function generateRoutes(app: FastifyInstance) {
         const hasParallelAgents = pipelineAgents.some((a) => a.phase === "parallel");
         let parallelPromise: Promise<AgentResult[]> | null = null;
         if (hasParallelAgents && !abortController.signal.aborted) {
+          trySendSseEvent(reply, { type: "agent_start", data: { phase: "parallel" } });
           parallelPromise = pipeline.runParallel();
         }
 
@@ -8221,6 +8524,7 @@ export async function generateRoutes(app: FastifyInstance) {
             if (!genResult) break; // aborted
             firstSavedMsg ??= genResult.savedMsg;
             lastSavedMsg = genResult.savedMsg;
+            recordExpressionTarget(genResult.savedMsg, charId);
             allResponses.push(genResult.response);
             for (const cmd of genResult.commands) {
               collectedCommands.push({
@@ -8295,6 +8599,7 @@ export async function generateRoutes(app: FastifyInstance) {
           if (genResult) {
             firstSavedMsg ??= genResult.savedMsg;
             lastSavedMsg = genResult.savedMsg;
+            recordExpressionTarget(genResult.savedMsg, genResult.characterId);
             for (const cmd of genResult.commands) {
               collectedCommands.push({
                 command: cmd,
@@ -8356,7 +8661,18 @@ export async function generateRoutes(app: FastifyInstance) {
         // (pendingIllustration is hoisted above the follow-up loop.)
         const hasPostWork = hasPostProcessingAgents || parallelResults.length > 0;
         if (hasPostWork && combinedResponse && !abortController.signal.aborted) {
-          reply.raw.write(`data: ${JSON.stringify({ type: "agent_start", data: { phase: "post_generation" } })}\n\n`);
+          if (personaId && getLatestUserExpressionSource() && Array.isArray(agentContext.memory._availableSprites)) {
+            generatedExpressionTargetIds.add(personaId);
+          }
+          if (generatedExpressionTargetIds.size > 0 && Array.isArray(agentContext.memory._availableSprites)) {
+            agentContext.memory._availableSprites = (
+              agentContext.memory._availableSprites as Array<{ characterId: string }>
+            ).filter((sprite) => generatedExpressionTargetIds.has(sprite.characterId));
+            agentContext.memory._expressionTargetIds = [...generatedExpressionTargetIds];
+          }
+          if (hasPostProcessingAgents) {
+            reply.raw.write(`data: ${JSON.stringify({ type: "agent_start", data: { phase: "post_generation" } })}\n\n`);
+          }
 
           // LOG_LEVEL=debug: log post-processing agents
           if (isDebug) {
@@ -8373,6 +8689,59 @@ export async function generateRoutes(app: FastifyInstance) {
             mainResponse: combinedResponse,
             preGenInjections: contextInjections,
             parallelResults,
+          };
+
+          const finalizeExpressionAgentResult = (result: AgentResult): AgentResult => {
+            if (!result.success || result.type !== "sprite_change" || !result.data || typeof result.data !== "object") {
+              return result;
+            }
+
+            const spriteData = { ...(result.data as Record<string, unknown>) } as {
+              expressions?: Array<{
+                characterId?: string;
+                characterName?: string;
+                expression?: string;
+                transition?: string;
+              }>;
+            };
+            const availableSprites = agentContext.memory._availableSprites as
+              | Array<{ characterId: string; characterName: string; expressions: string[] }>
+              | undefined;
+            const rawExpressions = Array.isArray(spriteData.expressions) ? spriteData.expressions : [];
+            const validation = validateSpriteExpressionEntries(rawExpressions, availableSprites);
+            let validatedExpressions = validation.expressions as typeof spriteData.expressions;
+            if (!Array.isArray(spriteData.expressions) && rawExpressions.length === 0) {
+              logger.warn("[generate] Expression agent returned no expression entries — filling required targets");
+            }
+            for (const warning of validation.warnings) {
+              logger.warn("[generate] %s", warning.message);
+            }
+            const requiredExpressionTargetIds = normalizeRequiredSpriteExpressionIds(
+              agentContext.memory._expressionTargetIds,
+            );
+            if (requiredExpressionTargetIds.length > 0) {
+              const latestUserExpressionSource = getLatestUserExpressionSource();
+              const sourceTextByCharacterId = new Map<string, string>();
+              if (personaId && latestUserExpressionSource) {
+                sourceTextByCharacterId.set(personaId, latestUserExpressionSource);
+              }
+              const completion = completeRequiredSpriteExpressionEntries(
+                validatedExpressions ?? [],
+                availableSprites,
+                requiredExpressionTargetIds,
+                {
+                  defaultSourceText: combinedResponse,
+                  sourceTextByCharacterId,
+                },
+              );
+              validatedExpressions = completion.expressions as typeof spriteData.expressions;
+              for (const warning of completion.warnings) {
+                logger.warn("[generate] %s", warning.message);
+              }
+            }
+            spriteData.expressions = validatedExpressions;
+
+            return { ...result, data: spriteData };
           };
 
           let postResults = hasPostProcessingAgents
@@ -8411,8 +8780,10 @@ export async function generateRoutes(app: FastifyInstance) {
           const spotifyFallbackInputResults = postResults;
           postResults = await applySpotifyAgentPlaybackFallbacks(postResults, resolvedAgents, postAgentContext);
           for (let i = 0; i < postResults.length; i++) {
-            if (postResults[i] !== spotifyFallbackInputResults[i]) {
-              sendAgentEvent(postResults[i]!);
+            const result = postResults[i];
+            if (!result) continue;
+            if (result.agentType === "spotify" || result !== spotifyFallbackInputResults[i]) {
+              sendAgentEvent(result, { finalized: result.agentType === "spotify" });
             }
           }
 
@@ -8431,16 +8802,15 @@ export async function generateRoutes(app: FastifyInstance) {
                         lorebookKeeperSettings.readBehindMessages,
                       )
                     : null;
+                const phaseRetryContext: AgentContext =
+                  agentCfg.phase === "post_processing" ? { ...agentContext, mainResponse: combinedResponse } : agentContext;
                 const retryCtx: AgentContext = historicalLorebookTarget
                   ? (buildHistoricalLorebookKeeperContext(
                       agentContext,
                       lorebookKeeperMessages,
                       historicalLorebookTarget.id,
-                    ) ?? {
-                      ...agentContext,
-                      mainResponse: combinedResponse,
-                    })
-                  : { ...agentContext, mainResponse: combinedResponse };
+                    ) ?? phaseRetryContext)
+                  : phaseRetryContext;
                 const retried = await executeAgent(
                   agentCfg,
                   retryCtx,
@@ -8454,7 +8824,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   retryCtx,
                 );
                 const finalizedRetry = finalizedRetryResults[0] ?? retried;
-                sendAgentEvent(finalizedRetry);
+                sendAgentEvent(finalizedRetry, { finalized: finalizedRetry.agentType === "spotify" });
                 retryResults.push(finalizedRetry);
               } catch {
                 retryResults.push(failed);
@@ -8481,6 +8851,15 @@ export async function generateRoutes(app: FastifyInstance) {
                   })),
                 })}\n\n`,
               );
+            }
+          }
+
+          // Finalize expression results before streaming/persisting them so
+          // required persona/character entries are visible immediately.
+          postResults = postResults.map(finalizeExpressionAgentResult);
+          for (const result of postResults) {
+            if (shouldDeferExpressionAgentEvent(result)) {
+              sendAgentResultEvent(result);
             }
           }
 
@@ -8618,10 +8997,27 @@ export async function generateRoutes(app: FastifyInstance) {
                       const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
                       const imageSettings = await loadImageGenerationUserSettings(app.db);
                       const promptOverridesStorage = createPromptOverridesStorage(app.db);
+                      const setupConfigForImage =
+                        chatMeta.gameSetupConfig &&
+                        typeof chatMeta.gameSetupConfig === "object" &&
+                        !Array.isArray(chatMeta.gameSetupConfig)
+                          ? (chatMeta.gameSetupConfig as Record<string, unknown>)
+                          : null;
+                      const styleProfileId =
+                        (setupConfigForImage?.imageStyleProfileId as string | undefined) ??
+                        (chatMeta.imageStyleProfileId as string | undefined) ??
+                        null;
                       const generatedFilename = await generateChatBackground({
                         chatId: input.chatId,
                         locationSlug: locationText.slice(0, 120),
                         sceneDescription: promptText.slice(0, 1000),
+                        genre: (setupConfigForImage?.genre as string | undefined) ?? undefined,
+                        setting: (setupConfigForImage?.setting as string | undefined) ?? undefined,
+                        currentLocation: gameState?.location ?? null,
+                        currentWeather: gameState?.weather ?? null,
+                        currentTimeOfDay: gameState?.time ?? null,
+                        worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
+                        artStyle: (setupConfigForImage?.artStylePrompt as string | undefined) ?? undefined,
                         reason:
                           typeof generationRequest.reason === "string"
                             ? generationRequest.reason.trim().slice(0, 300)
@@ -8634,6 +9030,8 @@ export async function generateRoutes(app: FastifyInstance) {
                         imgEndpointId: imgConnFull.imageEndpointId || undefined,
                         imgComfyWorkflow: imgConnFull.comfyuiWorkflow || undefined,
                         imgDefaults: imageDefaults,
+                        styleProfiles: imageSettings.styleProfiles,
+                        styleProfileId,
                         promptOverridesStorage,
                         size: {
                           width: imageSettings.background.width,
@@ -8721,10 +9119,34 @@ export async function generateRoutes(app: FastifyInstance) {
                 | undefined;
               if (Array.isArray(spriteData.expressions)) {
                 const validation = validateSpriteExpressionEntries(spriteData.expressions, availableSprites);
-                spriteData.expressions = validation.expressions as typeof spriteData.expressions;
+                let validatedExpressions = validation.expressions as typeof spriteData.expressions;
                 for (const warning of validation.warnings) {
                   logger.warn("[generate] %s", warning.message);
                 }
+                const requiredExpressionTargetIds = normalizeRequiredSpriteExpressionIds(
+                  agentContext.memory._expressionTargetIds,
+                );
+                if (requiredExpressionTargetIds.length > 0) {
+                  const latestUserExpressionSource = getLatestUserExpressionSource();
+                  const sourceTextByCharacterId = new Map<string, string>();
+                  if (personaId && latestUserExpressionSource) {
+                    sourceTextByCharacterId.set(personaId, latestUserExpressionSource);
+                  }
+                  const completion = completeRequiredSpriteExpressionEntries(
+                    validatedExpressions ?? [],
+                    availableSprites,
+                    requiredExpressionTargetIds,
+                    {
+                      defaultSourceText: combinedResponse,
+                      sourceTextByCharacterId,
+                    },
+                  );
+                  validatedExpressions = completion.expressions as typeof spriteData.expressions;
+                  for (const warning of completion.warnings) {
+                    logger.warn("[generate] %s", warning.message);
+                  }
+                }
+                spriteData.expressions = validatedExpressions;
               }
               // Persist validated expressions onto the message/swipe extra so they survive page refresh
               // and swipe switching. The chat-level metadata is also updated for backward compat.
@@ -8735,10 +9157,26 @@ export async function generateRoutes(app: FastifyInstance) {
                 ) ?? [];
               if (persistedExpressions.length > 0) {
                 const exprMap: Record<string, string> = {};
-                for (const e of persistedExpressions) exprMap[e.characterId] = e.expression;
+                const personaExprMap: Record<string, string> = {};
+                for (const e of persistedExpressions) {
+                  if (personaId && e.characterId === personaId) {
+                    personaExprMap[e.characterId] = e.expression;
+                  } else {
+                    exprMap[e.characterId] = e.expression;
+                  }
+                }
                 try {
-                  await chats.updateMessageExtra(messageId, { spriteExpressions: exprMap });
-                  await chats.updateSwipeExtra(messageId, targetSwipeIndex, { spriteExpressions: exprMap });
+                  if (Object.keys(exprMap).length > 0) {
+                    await chats.updateMessageExtra(messageId, { spriteExpressions: exprMap });
+                    await chats.updateSwipeExtra(messageId, targetSwipeIndex, { spriteExpressions: exprMap });
+                  }
+                  if (Object.keys(personaExprMap).length > 0) {
+                    const personaMessageId =
+                      currentTurnUserMessageId ?? (await findLastUserMessageIdBefore(chats, input.chatId, messageId));
+                    if (personaMessageId) {
+                      await chats.updateMessageExtra(personaMessageId, { spriteExpressions: personaExprMap });
+                    }
+                  }
                 } catch {
                   /* non-critical */
                 }
@@ -8974,6 +9412,12 @@ export async function generateRoutes(app: FastifyInstance) {
                         const imgServiceHint = imgConnFull.imageService || imgSource;
                         const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
                         const imageSettings = await loadImageGenerationUserSettings(app.db);
+                        const styleProfileId =
+                          ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.imageStyleProfileId as
+                            | string
+                            | undefined) ??
+                          (chatMeta.imageStyleProfileId as string | undefined) ??
+                          null;
 
                         for (const npc of charsNeedingAvatars) {
                           try {
@@ -8985,9 +9429,17 @@ export async function generateRoutes(app: FastifyInstance) {
                                 0,
                                 1000,
                               );
+                            const compiledPrompt = compileImagePrompt({
+                              kind: "portrait",
+                              prompt,
+                              styleProfiles: imageSettings.styleProfiles,
+                              styleProfileId,
+                              imageDefaults,
+                            });
 
                             const imageResult = await generateImage(imgModel, imgBaseUrl, imgApiKey, imgServiceHint, {
-                              prompt,
+                              prompt: compiledPrompt.prompt,
+                              negativePrompt: compiledPrompt.negativePrompt || undefined,
                               model: imgModel,
                               width: imageSettings.portrait.width,
                               height: imageSettings.portrait.height,
@@ -9416,23 +9868,22 @@ export async function generateRoutes(app: FastifyInstance) {
                 );
                 const imagePositivePrompt = ((illustratorAgent?.settings?.imagePositivePrompt as string) ?? "").trim();
                 const savedNegativePrompt = ((illustratorAgent?.settings?.imageNegativePrompt as string) ?? "").trim();
-                let imgConnId = (illustratorAgent?.settings?.imageConnectionId as string) ?? null;
-                if (!imgConnId) {
-                  const defaultImageConn = (await connections.list()).find(
-                    (c) =>
-                      c.provider === "image_generation" &&
-                      (c.defaultForAgents === true || c.defaultForAgents === "true"),
+                const imageConnectionOverride = ((illustratorAgent?.settings?.imageConnectionId as string) ?? "").trim();
+                let imgConnFull = imageConnectionOverride ? await connections.getWithKey(imageConnectionOverride) : null;
+                if (imageConnectionOverride && !imgConnFull) {
+                  logger.warn(
+                    "[illustrator] Image connection override %s could not be resolved; falling back to default Illustrator connection",
+                    imageConnectionOverride,
                   );
-                  imgConnId = defaultImageConn?.id ?? null;
                 }
-                if (imgConnId) {
+                imgConnFull ??= await connections.getDefaultForImageGeneration();
+                if (imgConnFull) {
+                  const resolvedImageConnection = imgConnFull;
                   // Queue image generation to run after the result loop so it doesn't
                   // block other agents (game state, trackers, consistency editor).
                   pendingIllustration = (async () => {
                     try {
-                      const imgConnFull = await connections.getWithKey(imgConnId);
-                      if (!imgConnFull) throw new Error("Cannot resolve Illustrator agent connection");
-
+                      const imgConnFull = resolvedImageConnection;
                       const { generateImage, saveImageToDisk } = await import("../services/image/image-generation.js");
                       const { createGalleryStorage } = await import("../services/storage/gallery.storage.js");
                       const galleryStore = createGalleryStorage(app.db);
@@ -9444,101 +9895,85 @@ export async function generateRoutes(app: FastifyInstance) {
                       const imgServiceHint = imgConnFull.imageService || imgSource;
                       const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
                       const imageSettings = await loadImageGenerationUserSettings(app.db);
+                      const styleProfileId =
+                        ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.imageStyleProfileId as
+                          | string
+                          | undefined) ??
+                        (chatMeta.imageStyleProfileId as string | undefined) ??
+                        null;
 
-                      // Use per-chat selfie resolution if set; otherwise use the synced global selfie canvas.
-                      const selfieRes = (chatMeta.selfieResolution as string) ?? "";
-                      const resParts = selfieRes.split("x").map(Number);
-                      const parsedW = resParts[0] ?? 0;
-                      const parsedH = resParts[1] ?? 0;
-                      let imgWidth: number;
-                      let imgHeight: number;
-                      if (parsedW > 0 && parsedH > 0) {
-                        imgWidth = parsedW;
-                        imgHeight = parsedH;
-                      } else {
-                        imgWidth = imageSettings.selfie.width;
-                        imgHeight = imageSettings.selfie.height;
-                      }
+                      // Scene illustrations share the landscape background canvas.
+                      const imgWidth = imageSettings.background.width;
+                      const imgHeight = imageSettings.background.height;
 
                       // Prepend style to the prompt for better results
                       let fullPrompt = style ? `${style}, ${imagePrompt}` : imagePrompt;
                       if (imagePositivePrompt) {
                         fullPrompt = `${fullPrompt}, ${imagePositivePrompt}`;
                       }
-                      const finalNegativePrompt = [negativePrompt, savedNegativePrompt].filter(Boolean).join(", ");
+                      const finalNegativePrompt = [
+                        negativePrompt,
+                        savedNegativePrompt,
+                        ILLUSTRATOR_TEXT_NEGATIVE_PROMPT,
+                      ]
+                        .filter(Boolean)
+                        .join(", ");
 
                       logger.debug(`[illustrator] Starting image generation (${imgWidth}x${imgHeight})...`);
 
-                      // Collect character reference images when the setting is enabled.
-                      // Prefer saved full-body sprites, then fall back to avatar portraits.
+                      // Collect character reference images when enabled. Prefer
+                      // full-body sprites, then fall back to avatar portraits.
                       const useAvatarRefs = illustratorAgent?.settings?.useAvatarReferences === true;
                       let illustratorRefImages: string[] | undefined;
                       if (useAvatarRefs) {
-                        // Match character names from the Illustrator's output to character IDs.
-                        // The LLM picks which characters are visible in the image via the "characters" field.
-                        // If it didn't specify any, fall back to all characters in the chat.
-                        const illCharLower = illCharacters.map((n) => n.toLowerCase().trim());
-                        const relevantCharIds =
-                          illCharLower.length > 0
-                            ? charInfo
-                                .filter((c) => illCharLower.some((n) => c.name.toLowerCase() === n))
-                                .map((c) => c.id)
-                            : characterIds;
-                        const includePersona =
-                          illCharLower.length === 0 || illCharLower.some((n) => n === personaName.toLowerCase());
-
-                        // Collect visual reference images for chosen characters + persona.
-                        const refImages: string[] = [];
-                        for (const cid of relevantCharIds) {
-                          const ci = charInfo.find((c) => c.id === cid);
-                          if (!ci) continue;
-                          const b64 = readBestCharacterReferenceBase64(ci.id, ci.avatarPath);
-                          if (b64) refImages.push(b64);
-                        }
-                        if (includePersona && persona) {
-                          const personaB64 = readBestCharacterReferenceBase64(
-                            personaId,
-                            persona.avatarPath as string | null,
-                          );
-                          if (personaB64) refImages.push(personaB64);
-                        }
-                        if (refImages.length > 0) {
-                          illustratorRefImages = refImages;
+                        const referenceResolution = await resolveIllustratorCharacterReferences({
+                          charactersStore: chars,
+                          chatCharacters: charInfo.map((character) => ({
+                            id: character.id,
+                            name: character.name,
+                            avatarPath: character.avatarPath,
+                          })),
+                          persona: persona
+                            ? {
+                                id: personaId,
+                                name: personaName,
+                                avatarPath: persona.avatarPath as string | null,
+                              }
+                            : null,
+                          requestedNames: illCharacters.filter((name): name is string => typeof name === "string"),
+                          promptText: [
+                            imagePrompt,
+                            style,
+                            typeof illData.reason === "string" ? illData.reason : "",
+                            combinedResponse,
+                          ].join("\n"),
+                          fallbackToChatCharacters: false,
+                        });
+                        if (referenceResolution.referenceImages.length > 0) {
+                          illustratorRefImages = referenceResolution.referenceImages;
+                          if (referenceResolution.referenceLine) fullPrompt += `\n\n${referenceResolution.referenceLine}`;
                           logger.debug(
-                            `[illustrator] Sending ${refImages.length} character reference(s) for: ${illCharLower.length > 0 ? illCharacters.join(", ") : "all characters"}`,
+                            "[illustrator] Sending %d character reference(s) for: %s",
+                            referenceResolution.referenceImages.length,
+                            referenceResolution.referenceNames.join(", "),
                           );
-                        }
-
-                        // Build character appearance descriptions and augment the prompt
-                        const appearanceLines: string[] = [];
-                        for (const cid of relevantCharIds) {
-                          const ci = charInfo.find((c) => c.id === cid);
-                          if (!ci) continue;
-                          const visual = ci.appearance || ci.description;
-                          if (visual) appearanceLines.push(`${ci.name}: ${visual}`);
-                        }
-                        if (includePersona && persona) {
-                          const pAppearance = (persona as any).appearance ?? "";
-                          if (pAppearance) appearanceLines.push(`${personaName}: ${pAppearance}`);
-                        }
-                        if (appearanceLines.length > 0 || illustratorRefImages) {
-                          const parts: string[] = [];
-                          if (illustratorRefImages) {
-                            parts.push(
-                              "Reference images of the characters are attached. " +
-                                "Use them closely to match each character's exact visual appearance — face, hair, eyes, build, etc.",
-                            );
-                          }
-                          if (appearanceLines.length > 0) {
-                            parts.push("Character visual descriptions:\n" + appearanceLines.join("\n"));
-                          }
-                          fullPrompt = fullPrompt + "\n\n" + parts.join("\n");
                         }
                       }
 
-                      const imageResult = await generateImage(imgModel, imgBaseUrl, imgApiKey, imgServiceHint, {
+                      const compiledPrompt = compileImagePrompt({
+                        kind: "illustration",
                         prompt: fullPrompt,
                         negativePrompt: finalNegativePrompt || undefined,
+                        styleProfiles: imageSettings.styleProfiles,
+                        styleProfileId,
+                        imageDefaults,
+                        generatedStyle: style,
+                      });
+                      fullPrompt = compiledPrompt.prompt;
+
+                      const imageResult = await generateImage(imgModel, imgBaseUrl, imgApiKey, imgServiceHint, {
+                        prompt: compiledPrompt.prompt,
+                        negativePrompt: compiledPrompt.negativePrompt || undefined,
                         model: imgModel,
                         width: imgWidth,
                         height: imgHeight,
@@ -9959,20 +10394,34 @@ export async function generateRoutes(app: FastifyInstance) {
                         const imgSource = (imgConnFull as any).imageGenerationSource || imgModel;
                         const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
                         const imageSettings = await loadImageGenerationUserSettings(app.db);
+                        const styleProfileId =
+                          ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.imageStyleProfileId as
+                            | string
+                            | undefined) ??
+                          (chatMeta.imageStyleProfileId as string | undefined) ??
+                          null;
 
                         // Parse per-chat selfie resolution, otherwise use the global selfie canvas.
                         const selfieRes = (chatMeta.selfieResolution as string) ?? "";
                         const [selfieW, selfieH] = selfieRes.split("x").map(Number) as [number, number];
 
                         const serviceHint = imgConnFull.imageService || "";
+                        const compiledSelfiePrompt = compileImagePrompt({
+                          kind: "selfie",
+                          prompt: finalSelfiePrompt,
+                          negativePrompt: selfieNegativePrompt || undefined,
+                          styleProfiles: imageSettings.styleProfiles,
+                          styleProfileId,
+                          imageDefaults,
+                        });
                         const imageResult = await generateImage(
                           imgModel,
                           imgBaseUrl,
                           imgApiKey,
                           serviceHint || imgSource,
                           {
-                            prompt: finalSelfiePrompt,
-                            negativePrompt: selfieNegativePrompt || undefined,
+                            prompt: compiledSelfiePrompt.prompt,
+                            negativePrompt: compiledSelfiePrompt.negativePrompt || undefined,
                             model: imgModel,
                             width: selfieW || imageSettings.selfie.width,
                             height: selfieH || imageSettings.selfie.height,
@@ -9987,7 +10436,7 @@ export async function generateRoutes(app: FastifyInstance) {
                         const galleryEntry = await galleryStore.create({
                           chatId: input.chatId,
                           filePath,
-                          prompt: finalSelfiePrompt,
+                          prompt: compiledSelfiePrompt.prompt,
                           provider: imgConnFull.provider ?? "image_generation",
                           model: imgModel || "unknown",
                           width: selfieW || imageSettings.selfie.width,
@@ -10003,7 +10452,7 @@ export async function generateRoutes(app: FastifyInstance) {
                             type: "image",
                             url: imageUrl,
                             filename: `selfie_${charName.toLowerCase().replace(/\s+/g, "_")}.${imageResult.ext}`,
-                            prompt: finalSelfiePrompt,
+                            prompt: compiledSelfiePrompt.prompt,
                             galleryId: (galleryEntry as any)?.id,
                           };
                           await chats.appendSwipeAttachment(messageId, generationSwipeIndex, attachment);
@@ -10023,7 +10472,7 @@ export async function generateRoutes(app: FastifyInstance) {
                               characterName: charName,
                               messageId,
                               imageUrl,
-                              prompt: finalSelfiePrompt,
+                              prompt: compiledSelfiePrompt.prompt,
                               galleryId: (galleryEntry as any)?.id,
                             },
                           })}\n\n`,
@@ -11122,7 +11571,13 @@ export async function generateRoutes(app: FastifyInstance) {
         }
       }
 
-      // Wait for illustration to finish before closing the SSE stream
+      // Signal completion before the slow illustration tail. The client keeps
+      // listening until the HTTP stream closes, so late illustration events can
+      // still arrive without holding the chat's generation lock hostage.
+      sendSseEvent(reply, { type: "done", data: "" });
+      releaseActiveGeneration();
+
+      // Wait for illustration to finish before closing the SSE stream.
       if (pendingIllustration) {
         try {
           await pendingIllustration;
@@ -11130,9 +11585,6 @@ export async function generateRoutes(app: FastifyInstance) {
           /* errors already handled inside the promise */
         }
       }
-
-      // Signal completion
-      sendSseEvent(reply, { type: "done", data: "" });
     } catch (err) {
       const message =
         err instanceof Error
@@ -11146,7 +11598,7 @@ export async function generateRoutes(app: FastifyInstance) {
         clearGenerationInProgress(input.chatId, conversationGenerationStartedAt);
       }
       reply.raw.off("close", onClose);
-      if (activeGenerations) activeGenerations.delete(input.chatId);
+      releaseActiveGeneration();
       if (!clientDisconnected && !reply.raw.destroyed) {
         reply.raw.end();
       }

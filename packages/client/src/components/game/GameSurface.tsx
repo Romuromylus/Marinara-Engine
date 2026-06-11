@@ -50,6 +50,7 @@ import { api, getJsonRepairRequest, type JsonRepairRequest } from "../../lib/api
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { cn, type AvatarCrop, type LegacyAvatarCrop, type AvatarCropValue } from "../../lib/utils";
 import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
+import { gameAssetFileUrl } from "../../lib/game-asset-urls";
 import { audioManager } from "../../lib/game-audio";
 import {
   parseGmTags,
@@ -134,7 +135,7 @@ type JournalReadable = ReadableTag & {
 type GameAssetGenerationPayload = {
   chatId: string;
   backgroundTag?: string;
-  npcsNeedingAvatars?: Array<{ name: string; description: string }>;
+  npcsNeedingAvatars?: Array<{ name: string; description: string; gender?: string | null; pronouns?: string | null }>;
   forceNpcAvatarNames?: string[];
   illustration?: import("@marinara-engine/shared").SceneIllustrationRequest;
   debugMode?: boolean;
@@ -1063,7 +1064,7 @@ function backgroundAssetUrl(entry: { path: string }): string {
     const filename = entry.path.replace("__user_bg__/", "");
     return `/api/backgrounds/file/${encodeURIComponent(filename)}`;
   }
-  return `/api/game-assets/file/${entry.path}`;
+  return gameAssetFileUrl(entry.path) ?? "";
 }
 
 const BACKGROUND_FALLBACK_IGNORED_WORDS = new Set(["background", "backgrounds", "generated", "user"]);
@@ -2620,8 +2621,9 @@ export function GameSurface({
   // Also resolve persona sprite ID for expression lookup
   const personaSpriteId = useMemo(() => {
     const config = chatMeta.gameSetupConfig as Record<string, unknown> | undefined;
-    return (config?.personaId as string | undefined) ?? null;
-  }, [chatMeta.gameSetupConfig]);
+    const configuredPersonaId = typeof config?.personaId === "string" ? config.personaId.trim() : "";
+    return personaInfo?.id ?? (configuredPersonaId || null);
+  }, [chatMeta.gameSetupConfig, personaInfo?.id]);
 
   const spriteQueries = useQueries({
     queries: characterIds.map((id) => ({
@@ -2773,6 +2775,15 @@ export function GameSurface({
 
   const activeFullBodySprite = useMemo(() => {
     if (!fullBodyTarget) return null;
+    const targetName = normalizeSceneAssetName(fullBodyTarget.name);
+    const personaName = personaInfo?.name ? normalizeSceneAssetName(personaInfo.name) : "";
+    if (personaSpriteId && personaName && targetName === personaName) {
+      const pose =
+        fullBodyTarget.mode === "combat"
+          ? resolveCombatFullBodyPose(fullBodyTarget.token, personaSpriteQuery.data)
+          : resolveDialogueFullBodyPose(fullBodyTarget.token, personaSpriteQuery.data);
+      return pose ? { characterId: personaSpriteId, pose: `full_${pose}` } : null;
+    }
     const activeCharacterEntries = characterIds.flatMap((id) => {
       const character = characterMap.get(id);
       return character ? ([[id, character]] as Array<[string, NonNullable<ReturnType<typeof characterMap.get>>]>) : [];
@@ -2801,7 +2812,17 @@ export function GameSurface({
       characterId,
       pose: `full_${pose}`,
     };
-  }, [characterIds, characterMap, fullBodyTarget, librarySpriteQueries, speakingLibraryCharacters, spriteQueries]);
+  }, [
+    characterIds,
+    characterMap,
+    fullBodyTarget,
+    librarySpriteQueries,
+    personaInfo?.name,
+    personaSpriteId,
+    personaSpriteQuery.data,
+    speakingLibraryCharacters,
+    spriteQueries,
+  ]);
 
   // Build sprite expression map for the full-body SpriteOverlay.
   const gameSpriteExpressions = useMemo(
@@ -2931,7 +2952,12 @@ export function GameSurface({
         (npc) =>
           !npc.avatarUrl && !npcAvatarLookup.has(normalizeSceneAssetName(npc.name)) && npc.description && npc.name,
       )
-      .map((npc) => ({ name: npc.name, description: npc.description }))
+      .map((npc) => ({
+        name: npc.name,
+        description: npc.description,
+        gender: npc.gender ?? null,
+        pronouns: npc.pronouns ?? null,
+      }))
       .slice(0, 10);
 
     return npcsNeedingAvatars;
@@ -3841,8 +3867,13 @@ export function GameSurface({
       currentSpotifyTrack: recentSpotifyTrackHistoryRef.current[0] ?? null,
       recentSpotifyTracks: recentSpotifyTrackHistoryRef.current,
       currentAmbient: useGameAssetStore.getState().currentAmbient,
+      currentLocation: gameSnapshot?.location ?? null,
       currentWeather: gameSnapshot?.weather ?? null,
       currentTimeOfDay: gameSnapshot?.time ?? null,
+      genre: ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.genre as string | undefined) ?? null,
+      setting:
+        ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.setting as string | undefined) ?? null,
+      worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
       canGenerateBackgrounds: !!chatMeta.enableSpriteGeneration && !!chatMeta.gameImageConnectionId,
       canGenerateIllustrations: !!chatMeta.enableSpriteGeneration && !!chatMeta.gameImageConnectionId,
       artStylePrompt:
@@ -4666,8 +4697,12 @@ export function GameSurface({
       currentSpotifyTrack: recentSpotifyTrackHistoryRef.current[0] ?? null,
       recentSpotifyTracks: recentSpotifyTrackHistoryRef.current,
       currentAmbient: useGameAssetStore.getState().currentAmbient,
+      currentLocation: gameSnapshot?.location ?? null,
       currentWeather: gameSnapshot?.weather ?? null,
       currentTimeOfDay: gameSnapshot?.time ?? null,
+      genre: (setupConfig?.genre as string | undefined) ?? null,
+      setting: (setupConfig?.setting as string | undefined) ?? null,
+      worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
       canGenerateBackgrounds: !!chatMeta.enableSpriteGeneration && !!chatMeta.gameImageConnectionId,
       canGenerateIllustrations: !!chatMeta.enableSpriteGeneration && !!chatMeta.gameImageConnectionId,
       artStylePrompt:
@@ -4726,8 +4761,10 @@ export function GameSurface({
     chatMeta.gameImagePromptInstructions,
     chatMeta.gameSceneConnectionId,
     chatMeta.gameSetupConfig,
+    chatMeta.gameWorldOverview,
     currentBackground,
     fetchSpotifySceneCandidates,
+    gameSnapshot?.location,
     gameSnapshot?.time,
     gameSnapshot?.weather,
     gameState,
@@ -5001,7 +5038,14 @@ export function GameSurface({
         const result = await runGameAssetGeneration(
           {
             chatId: activeChatId,
-            npcsNeedingAvatars: [{ name: targetNpc.name, description: targetNpc.description ?? "" }],
+            npcsNeedingAvatars: [
+              {
+                name: targetNpc.name,
+                description: targetNpc.description ?? "",
+                gender: targetNpc.gender ?? null,
+                pronouns: targetNpc.pronouns ?? null,
+              },
+            ],
             forceNpcAvatarNames: [targetNpc.name],
             debugMode: useUIStore.getState().debugMode,
           },
@@ -7471,8 +7515,12 @@ export function GameSurface({
       currentMusic: useGameAssetStore.getState().currentMusic,
       recentMusic: recentMusicHistoryRef.current,
       currentAmbient: useGameAssetStore.getState().currentAmbient,
+      currentLocation: gameSnapshot?.location ?? null,
       currentWeather: gameSnapshot?.weather ?? null,
       currentTimeOfDay: gameSnapshot?.time ?? null,
+      genre: (setupConfig?.genre as string | undefined) ?? null,
+      setting: (setupConfig?.setting as string | undefined) ?? null,
+      worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
       canGenerateBackgrounds: !!chatMeta.enableSpriteGeneration && !!chatMeta.gameImageConnectionId,
       canGenerateIllustrations: !!chatMeta.enableSpriteGeneration && !!chatMeta.gameImageConnectionId,
       artStylePrompt: (setupConfig?.artStylePrompt as string | undefined) ?? null,

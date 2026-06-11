@@ -85,7 +85,7 @@ Output format:
 If no issues found, return: { "issues": [], "verdict": "clean" }`,
 
   /* ────────────────────────────────────────── */
-  expression: `Analyze the emotional state of each character or persona in the latest assistant message and pick the best matching sprite expression from their AVAILABLE sprites, listed in <available_sprites>.
+  expression: `Analyze the latest turn and pick the best matching sprite expression for every sprite owner listed in <available_sprites>.
 The <available_sprites> block lists sprite owners in the format: CharacterName (CharacterID): expression1, expression2, ...
 Some listed expressions are simple group keys. For example, if the list includes joy, the engine may randomly display a concrete matching sprite like joy_01 or joy_laugh. Use the simple listed key; do not invent variant filenames that are not listed.
 Respond ONLY with valid JSON.
@@ -107,9 +107,10 @@ Transition guide:
 - hop: small vertical hop (cheerful, eager, greeting).
 - none: instant swap (neutral reset, very minor change).
 Instructions:
-1. ONLY include sprite owners listed in <available_sprites>. If a character or persona is not listed there, do NOT include them.
+1. Include exactly one expression entry for every sprite owner listed in <available_sprites>. If a character or persona is not listed there, do NOT include them.
 2. The characterId MUST be the exact ID string from the parentheses, e.g. if the entry says "Dottore (abc123): happy, sad" then characterId must be "abc123". Never invent, reuse, or copy a different ID from chat history.
-3. When a character's emotion is ambiguous, pick the closest listed available expression or group key rather than guessing a generic one.`,
+3. Use <latest_user_message> to choose the active user persona's expression when that persona is listed in <available_sprites>. The active user persona still needs an entry even when <assistant_response> does not describe their face. Use <assistant_response> to choose assistant or character expressions.
+4. When a character's emotion is ambiguous, prefer neutral/default/calm/idle if available. Do not repeatedly choose a stylized expression like smirk unless the latest turn clearly shows that expression.`,
 
   /* ────────────────────────────────────────── */
   "echo-chamber": `Simulate a live streaming-service chat full of anonymous viewers reacting to the roleplay on screen. Generate a batch of short messages from fictional viewers commenting on the latest story beat.
@@ -193,6 +194,7 @@ IMPORTANT: The player may have at most 3 active (non-completed) quests at a time
 
   /* ────────────────────────────────────────── */
   illustrator: `After key narrative moments, generate a detailed image prompt for an image generation service (Stable Diffusion, DALL-E, etc.).
+Anchor your decision to <assistant_response> / the latest assistant turn. Use recent context only to understand continuity; do not illustrate an older scene just because it appears in context.
 Only generate a prompt when the scene is visually significant:
 1. A new important location is described in detail.
 2. A dramatic action scene occurs.
@@ -212,10 +214,12 @@ Output format:
 }
 Prompt quality rules:
 1. Be specific about composition, lighting, mood, and camera angle.
-2. Include FULL physical descriptions of every character and the user's persona visible in the scene — hair color, eye color, build, skin tone, clothing, and any distinguishing features from their character/persona data. The image model has no memory; it needs every visual detail spelled out in the prompt.
+2. In the prompt field itself, include FULL physical descriptions of every visible character and the user's persona: hair length/style/color, eye color, build, skin tone/carnation, clothing, and distinguishing features. The image model has no memory; the prompt must describe visible characters even when reference images are attached.
 3. Describe the environment and atmosphere with enough detail that an artist could paint it.
 4. Use art-style keywords for quality (e.g., "detailed", "dramatic lighting", "cinematic", "depth of field").
-5. NEVER include meta-instructions in the prompt (no "make it look good"). Only describe the image itself.`,
+5. NEVER include dialogue text, captions, narration boxes, speech bubbles, word balloons, manga SFX text, signs, subtitles, UI, logos, or watermarks in the prompt. The image should be visual art only.
+6. Put any visible character names in the "characters" array. Include named characters mentioned in the intended image even if they are not active chat participants.
+7. NEVER include meta-instructions in the prompt (no "make it look good"). Only describe the image itself.`,
 
   /* ────────────────────────────────────────── */
   "lorebook-keeper": `Analyze the narrative for new lore, character details, locations, or world-building information worth recording for future reference.
@@ -482,6 +486,7 @@ You have six tools:
 6. spotify_set_volume — Adjust volume (lower for quiet dialogue, higher for action).
 IMPORTANT! You MUST use the tool functions above to actually control Spotify.
 - To play music, call spotify_play with the URI. Do NOT just return a URI in JSON without calling the tool.
+- Use Spotify URIs exactly as returned by spotify_get_playlist_tracks or spotify_search. Do NOT append labels or suffixes such as "_candidate" to a URI.
 - To inspect current playback, call spotify_get_current_playback. To search, call spotify_search. To list playlists, call spotify_get_playlists.
 - To adjust volume, call spotify_set_volume.
 - Only AFTER you have used the tools should you respond with the JSON playback result below.
@@ -491,12 +496,14 @@ Rules:
 3. Pick from the user's personal library whenever a good match exists — they chose those songs for a reason. Only search the catalogue if the configured source allows it or nothing personal fits.
 4. When choosing from a configured playlist or Liked Songs, call spotify_get_playlist_tracks with query/mood terms and candidateLimit 30-80. Do NOT manually page through the whole playlist.
 4a. In game mode, pick ONE best track for the current scene and call spotify_play with only that track URI. The app will loop it until the DJ picks a new track.
+4b. If spotify_get_playlist_tracks returns recentTrackUris or recentAvoidedCount, treat recently played tracks as unavailable unless every non-recent candidate is a poor fit.
 5. Only change music when the mood noticeably shifts. Don't change every single turn, except on manualRetry/forceFreshPick where the user explicitly requested a new pick.
 6. Playing an entire playlist URI is fine if it fits the mood (e.g., a "battle music" or "chill" playlist).
 7. Prefer instrumental or ambient tracks for immersion — lyrics can be distracting.
 8. Use volume as a narrative tool: quiet for intimate moments, louder for epic scenes.
-9. If the current scene doesn't warrant a change, respond with action "none".
-10. Outside game mode, when playing music, queue multiple tracks (3-5) that fit the mood so playback doesn't stop after one song.
+9. Do not switch Spotify Connect devices. spotify_play targets the current active Spotify device; if no active device is available, report that playback is unavailable.
+10. If the current scene doesn't warrant a change, respond with action "none".
+11. Outside game mode, when playing music, queue multiple tracks (3-5) that fit the mood so playback doesn't stop after one song.
 After using the tools, respond with ONLY valid JSON for the playback result.
 Schema:
 {

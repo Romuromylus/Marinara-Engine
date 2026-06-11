@@ -9,6 +9,7 @@ import {
   type ChatOptions,
   type LLMUsage,
 } from "../base-provider.js";
+import { isClaudeAdaptiveOnlyNoSamplingModel } from "@marinara-engine/shared";
 
 const DEFAULT_CACHING_AT_DEPTH = 5;
 
@@ -20,6 +21,38 @@ function normalizeCachingAtDepth(value: unknown): number {
 function resolveCacheControlMessageIndex(messages: ChatMessage[], cachingAtDepth: number): number {
   if (messages.length === 0) return -1;
   return Math.max(0, messages.length - 1 - cachingAtDepth);
+}
+
+function stripAnthropicSamplingParameters(body: Record<string, unknown>): void {
+  delete body.temperature;
+  delete body.top_k;
+  delete body.top_p;
+}
+
+function resolveAdaptiveThinkingHeadroom(options: ChatOptions, visibleMaxTokens: number): number {
+  const effort = options.reasoningEffort ?? "high";
+  const effortHeadroom: Record<string, number> = {
+    low: 1024,
+    medium: 4096,
+    high: 8192,
+    xhigh: 12288,
+    max: 16384,
+  };
+  const requested = effortHeadroom[effort] ?? 8192;
+  const boundedByVisibleBudget = Math.max(1024, Math.floor(visibleMaxTokens * 2));
+  return Math.min(requested, boundedByVisibleBudget);
+}
+
+function applyAdaptiveThinkingConfig(
+  body: Record<string, unknown>,
+  options: ChatOptions,
+  visibleMaxTokens?: number,
+): void {
+  body.thinking = { type: "adaptive", display: "summarized" };
+  body.output_config = { effort: options.reasoningEffort ?? "high" };
+  if (typeof visibleMaxTokens === "number" && Number.isFinite(visibleMaxTokens) && visibleMaxTokens > 0) {
+    body.max_tokens = Math.floor(visibleMaxTokens) + resolveAdaptiveThinkingHeadroom(options, visibleMaxTokens);
+  }
 }
 
 /**
@@ -96,34 +129,26 @@ export class AnthropicProvider extends BaseLLMProvider {
       ...(options.topK ? { top_k: options.topK } : {}),
     };
 
-    // Opus 4.7+: sampling parameters are forbidden (400 error).
+    // Claude adaptive-only models reject sampling parameters (400 error).
     // Strip temperature, top_k, top_p regardless of thinking mode.
     const modelLower = options.model.toLowerCase();
-    const isAdaptiveOnly = /claude-opus-4-(?:[7-9]|\d{2,})/.test(modelLower);
+    const isAdaptiveOnly = isClaudeAdaptiveOnlyNoSamplingModel(options.model);
     if (isAdaptiveOnly) {
-      delete body.temperature;
-      delete body.top_k;
-      delete body.top_p;
+      stripAnthropicSamplingParameters(body);
     }
 
     // Enable extended thinking for reasoning models
     if (options.enableThinking) {
       if (isAdaptiveOnly) {
-        // Opus 4.7+: adaptive thinking (budget_tokens removed).
-        // display defaults to "omitted" on 4.7 — set "summarized" when
-        // the caller wants to surface thinking content to the user.
-        const thinking: Record<string, unknown> = { type: "adaptive" };
-        if (options.onThinking) {
-          thinking.display = "summarized";
-        }
-        body.thinking = thinking;
-        body.output_config = { effort: options.reasoningEffort ?? "high" };
+        // Adaptive-only Claude models use adaptive thinking (budget_tokens removed).
+        // display defaults to "omitted" on 4.7+; summarized is what the UI
+        // can safely capture and render in View Thoughts.
+        applyAdaptiveThinkingConfig(body, options, maxTokens);
       } else {
         // Opus 4.6 / Sonnet 4.6: prefer adaptive thinking (budget_tokens deprecated).
         const supportsAdaptive = /claude-(opus|sonnet)-4-[56]/.test(modelLower);
         if (supportsAdaptive) {
-          body.thinking = { type: "adaptive" };
-          body.output_config = { effort: options.reasoningEffort ?? "high" };
+          applyAdaptiveThinkingConfig(body, options, maxTokens);
           // Cannot use temperature with extended thinking
           delete body.temperature;
         } else {
@@ -138,6 +163,12 @@ export class AnthropicProvider extends BaseLLMProvider {
     }
 
     this.applyCustomParameters(body, options);
+    if (isAdaptiveOnly) {
+      stripAnthropicSamplingParameters(body);
+      if (options.enableThinking) {
+        applyAdaptiveThinkingConfig(body, options);
+      }
+    }
 
     const response = await llmFetch(url, {
       method: "POST",

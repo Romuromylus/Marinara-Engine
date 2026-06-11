@@ -1,17 +1,7 @@
 // ──────────────────────────────────────────────
 // Chat: Main chat area — mode-aware rendering
 // ──────────────────────────────────────────────
-import {
-  Suspense,
-  lazy,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import {
   useChatMessages,
@@ -23,7 +13,6 @@ import {
   useUpdateMessage,
   useUpdateMessageExtra,
   usePeekPrompt,
-  useCreateChat,
   useSetActiveSwipe,
   useUpdateChatMetadata,
   useBranchChat,
@@ -32,19 +21,18 @@ import {
 
 import { useChatStore } from "../../stores/chat.store";
 import { useGenerate } from "../../hooks/use-generate";
-import { spriteKeys, useCharacters, usePersonas, type SpriteInfo } from "../../hooks/use-characters";
-import { useConnections } from "../../hooks/use-connections";
+import { characterKeys, spriteKeys, useCharacters, usePersonas, type SpriteInfo } from "../../hooks/use-characters";
 import { usePageActivity } from "../../hooks/use-page-activity";
 import { api, ApiError } from "../../lib/api-client";
-import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
 import { getChatDisplayName, getConnectedChatDisplayName, parseChatMetadata } from "../../lib/chat-display";
+import { getChatCharacterIds } from "../../lib/chat-macros";
 import { resolveCurrentGameSessionChatId } from "../../lib/game-session-resolution";
 import { parseCharacterDisplayData } from "../../lib/character-display";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { chatBackgroundMetadataToUrl, chatBackgroundUrlToMetadata } from "../../lib/backgrounds";
 import { useGameStateStore } from "../../stores/game-state.store";
 import { toast } from "sonner";
-import { BookOpen, Check, HelpCircle, MessageSquare, Theater, X } from "lucide-react";
+import { Check, HelpCircle, List, X } from "lucide-react";
 import {
   APP_VERSION,
   BUILT_IN_AGENTS,
@@ -63,6 +51,7 @@ import { useTranslationStore } from "../../stores/translation.store";
 import { ttsService } from "../../lib/tts-service";
 import { useTTSConfig } from "../../hooks/use-tts";
 import { buildTTSVoiceRequests, normalizeTTSCharacterName, withTTSVoiceRequestCacheKeys } from "../../lib/tts-dialogue";
+import { CHAT_SCROLL_TO_BOTTOM_EVENT, type ChatScrollToBottomDetail } from "../../lib/chat-scroll-events";
 import { mirrorSpritePlacements, normalizeSpritePlacements } from "./sprite-placement";
 import { normalizeSpriteDisplayModes } from "./sprite-display-modes";
 import type {
@@ -73,7 +62,8 @@ import type {
   PeekPromptData,
 } from "./chat-area.types";
 import { RecentChats } from "./RecentChats";
-import { HomeFaq } from "./HomeFaq";
+import { HomeCreditsModal } from "./HomeCreditsModal";
+import { HomeProfessorMariChat } from "./HomeProfessorMariChat";
 import { NewChatConnectionGate } from "./NewChatConnectionGate";
 import { ChatCommonOverlays } from "./ChatCommonOverlays";
 
@@ -112,6 +102,13 @@ function normalizeMessageSpriteExpressions(value: unknown): Record<string, strin
     if (key && trimmed) expressions[key] = trimmed;
   }
   return expressions;
+}
+
+function getPersonaSnapshotName(extra: Record<string, unknown>): string | null {
+  const snapshot = extra.personaSnapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+  const name = (snapshot as Record<string, unknown>).name;
+  return typeof name === "string" && name.trim() ? name.trim() : null;
 }
 
 function resolveExpressionAvatarSpriteUrl(sprites: SpriteInfo[] | undefined, expression: string): string | null {
@@ -157,6 +154,35 @@ type AgentInjectionReviewRequest = {
   chatId: string;
   injections: AgentInjectionReviewItem[];
 };
+
+type CharacterRow = { id: string; data: unknown; avatarPath: string | null };
+type CharacterMapValue = NonNullable<ReturnType<CharacterMap["get"]>>;
+
+function toCharacterMapValue(char: CharacterRow): CharacterMapValue {
+  try {
+    const parsed = typeof char.data === "string" ? JSON.parse(char.data) : char.data;
+    const data = parsed && typeof parsed === "object" ? (parsed as Record<string, any>) : {};
+    const extensions = data.extensions && typeof data.extensions === "object" ? data.extensions : {};
+    return {
+      name: data.name ?? "Unknown",
+      description: data.description ?? "",
+      personality: data.personality ?? "",
+      backstory: extensions.backstory ?? "",
+      appearance: extensions.appearance ?? "",
+      scenario: data.scenario ?? "",
+      example: data.mes_example ?? "",
+      avatarUrl: char.avatarPath ?? null,
+      nameColor: extensions.nameColor || undefined,
+      dialogueColor: extensions.dialogueColor || undefined,
+      boxColor: extensions.boxColor || undefined,
+      avatarCrop: extensions.avatarCrop || null,
+      conversationStatus: extensions.conversationStatus || undefined,
+      conversationActivity: extensions.conversationActivity || undefined,
+    };
+  } catch {
+    return { name: "Unknown", avatarUrl: char.avatarPath ?? null };
+  }
+}
 
 const ChatConversationSurface = lazy(async () => {
   const module = await import("./ChatConversationSurface");
@@ -207,6 +233,7 @@ export function ChatArea() {
   const [spriteArrangeMode, setSpriteArrangeMode] = useState(false);
   const [agentInjectionReview, setAgentInjectionReview] = useState<AgentInjectionReviewRequest | null>(null);
   const [agentInjectionDrafts, setAgentInjectionDrafts] = useState<Record<string, string>>({});
+  const [creditsOpen, setCreditsOpen] = useState(false);
 
   // Delete dialog & multi-select state
   const [deleteDialogMessageId, setDeleteDialogMessageId] = useState<string | null>(null);
@@ -214,8 +241,13 @@ export function ChatArea() {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [selectionAnchorIndex, setSelectionAnchorIndex] = useState<number | null>(null);
 
-  const { data: chat, error: chatError } = useChat(activeChatId);
+  const { data: chatDetail, error: chatError } = useChat(activeChatId);
   const { data: allChats } = useChats();
+  const listedActiveChat = useMemo(
+    () => (activeChatId ? (allChats?.find((candidate) => candidate.id === activeChatId) ?? null) : null),
+    [activeChatId, allChats],
+  );
+  const chat = chatDetail ?? null;
   // Game mode loads ALL messages (no pagination) so the in-game log
   // shows the full session history instead of only the latest page.
   const isGameChat = (chat as unknown as { mode?: string })?.mode === "game";
@@ -259,14 +291,12 @@ export function ChatArea() {
   }, [messageOffset, messages]);
   const { data: allCharacters } = useCharacters();
   const { data: allPersonas } = usePersonas();
-  const { data: connections } = useConnections();
   const deleteMessage = useDeleteMessage(activeChatId);
   const deleteMessages = useDeleteMessages(activeChatId);
   const deleteSwipe = useDeleteSwipe(activeChatId);
   const updateMessage = useUpdateMessage(activeChatId);
   const updateMessageExtra = useUpdateMessageExtra(activeChatId);
   const peekPrompt = usePeekPrompt();
-  const createChat = useCreateChat();
   const branchChat = useBranchChat();
   const { generate, retryAgents } = useGenerate();
   const setActiveSwipe = useSetActiveSwipe(activeChatId);
@@ -279,6 +309,12 @@ export function ChatArea() {
     if (!activeChatId || !(chatError instanceof ApiError) || chatError.status !== 404) return;
     setActiveChatId(null);
   }, [activeChatId, chatError, setActiveChatId]);
+
+  useEffect(() => {
+    if (!activeChatId || !allChats) return;
+    if (listedActiveChat) return;
+    setActiveChatId(null);
+  }, [activeChatId, allChats, listedActiveChat, setActiveChatId]);
 
   const currentGameSessionChatId = useMemo(() => resolveCurrentGameSessionChatId(chat, allChats), [allChats, chat]);
 
@@ -319,71 +355,42 @@ export function ChatArea() {
     setAgentInjectionDrafts({});
   }, []);
 
-  const handleQuickStart = useCallback(
-    (mode: "conversation" | "roleplay" | "game") => {
-      const connectionRows = filterLanguageGenerationConnections(
-        (connections ?? []) as Array<{ id: string; provider?: string }>,
-      ).filter((connection) => !!connection.id);
-      if (connectionRows.length === 0) {
-        useChatStore.getState().setPendingNewChatMode(mode);
-        return;
-      }
+  // Character IDs in the active chat
+  const chatCharIds = useMemo(() => getChatCharacterIds(chat), [chat]);
 
-      const label = mode === "conversation" ? "Conversation" : mode === "game" ? "Game" : "Roleplay";
-      createChat.mutate(
-        { name: `New ${label}`, mode, characterIds: [] },
-        {
-          onSuccess: (chat) => {
-            useChatStore.getState().setActiveChatId(chat.id);
-            useChatStore.getState().setShouldOpenSettings(true);
-            useChatStore.getState().setShouldOpenWizard(true);
-          },
-        },
-      );
-    },
-    [connections, createChat],
-  );
-
-  // Build character lookup map
-  const characterMap: CharacterMap = useMemo(() => {
+  const baseCharacterMap: CharacterMap = useMemo(() => {
     const map: CharacterMap = new Map();
     if (!allCharacters) return map;
-    for (const char of allCharacters as Array<{ id: string; data: string; avatarPath: string | null }>) {
-      try {
-        const parsed = typeof char.data === "string" ? JSON.parse(char.data) : char.data;
-        map.set(char.id, {
-          name: parsed.name ?? "Unknown",
-          description: parsed.description ?? "",
-          personality: parsed.personality ?? "",
-          backstory: parsed.extensions?.backstory ?? "",
-          appearance: parsed.extensions?.appearance ?? "",
-          scenario: parsed.scenario ?? "",
-          example: parsed.mes_example ?? "",
-          avatarUrl: char.avatarPath ?? null,
-          nameColor: parsed.extensions?.nameColor || undefined,
-          dialogueColor: parsed.extensions?.dialogueColor || undefined,
-          boxColor: parsed.extensions?.boxColor || undefined,
-          avatarCrop: parsed.extensions?.avatarCrop || null,
-          conversationStatus: parsed.extensions?.conversationStatus || undefined,
-          conversationActivity: parsed.extensions?.conversationActivity || undefined,
-        });
-      } catch {
-        map.set(char.id, { name: "Unknown", avatarUrl: null });
-      }
+    for (const char of allCharacters as CharacterRow[]) {
+      map.set(char.id, toCharacterMapValue(char));
     }
     return map;
   }, [allCharacters]);
 
-  // Character IDs in the active chat
-  const chatCharIds: string[] = useMemo(
-    () =>
-      chat
-        ? typeof (chat as unknown as { characterIds: unknown }).characterIds === "string"
-          ? JSON.parse((chat as unknown as { characterIds: string }).characterIds)
-          : (chat.characterIds ?? [])
-        : [],
-    [chat],
+  const missingChatCharacterIds = useMemo(
+    () => chatCharIds.filter((id) => !baseCharacterMap.has(id)),
+    [baseCharacterMap, chatCharIds],
   );
+  const missingCharacterQueries = useQueries({
+    queries: missingChatCharacterIds.map((id) => ({
+      queryKey: characterKeys.detail(id),
+      queryFn: () => api.get<CharacterRow>(`/characters/${id}`),
+      enabled: !!chat?.id,
+      staleTime: 5 * 60_000,
+    })),
+  });
+
+  // Build character lookup map. Cold launches can render chat detail before the
+  // full library list has produced every active character, so merge exact
+  // per-chat character fetches as a rescue path.
+  const characterMap: CharacterMap = useMemo(() => {
+    const map: CharacterMap = new Map(baseCharacterMap);
+    for (const query of missingCharacterQueries) {
+      const char = query.data;
+      if (char?.id) map.set(char.id, toCharacterMapValue(char));
+    }
+    return map;
+  }, [baseCharacterMap, missingCharacterQueries]);
 
   const characterNames = useMemo(
     () => chatCharIds.map((id) => characterMap.get(id)?.name).filter((n): n is string => !!n),
@@ -431,6 +438,7 @@ export function ChatArea() {
       }
     }
     return {
+      id: persona.id,
       name: persona.name,
       description,
       personality: persona.personality || undefined,
@@ -699,10 +707,6 @@ export function ChatArea() {
     [chat?.id, hasCustomSpritePlacements, spritePlacements, spritePosition, updateMeta],
   );
 
-  const handleToggleSpritePosition = useCallback(() => {
-    handleSetSpritePosition(spritePosition === "left" ? "right" : "left");
-  }, [handleSetSpritePosition, spritePosition]);
-
   // Set of enabled agent type IDs (respects both global enableAgents toggle and per-chat agent list)
   const enabledAgentTypes = useMemo(() => {
     const set = new Set<string>();
@@ -716,12 +720,18 @@ export function ChatArea() {
   const combatAgentEnabled = enabledAgentTypes.has("combat");
   const expressionAgentEnabled = enabledAgentTypes.has("expression");
   const expressionAvatarsEnabled =
-    isRoleplay && chatMeta.expressionAvatarsEnabled === true && expressionAgentEnabled && chatCharIds.length > 0;
+    isRoleplay &&
+    chatMeta.expressionAvatarsEnabled === true &&
+    expressionAgentEnabled &&
+    (chatCharIds.length > 0 || !!personaInfo?.id);
   const expressionAvatarCharacterIds = useMemo(() => {
+    const allowedIds = new Set(chatCharIds);
+    if (personaInfo?.id) allowedIds.add(personaInfo.id);
     const configuredIds =
-      spriteCharacterIds.length > 0 ? spriteCharacterIds.filter((id) => chatCharIds.includes(id)) : chatCharIds;
+      spriteCharacterIds.length > 0 ? spriteCharacterIds.filter((id) => allowedIds.has(id)) : Array.from(allowedIds);
+    if (personaInfo?.id) configuredIds.push(personaInfo.id);
     return Array.from(new Set(configuredIds.filter((id) => typeof id === "string" && id.trim())));
-  }, [chatCharIds, spriteCharacterIds]);
+  }, [chatCharIds, personaInfo?.id, spriteCharacterIds]);
   const expressionAvatarSpriteQueries = useQueries({
     queries: expressionAvatarCharacterIds.map((characterId) => ({
       queryKey: spriteKeys.list(characterId),
@@ -744,11 +754,16 @@ export function ChatArea() {
       const extra = parseMessageExtraRecord(message.extra);
       const expressions = normalizeMessageSpriteExpressions(extra.spriteExpressions);
       const characterName = characterMap.get(characterId)?.name;
-      const expression = expressions[characterId] ?? (characterName ? expressions[characterName] : undefined);
+      const personaName =
+        characterId === personaInfo?.id ? (getPersonaSnapshotName(extra) ?? personaInfo.name) : undefined;
+      const expression =
+        expressions[characterId] ??
+        (characterName ? expressions[characterName] : undefined) ??
+        (personaName ? expressions[personaName] : undefined);
       if (!expression) return null;
       return resolveExpressionAvatarSpriteUrl(expressionAvatarSpriteMap.get(characterId), expression);
     };
-  }, [characterMap, expressionAvatarSpriteMap, expressionAvatarsEnabled]);
+  }, [characterMap, expressionAvatarSpriteMap, expressionAvatarsEnabled, personaInfo?.id, personaInfo?.name]);
   const shouldRefreshGameStateOnSwipe = isGameChat || Boolean(chatMeta.enableAgents);
 
   const refreshVisibleGameState = useCallback(async () => {
@@ -965,7 +980,7 @@ export function ChatArea() {
     [activeChatId, isStreaming, generate, currentInput, guideGenerations],
   );
 
-  const _handleRetryAgents = useCallback(async () => {
+  const handleRetryAgents = useCallback(async () => {
     if (!activeChatId || isStreaming || agentProcessing || failedAgentTypes.length === 0) return;
     await retryAgents(activeChatId, failedAgentTypes);
   }, [activeChatId, isStreaming, agentProcessing, failedAgentTypes, retryAgents]);
@@ -1096,6 +1111,15 @@ export function ChatArea() {
     if (!activeChatId) return;
     peekPrompt.mutate(activeChatId, {
       onSuccess: (data) => setPeekPromptData(data),
+      onError: (error) => {
+        const message =
+          error instanceof ApiError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : "Could not assemble the prompt preview.";
+        toast.error(message);
+      },
     });
   }, [activeChatId, peekPrompt]);
 
@@ -1345,6 +1369,41 @@ export function ChatArea() {
   const userScrolledAwayRef = useRef(false);
   const lastScrollTopRef = useRef(0);
   const userScrolledAtRef = useRef(0);
+  const forcedBottomScrollRef = useRef<{ requestedAt: number; behavior: ScrollBehavior } | null>(null);
+  const scrollToMessagesBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior });
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  }, []);
+  const scheduleScrollToMessagesBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      scrollToMessagesBottom(behavior);
+      requestAnimationFrame(() => {
+        scrollToMessagesBottom(behavior);
+        requestAnimationFrame(() => scrollToMessagesBottom(behavior));
+      });
+    },
+    [scrollToMessagesBottom],
+  );
+  useEffect(() => {
+    const handleScrollRequest = (event: Event) => {
+      const detail = (event as CustomEvent<ChatScrollToBottomDetail>).detail;
+      if (!detail?.chatId || detail.chatId !== activeChatId) return;
+
+      const behavior = detail.behavior ?? "auto";
+      forcedBottomScrollRef.current = { requestedAt: Date.now(), behavior };
+      userScrolledAwayRef.current = false;
+      isNearBottomRef.current = true;
+      scheduleScrollToMessagesBottom(behavior);
+    };
+
+    window.addEventListener(CHAT_SCROLL_TO_BOTTOM_EVENT, handleScrollRequest);
+    return () => window.removeEventListener(CHAT_SCROLL_TO_BOTTOM_EVENT, handleScrollRequest);
+  }, [activeChatId, scheduleScrollToMessagesBottom]);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -1459,11 +1518,25 @@ export function ChatArea() {
   const isOptimistic = newestMsgId?.startsWith("__optimistic_");
   useEffect(() => {
     if (isLoadingMoreRef.current) return;
-    // Always scroll when the user just sent a message (optimistic msg)
-    if (isOptimistic || (isNearBottomRef.current && !userScrolledAwayRef.current)) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const forcedBottomScroll = forcedBottomScrollRef.current;
+    const hasFreshForcedBottomScroll = !!forcedBottomScroll && Date.now() - forcedBottomScroll.requestedAt < 5000;
+    if (forcedBottomScroll && !hasFreshForcedBottomScroll) {
+      forcedBottomScrollRef.current = null;
     }
-  }, [newestMsgId, newestMsgSwipeIndex, isStreaming, isOptimistic]);
+
+    // Always scroll when the user just sent a message (optimistic msg)
+    if (isOptimistic || hasFreshForcedBottomScroll) {
+      const behavior = forcedBottomScroll?.behavior ?? "auto";
+      forcedBottomScrollRef.current = null;
+      userScrolledAwayRef.current = false;
+      isNearBottomRef.current = true;
+      scheduleScrollToMessagesBottom(behavior);
+      return;
+    }
+    if (isNearBottomRef.current && !userScrolledAwayRef.current) {
+      scheduleScrollToMessagesBottom("smooth");
+    }
+  }, [isOptimistic, isStreaming, newestMsgId, newestMsgSwipeIndex, scheduleScrollToMessagesBottom]);
 
   // Auto-scroll on streamBuffer changes without causing ChatArea re-render.
   // Uses a store subscription so the hot per-token updates bypass React.
@@ -1473,12 +1546,12 @@ export function ChatArea() {
       if (state.streamBuffer !== prev) {
         prev = state.streamBuffer;
         if (!isLoadingMoreRef.current && isNearBottomRef.current && !userScrolledAwayRef.current) {
-          messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          scrollToMessagesBottom("smooth");
         }
       }
     });
     return unsub;
-  }, []);
+  }, [scrollToMessagesBottom]);
 
   // Preserve scroll position when older messages are prepended
   const pageCount = msgData?.pages.length ?? 0;
@@ -1555,6 +1628,47 @@ export function ChatArea() {
   ]);
 
   // ═══════════════════════════════════════════════
+  // Restoring persisted active chat
+  // ═══════════════════════════════════════════════
+  if (activeChatId && !chat) {
+    const errorMessage =
+      chatError instanceof ApiError
+        ? chatError.message
+        : chatError instanceof Error
+          ? chatError.message
+          : "Opening chat...";
+    const hasOpenError = !!chatError;
+
+    return (
+      <div
+        data-component="ChatArea.RestoringChat"
+        className="flex flex-1 items-center justify-center overflow-hidden p-6"
+      >
+        <div className="flex flex-col items-center gap-3 text-center">
+          {!hasOpenError && (
+            <div className="h-7 w-7 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
+          )}
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-[var(--foreground)]">
+              {hasOpenError ? "Could not open this chat" : "Opening chat..."}
+            </p>
+            {hasOpenError && <p className="max-w-sm text-xs text-[var(--muted-foreground)]">{errorMessage}</p>}
+          </div>
+          {hasOpenError && (
+            <button
+              type="button"
+              onClick={() => setActiveChatId(null)}
+              className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
+            >
+              Back to chats
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════
   // Empty state (no active chat)
   // ═══════════════════════════════════════════════
   if (!activeChatId) {
@@ -1562,16 +1676,17 @@ export function ChatArea() {
 
     return (
       <>
+        <HomeCreditsModal open={creditsOpen} onClose={() => setCreditsOpen(false)} />
         <div
           data-component="ChatArea.EmptyState"
-          className="flex flex-1 flex-col items-center overflow-y-auto p-3 sm:p-5 lg:p-6"
+          className="flex flex-1 flex-col items-center overflow-y-auto p-1.5 sm:p-3 lg:p-3"
         >
-          <div className="flex w-full max-w-2xl flex-col items-center gap-3 py-2 sm:gap-4 sm:py-3 lg:pt-4 lg:pb-5">
+          <div className="flex w-full max-w-3xl flex-col items-center gap-1.5 py-0 sm:gap-2 lg:pt-0 lg:pb-2">
             {/* Central hero */}
             <div className="relative">
               <div
                 className={cn(
-                  "flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl shadow-xl shadow-orange-500/20 sm:h-20 sm:w-20",
+                  "flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl shadow-xl shadow-orange-500/20 sm:h-16 sm:w-16",
                   showEmptyStateEffects && "animate-pulse-ring bunny-glow",
                 )}
               >
@@ -1591,57 +1706,22 @@ export function ChatArea() {
 
             <div className="text-center">
               <h3 className="retro-glow-text text-base sm:text-xl font-bold tracking-tight">✧ Marinara Engine ✧</h3>
-              <p className="mt-1.5 sm:mt-2 max-w-xs text-xs sm:text-sm text-[var(--muted-foreground)]">
-                To get started, choose the type of chat you'd like to have with the AI
-              </p>
-            </div>
-
-            <div
-              className={cn(
-                "flex flex-wrap justify-center gap-2 sm:gap-3",
-                showEmptyStateEffects && "stagger-children",
-              )}
-            >
-              <QuickStartCard
-                icon={<MessageSquare size="1.125rem" />}
-                label="Conversation"
-                bg="linear-gradient(135deg, #4de5dd, #3ab8b1)"
-                shadowColor="rgba(77,229,221,0.15)"
-                tooltip="General chat with one or more characters, or a model itself"
-                onClick={() => handleQuickStart("conversation")}
-              />
-              <QuickStartCard
-                icon={<BookOpen size="1.125rem" />}
-                label="Roleplay"
-                bg="linear-gradient(135deg, #eb8951, #d97530)"
-                shadowColor="rgba(235,137,81,0.15)"
-                tooltip="For roleplaying or creative writing with one or more characters"
-                onClick={() => handleQuickStart("roleplay")}
-              />
-              <QuickStartCard
-                icon={<Theater size="1.125rem" />}
-                label="Game"
-                bg="linear-gradient(135deg, #e15c8c, #c94776)"
-                shadowColor="rgba(225,92,140,0.15)"
-                tooltip="AI-managed singleplayer RPG with a Game Master, party, dice, maps, and quests"
-                onClick={() => handleQuickStart("game")}
-              />
             </div>
 
             {/* Recent Chats */}
             <RecentChats />
 
-            <HomeFaq />
+            <HomeProfessorMariChat />
 
             <div
               className={cn(
-                "w-48",
+                "w-48 [--retro-divider-margin:0]",
                 showEmptyStateEffects ? "retro-divider" : "h-px rounded-[1px] bg-[var(--border)]/40",
               )}
             />
 
             {/* Footer */}
-            <div className="flex w-full max-w-2xl flex-col items-center gap-2">
+            <div className="flex w-full max-w-2xl flex-col items-center gap-1">
               <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 text-center text-[0.625rem] leading-tight text-[var(--muted-foreground)]/55 sm:text-xs">
                 <span>
                   Created by{" "}
@@ -1677,7 +1757,7 @@ export function ChatArea() {
                   </a>
                 </span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap justify-center gap-2">
                 <a
                   href="https://discord.com/invite/KdAkTg94ME"
                   target="_blank"
@@ -1700,16 +1780,15 @@ export function ChatArea() {
                   </svg>
                   Support
                 </a>
+                <button
+                  type="button"
+                  onClick={() => setCreditsOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/60 px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+                >
+                  <List size="0.875rem" />
+                  Credits
+                </button>
               </div>
-
-              {/* Special thanks */}
-              <p className="max-w-[42rem] px-1 text-center text-[0.625rem] leading-snug text-[var(--muted-foreground)]/40 sm:max-w-[46rem]">
-                Special thanks to Xel, Jorge, Cha1latte, Javedz678, Teuku, Shadota, Romu, Mm14141, MagicGoddess, John,
-                Pwildani, Romu, Felor, MuniMuni, Guybrush01, Joshellis625, LukaTheHero, Coxde, JorgeLTE, Seele The Seal
-                King, Loungemeister, Kale, Tabris, GREGOR OVECH, Coins, Tacoman, Jorge, Promansis, Kitsumiro, Sheep,
-                Pod042, Prolix, PlutoMayhem, Mezzeh, Kuc0, Exalted, Yang Best Girl, MidnightSleeper, Geechan,
-                TheLonelyDevil, Artus, and you!
-              </p>
 
               {/* Restart tutorial */}
               <button
@@ -1994,7 +2073,6 @@ export function ChatArea() {
           spritePlacements={spritePlacements}
           spriteScale={spriteScale}
           spriteOpacity={spriteOpacity}
-          hasCustomSpritePlacements={hasCustomSpritePlacements}
           spriteArrangeMode={spriteArrangeMode}
           enabledAgentTypes={enabledAgentTypes}
           chatCharIds={chatCharIds}
@@ -2040,6 +2118,7 @@ export function ChatArea() {
           onToggleSelectMessage={handleToggleSelectMessage}
           onRerunTrackers={handleRerunTrackers}
           onRerunSingleTracker={handleRerunSingleTracker}
+          onRetryFailedAgents={handleRetryAgents}
           onStartEncounter={() => startEncounter()}
           onConcludeScene={() => concludeScene(activeChatId)}
           onAbandonScene={() => abandonScene(activeChatId)}
@@ -2060,7 +2139,6 @@ export function ChatArea() {
           onResetSpritePlacements={handleResetSpritePlacements}
           onSpriteSideChange={handleSetSpritePosition}
           onToggleSpriteArrange={() => setSpriteArrangeMode((prev) => !prev)}
-          onToggleSpritePosition={handleToggleSpritePosition}
           onExpressionChange={handleExpressionChange}
           onSpritePlacementChange={handleSpritePlacementChange}
           onDeleteConfirm={handleDeleteConfirm}
@@ -2166,59 +2244,5 @@ function AgentInjectionReviewModal({
         </div>
       </div>
     </Modal>
-  );
-}
-
-function QuickStartCard({
-  icon,
-  label,
-  bg,
-  shadowColor,
-  onClick,
-  comingSoon,
-  tooltip,
-}: {
-  icon: ReactNode;
-  label: string;
-  bg: string;
-  shadowColor?: string;
-  onClick?: () => void;
-  comingSoon?: boolean;
-  tooltip?: string;
-}) {
-  const [showComingSoon, setShowComingSoon] = useState(false);
-
-  const handleClick = () => {
-    if (comingSoon && !onClick) {
-      setShowComingSoon(true);
-      setTimeout(() => setShowComingSoon(false), 1500);
-      return;
-    }
-    onClick?.();
-  };
-
-  return (
-    <div
-      onClick={handleClick}
-      title={tooltip}
-      className={cn(
-        "group card-3d-tilt btn-scanlines relative flex w-20 sm:w-28 flex-col items-center justify-center gap-1.5 sm:gap-2 rounded-xl border-2 border-[var(--border)] bg-[var(--card)] p-2.5 sm:p-4 text-center transition-all",
-        "cursor-pointer hover:-translate-y-1 hover:border-[var(--primary)]/40 hover:shadow-lg",
-      )}
-      style={shadowColor ? { ["--tw-shadow-color" as string]: shadowColor } : undefined}
-    >
-      {showComingSoon && (
-        <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-[var(--secondary)] px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] shadow-md animate-fade-in-up">
-          Coming Soon
-        </span>
-      )}
-      <div
-        className="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-xl text-white shadow-sm transition-transform group-hover:scale-110"
-        style={{ background: bg }}
-      >
-        {icon}
-      </div>
-      <span className="text-[0.625rem] sm:text-xs font-medium text-[var(--muted-foreground)]">{label}</span>
-    </div>
   );
 }

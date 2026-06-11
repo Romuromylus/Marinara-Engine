@@ -37,7 +37,7 @@ import {
   Globe,
   Key,
   Server,
-  Bot,
+  Sparkles,
   ChevronDown,
   ExternalLink,
   ImageIcon,
@@ -72,9 +72,11 @@ import {
   imageSourceToDefaultsService,
   normalizeImageGenerationProfile,
   sanitizeImageGenerationProfile,
+  suggestImageStyleProfileIdForModel,
   type APIProvider,
   type ImageDefaultsService,
   type ImageGenerationDefaultsProfile,
+  type ImageStyleProfileSettings,
 } from "@marinara-engine/shared";
 
 /** Links where users can obtain API keys for each provider */
@@ -131,6 +133,7 @@ export function ConnectionEditor() {
 
   const [dirty, setDirty] = useState(false);
   const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  const imageStyleProfiles = useUIStore((s) => s.imageStyleProfiles);
   useEffect(() => {
     setEditorDirty(dirty);
   }, [dirty, setEditorDirty]);
@@ -685,7 +688,7 @@ export function ConnectionEditor() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* ── Header ── */}
-      <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
+      <div className="flex items-center gap-3 border-b border-[var(--border)] px-4 py-3">
         <button
           onClick={handleClose}
           className="shrink-0 rounded-xl p-2 transition-all hover:bg-[var(--accent)] active:scale-95"
@@ -1461,7 +1464,10 @@ export function ConnectionEditor() {
           {localProvider === "image_generation" && selectedImageDefaultsService && localImageDefaults && (
             <ImageGenerationDefaultsPanel
               service={selectedImageDefaultsService}
+              model={localModel}
+              source={selectedImageService}
               value={localImageDefaults}
+              styleProfiles={imageStyleProfiles}
               expanded={imageDefaultsExpanded}
               onExpandedChange={setImageDefaultsExpanded}
               onChange={(next) => {
@@ -1691,7 +1697,7 @@ export function ConnectionEditor() {
           {/* ── Default for Agents ── */}
           <FieldGroup
             label={isImageGenerationProvider ? "Default for Illustrator" : "Default for Agents"}
-            icon={<Bot size="0.875rem" className="text-teal-400" />}
+            icon={<Sparkles size="0.875rem" className="text-sky-400" />}
             help={
               isImageGenerationProvider
                 ? "When enabled, the Illustrator agent will use this image generation connection by default whenever it does not have a specific Image Generation Connection assigned."
@@ -1709,7 +1715,7 @@ export function ConnectionEditor() {
                   }}
                   className="peer sr-only"
                 />
-                <div className="h-5 w-9 rounded-full bg-[var(--border)] transition-colors peer-checked:bg-teal-400/70" />
+                <div className="h-5 w-9 rounded-full bg-[var(--border)] transition-colors peer-checked:bg-sky-400/70" />
                 <div className="absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-4" />
               </div>
               <span className="text-sm">
@@ -2155,14 +2161,20 @@ function TestResultCard({
 
 function ImageGenerationDefaultsPanel({
   service,
+  model,
+  source,
   value,
+  styleProfiles,
   expanded,
   onExpandedChange,
   onChange,
   onReset,
 }: {
   service: ImageDefaultsService;
+  model: string;
+  source?: string | null;
   value: ImageGenerationDefaultsProfile;
+  styleProfiles: ImageStyleProfileSettings;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onChange: (next: ImageGenerationDefaultsProfile) => void;
@@ -2172,9 +2184,17 @@ function ImageGenerationDefaultsPanel({
     onChange({ ...value, seed });
   };
 
+  const updateStyleProfile = (styleProfileId: string) => {
+    onChange({ ...value, styleProfileId: styleProfileId || null });
+  };
+
   const automatic1111 = value.automatic1111 ?? createDefaultImageGenerationProfile("automatic1111").automatic1111!;
   const comfyui = value.comfyui ?? createDefaultImageGenerationProfile("comfyui").comfyui!;
   const novelai = value.novelai ?? createDefaultImageGenerationProfile("novelai").novelai!;
+  const suggestedStyleProfileId = suggestImageStyleProfileIdForModel(model, source, service);
+  const suggestedStyleProfile = suggestedStyleProfileId
+    ? styleProfiles.profiles.find((profile) => profile.id === suggestedStyleProfileId)
+    : null;
 
   const updateAutomatic1111 = (patch: Partial<typeof automatic1111>) => {
     onChange({
@@ -2248,6 +2268,37 @@ function ImageGenerationDefaultsPanel({
 
             <div className="grid gap-2 sm:grid-cols-2">
               <NumberSetting label="Seed" value={value.seed} min={-1} max={4_294_967_295} onCommit={updateSeed} />
+              <label className="flex flex-col gap-1 rounded-lg bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Style Profile</span>
+                  {suggestedStyleProfile && suggestedStyleProfile.id !== value.styleProfileId && (
+                    <button
+                      type="button"
+                      onClick={() => updateStyleProfile(suggestedStyleProfile.id)}
+                      className="rounded-md bg-[var(--secondary)] px-1.5 py-0.5 text-[0.55rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    >
+                      Use {suggestedStyleProfile.name}
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={value.styleProfileId ?? ""}
+                  onChange={(event) => updateStyleProfile(event.target.value)}
+                  className="rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)]"
+                >
+                  <option value="">Use global default</option>
+                  {styleProfiles.profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </select>
+                {suggestedStyleProfile && (
+                  <span className="text-[0.55rem] text-[var(--muted-foreground)]">
+                    Suggested from model/source: {suggestedStyleProfile.name}
+                  </span>
+                )}
+              </label>
               {service === "automatic1111" ? (
                 <>
                   <NumberSetting

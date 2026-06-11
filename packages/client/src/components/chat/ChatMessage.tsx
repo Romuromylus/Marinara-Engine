@@ -46,6 +46,7 @@ import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useTranslate } from "../../hooks/use-translate";
 import { api } from "../../lib/api-client";
+import { applyTextareaQuoteFormat } from "../../lib/textarea-quotes";
 import { ttsService } from "../../lib/tts-service";
 import { useTTSConfig } from "../../hooks/use-tts";
 import { buildTTSVoiceRequests, normalizeTTSCharacterName, withTTSVoiceRequestCacheKeys } from "../../lib/tts-dialogue";
@@ -140,11 +141,13 @@ function HiddenFromAIMessageSummary({ roleplay, onExpand }: { roleplay?: boolean
 const EditTextarea = memo(function EditTextarea({
   initialContent,
   fontSize,
+  quoteFormat,
   onSave,
   onCancel,
 }: {
   initialContent: string;
   fontSize: string | number | undefined;
+  quoteFormat: QuoteFormat;
   onSave: (content: string) => void;
   onCancel: () => void;
 }) {
@@ -170,16 +173,19 @@ const EditTextarea = memo(function EditTextarea({
   }, [autoResize]);
 
   const handleSave = useCallback(() => {
-    if (ref.current) onSave(ref.current.value);
-  }, [onSave]);
+    if (ref.current) onSave(formatTextQuotes(ref.current.value, quoteFormat));
+  }, [onSave, quoteFormat]);
 
   return (
     <div className="flex flex-col gap-2">
       <textarea
         ref={ref}
-        defaultValue={initialContent.replace(/[\u201C\u201D\u201E\u201F]/g, '"').replace(/[\u2018\u2019]/g, "'")}
+        defaultValue={formatTextQuotes(initialContent, quoteFormat)}
         rows={1}
-        onInput={autoResize}
+        onInput={(event) => {
+          applyTextareaQuoteFormat(event.currentTarget, quoteFormat);
+          autoResize();
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSave();
           if (e.key === "Escape") onCancel();
@@ -733,6 +739,7 @@ export const ChatMessage = memo(function ChatMessage({
     showMessageNumbers,
     guideGenerations,
     boldDialogue,
+    editMessageOnDoubleClick,
     theme,
   } = useUIStore(
     useShallow((s) => ({
@@ -748,6 +755,7 @@ export const ChatMessage = memo(function ChatMessage({
       showMessageNumbers: s.showMessageNumbers,
       guideGenerations: s.guideGenerations,
       boldDialogue: s.boldDialogue ?? true,
+      editMessageOnDoubleClick: s.editMessageOnDoubleClick,
       theme: s.theme,
     })),
   );
@@ -916,14 +924,16 @@ export const ChatMessage = memo(function ChatMessage({
 
   const startQuickEdit = useCallback(
     (target: EventTarget | null) => {
-      if (!isRoleplay || !onEdit || editing || isStreaming || multiSelectMode) return false;
+      if (!editMessageOnDoubleClick || !isRoleplay || !onEdit || editing || isStreaming || multiSelectMode) {
+        return false;
+      }
       if (isMessageQuickEditIgnoredTarget(target)) return false;
       window.getSelection()?.removeAllRanges();
       setShowActions(false);
       startEditing();
       return true;
     },
-    [editing, isRoleplay, isStreaming, multiSelectMode, onEdit, startEditing],
+    [editMessageOnDoubleClick, editing, isRoleplay, isStreaming, multiSelectMode, onEdit, startEditing],
   );
 
   const handleRoleplayDoubleClick = useCallback(
@@ -1103,8 +1113,19 @@ export const ChatMessage = memo(function ChatMessage({
 
   // Resolve character info from characters that actually belong to this chat.
   const charInfo = message.characterId && scopedCharacterMap ? scopedCharacterMap.get(message.characterId) : null;
+  const fallbackChatCharacterEntry = useMemo(() => {
+    if (!scopedCharacterMap) return null;
+    const orderedIds = chatCharacterIds?.length ? chatCharacterIds : Array.from(scopedCharacterMap.keys());
+    for (const id of orderedIds) {
+      const info = scopedCharacterMap.get(id);
+      if (info) return { id, info };
+    }
+    return null;
+  }, [chatCharacterIds, scopedCharacterMap]);
+  const resolvedCharacterInfo = charInfo ?? fallbackChatCharacterEntry?.info ?? null;
+  const resolvedCharacterId = charInfo ? message.characterId : (fallbackChatCharacterEntry?.id ?? message.characterId);
   const primaryCharInfo =
-    charInfo ??
+    resolvedCharacterInfo ??
     (scopedCharacterMap
       ? (Array.from(scopedCharacterMap.values()).find(
           (candidate): candidate is NonNullable<typeof candidate> => !!candidate,
@@ -1170,9 +1191,17 @@ export const ChatMessage = memo(function ChatMessage({
   ]);
 
   const displayName = isUser ? userName : charName;
-  const avatarUrl = isUser ? (msgPersona?.avatarUrl ?? personaInfo?.avatarUrl ?? null) : (charInfo?.avatarUrl ?? null);
+  const avatarUrl = isUser
+    ? (msgPersona?.avatarUrl ?? personaInfo?.avatarUrl ?? null)
+    : (resolvedCharacterInfo?.avatarUrl ?? null);
+  const personaExpressionId =
+    isUser && typeof msgPersona?.personaId === "string" ? msgPersona.personaId : personaInfo?.id;
   const expressionAvatarUrl =
-    !isUser && message.characterId ? (expressionAvatarResolver?.(message, message.characterId) ?? null) : null;
+    isUser && personaExpressionId
+      ? (expressionAvatarResolver?.(message, personaExpressionId) ?? null)
+      : !isUser && resolvedCharacterId
+        ? (expressionAvatarResolver?.(message, resolvedCharacterId) ?? null)
+        : null;
   const displayAvatarUrl = expressionAvatarUrl ?? avatarUrl;
   const personaAvatarCrop = isUser
     ? (parseAvatarCropJson(msgPersona?.avatarCrop) ?? personaInfo?.avatarCrop ?? null)
@@ -1181,7 +1210,7 @@ export const ChatMessage = memo(function ChatMessage({
     ? {}
     : isUser
       ? getAvatarCropStyle(personaAvatarCrop)
-      : getAvatarCropStyle(charInfo?.avatarCrop);
+      : getAvatarCropStyle(resolvedCharacterInfo?.avatarCrop);
 
   // Resolve colors: character colors for assistant, persona colors for user
   // Prefer per-message persona snapshot colors over current persona
@@ -1193,7 +1222,7 @@ export const ChatMessage = memo(function ChatMessage({
           boxColor: msgPersona.boxColor,
         }
       : personaInfo
-    : charInfo;
+    : resolvedCharacterInfo;
   const dialogueColor = msgColors?.dialogueColor;
   const boxBgColor = msgColors?.boxColor;
   const msgNameColor = msgColors?.nameColor;
@@ -1346,7 +1375,7 @@ export const ChatMessage = memo(function ChatMessage({
     ? (personaAvatarCrop ?? null)
     : expressionAvatarUrl
       ? null
-      : (charInfo?.avatarCrop ?? null);
+      : (resolvedCharacterInfo?.avatarCrop ?? null);
   const compactAvatarCropStyle: React.CSSProperties = useCompactRectangleAvatar
     ? rectangleSafeCropStyle(compactAvatarCrop, avatarCropStyle)
     : avatarCropStyle;
@@ -1415,6 +1444,7 @@ export const ChatMessage = memo(function ChatMessage({
     <EditTextarea
       initialContent={message.content}
       fontSize={chatFontSize}
+      quoteFormat={quoteFormat}
       onSave={handleSaveEdit}
       onCancel={handleCancelEdit}
     />
@@ -2231,6 +2261,7 @@ export const ChatMessage = memo(function ChatMessage({
               <EditTextarea
                 initialContent={message.content}
                 fontSize={chatFontSize}
+                quoteFormat={quoteFormat}
                 onSave={handleSaveEdit}
                 onCancel={handleCancelEdit}
               />

@@ -2,7 +2,7 @@
 // Persona Editor — Full-page detail view
 // Replaces the chat area when editing a persona.
 // Sections: Description, Personality, Backstory,
-//           Appearance, Scenario
+//           Appearance, Scenario, Lorebook
 // ──────────────────────────────────────────────
 import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
@@ -36,9 +36,10 @@ import {
   Eraser,
   RotateCcw,
   Crop,
+  Library,
 } from "lucide-react";
 import { cn, generateClientId, getAvatarCropStyle, type AvatarCrop, type LegacyAvatarCrop } from "../../lib/utils";
-import { showAlertDialog, showConfirmDialog } from "../../lib/app-dialogs";
+import { showConfirmDialog } from "../../lib/app-dialogs";
 import { extractColorsFromImage } from "../../lib/avatar-color-extraction";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { ColorPicker } from "../ui/ColorPicker";
@@ -49,6 +50,7 @@ import {
   useCharacterSprites,
   useUploadSprite,
   useDeleteSprite,
+  useExportSprites,
   useCleanupSavedSprites,
   useRestoreSpriteCleanupBackup,
   useSpriteCapabilities,
@@ -65,6 +67,7 @@ import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatD
 import { Modal } from "../ui/Modal";
 import type { TrackerCardColorConfig } from "@marinara-engine/shared";
 import { useQuoteFormatter } from "../../hooks/use-quote-formatter";
+import { LorebookAssignmentSection } from "../lorebooks/LorebookAssignmentSection";
 
 // ── Tabs ──
 const TABS = [
@@ -73,6 +76,7 @@ const TABS = [
   { id: "backstory", label: "Backstory", icon: BookOpen },
   { id: "appearance", label: "Appearance", icon: Eye },
   { id: "scenario", label: "Scenario", icon: MapPin },
+  { id: "lorebook", label: "Lorebook", icon: Library },
   { id: "sprites", label: "Sprites", icon: Image },
   { id: "colors", label: "Colors", icon: Palette },
   { id: "stats", label: "Stats", icon: Activity },
@@ -439,7 +443,7 @@ export function PersonaEditor() {
       />
 
       {/* ── Header ── */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3 max-md:gap-2 max-md:px-3">
+      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] px-4 py-3 max-md:gap-2 max-md:px-3">
         <button
           type="button"
           onClick={handleClose}
@@ -583,7 +587,7 @@ export function PersonaEditor() {
       {/* ── Body: Tabs + Content ── */}
       <div className="flex flex-1 overflow-hidden @max-5xl:flex-col">
         {/* Tab Rail */}
-        <nav className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] p-2 @max-5xl:w-full @max-5xl:flex-row @max-5xl:overflow-x-auto @max-5xl:border-r-0 @max-5xl:border-b @max-5xl:p-1.5">
+        <nav className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--border)] p-2 @max-5xl:w-full @max-5xl:flex-row @max-5xl:overflow-x-auto @max-5xl:border-r-0 @max-5xl:border-b @max-5xl:p-1.5">
           {TABS.map((tab) => {
             const Icon = tab.icon;
             return (
@@ -656,12 +660,16 @@ export function PersonaEditor() {
                 rows={8}
               />
             )}
+            {activeTab === "lorebook" && personaId && (
+              <LorebookAssignmentSection ownerType="persona" ownerId={personaId} ownerName={formData.name} />
+            )}
             {activeTab === "colors" && (
               <PersonaColorsTab formData={formData} updateField={updateField} avatarUrl={avatarPreview} />
             )}
             {activeTab === "sprites" && personaId && (
               <PersonaSpritesTab
                 personaId={personaId}
+                personaName={formData.name}
                 defaultAppearance={formData.appearance || formData.description}
                 defaultAvatarUrl={avatarPreview}
               />
@@ -691,12 +699,24 @@ const DEFAULT_EXPRESSIONS = [
   "smirk",
 ];
 
+function sanitizeSpriteExportFolderName(value: string, fallback: string): string {
+  const sanitized = value
+    .replace(/[\\/]/g, "_")
+    .replace(/[^a-z0-9._ -]+/gi, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[.\s_-]+|[.\s_-]+$/g, "");
+  return sanitized || fallback;
+}
+
 function PersonaSpritesTab({
   personaId,
+  personaName,
   defaultAppearance,
   defaultAvatarUrl,
 }: {
   personaId: string;
+  personaName?: string;
   defaultAppearance?: string;
   defaultAvatarUrl?: string | null;
 }) {
@@ -706,6 +726,7 @@ function PersonaSpritesTab({
   const { data: spriteCapabilities } = useSpriteCapabilities();
   const uploadSprite = useUploadSprite();
   const deleteSprite = useDeleteSprite();
+  const exportSprites = useExportSprites();
   const cleanupSavedSprites = useCleanupSavedSprites();
   const restoreSpriteCleanupBackup = useRestoreSpriteCleanupBackup();
   const queryClient = useQueryClient();
@@ -867,36 +888,28 @@ function PersonaSpritesTab({
       if (spritesToExport.length === 0) return;
 
       setExporting(true);
-      let successCount = 0;
 
       try {
-        for (const sprite of spritesToExport) {
-          try {
-            await downloadSpriteFile(sprite);
-            successCount += 1;
-          } catch {
-            // Continue exporting remaining sprites.
-          }
-        }
-
-        if (successCount === 0) {
-          await showAlertDialog({
-            title: "Export Failed",
-            message: "No sprites were exported. Please try again.",
-            tone: "destructive",
-          });
-        } else {
-          toast.success(
-            modeLabel === "all"
-              ? `Exported ${successCount} sprite${successCount === 1 ? "" : "s"}.`
-              : `Exported ${successCount} ${category === "full-body" ? "full-body" : "expression"} sprite${successCount === 1 ? "" : "s"}.`,
-          );
-        }
+        const scopeLabel =
+          modeLabel === "all" ? "sprites" : category === "full-body" ? "full-body-sprites" : "expressions";
+        const folderName = sanitizeSpriteExportFolderName(`${personaName || "persona"}-${scopeLabel}`, "sprites");
+        await exportSprites.mutateAsync({
+          characterId: personaId,
+          expressions: spritesToExport.map((sprite) => sprite.expression),
+          folderName,
+        });
+        toast.success(
+          modeLabel === "all"
+            ? `Exported ${spritesToExport.length} sprite${spritesToExport.length === 1 ? "" : "s"} as a folder.`
+            : `Exported ${spritesToExport.length} ${category === "full-body" ? "full-body" : "expression"} sprite${spritesToExport.length === 1 ? "" : "s"} as a folder.`,
+        );
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "No sprites were exported. Please try again.");
       } finally {
         setExporting(false);
       }
     },
-    [category, downloadSpriteFile],
+    [category, exportSprites, personaId, personaName],
   );
 
   const handleCleanVisibleSprites = useCallback(async () => {

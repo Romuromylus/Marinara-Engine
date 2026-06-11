@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import {
   Suspense,
   lazy,
+  memo,
   useRef,
   useEffect,
   useLayoutEffect,
@@ -29,14 +30,17 @@ import { ConversationInput } from "./ConversationInput";
 import { SceneBanner, EndSceneBar } from "./SceneBanner";
 import { ChatBranchSelector } from "./ChatBranchSelector";
 import { ActiveWorldInfoButton, ActiveWorldInfoModal } from "./ActiveWorldInfoButton";
+import { TranscriptWindowControls } from "./TranscriptWindowControls";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
 import { playNotificationPing } from "../../lib/notification-sound";
+import { applyTextareaQuoteFormat } from "../../lib/textarea-quotes";
 import { getAvatarCropStyle, type AvatarCropValue } from "../../lib/utils";
+import { getTranscriptRenderWindow, TRANSCRIPT_RENDER_WINDOW_STEP } from "../../lib/transcript-render-window";
 import { characterKeys } from "../../hooks/use-characters";
 import { api } from "../../lib/api-client";
 import type { CharacterMap, MessageSelectionToggle, PersonaInfo } from "./chat-area.types";
-import type { Message } from "@marinara-engine/shared";
+import { formatTextQuotes, type Message } from "@marinara-engine/shared";
 
 const ConversationAutonomousEffects = lazy(async () => {
   const module = await import("./ConversationAutonomousEffects");
@@ -344,6 +348,8 @@ export function ConversationView({
   const qc = useQueryClient();
   const streamingChatId = useChatStore((s) => s.streamingChatId);
   const isStreaming = useChatStore((s) => s.isStreaming) && streamingChatId === chatId;
+  const isStreamCommitted = useChatStore((s) => s.committedStreamChatIds.has(chatId));
+  const hasLiveStream = isStreaming && !isStreamCommitted;
   const streamBuffer = useChatStore((s) => s.streamBuffer);
   const thinkingBuffer = useChatStore((s) => s.thinkingBuffer);
   const regenerateMessageId = useChatStore((s) => s.regenerateMessageId);
@@ -359,7 +365,7 @@ export function ConversationView({
   }, [characterMap, characterNames, chatCharIds, streamingCharacterId, typingCharacterName]);
   const liveTypingVerb = liveTypingName.includes(",") || liveTypingName.includes(" & ") ? "are" : "is";
   const showTypingIndicator =
-    isStreaming && !delayedCharacterInfo && (!regenerateMessageId || (!streamBuffer && !thinkingBuffer));
+    hasLiveStream && !delayedCharacterInfo && (!regenerateMessageId || (!streamBuffer && !thinkingBuffer));
 
   // ── Periodic status refresh (every 60s) ──
   // Keeps status dots in sync with the character's schedule regardless of autonomous messaging
@@ -456,7 +462,7 @@ export function ConversationView({
     const onScroll = () => {
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       const nearBottom = distFromBottom < 150;
-      if (isStreaming && el.scrollTop < lastScrollTopRef.current - 10) {
+      if (hasLiveStream && el.scrollTop < lastScrollTopRef.current - 10) {
         userScrolledAwayRef.current = true;
       }
       // Re-engage auto-scroll when the user returns to the bottom,
@@ -471,7 +477,7 @@ export function ConversationView({
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     const onUserScroll = () => {
-      if (isStreaming) {
+      if (hasLiveStream) {
         userScrolledAwayRef.current = true;
         userScrolledAtRef.current = Date.now();
       }
@@ -483,11 +489,11 @@ export function ConversationView({
       el.removeEventListener("wheel", onUserScroll);
       el.removeEventListener("touchmove", onUserScroll);
     };
-  }, [isStreaming]);
+  }, [hasLiveStream]);
 
   useEffect(() => {
-    if (!isStreaming) userScrolledAwayRef.current = false;
-  }, [isStreaming]);
+    if (!hasLiveStream) userScrolledAwayRef.current = false;
+  }, [hasLiveStream]);
 
   // Auto-scroll on new messages / streaming / staggered reveals
   const newestMsgId = messages?.[messages.length - 1]?.id;
@@ -498,7 +504,7 @@ export function ConversationView({
     if (isOptimistic || (isNearBottomRef.current && !userScrolledAwayRef.current)) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [newestMsgId, streamBuffer, thinkingBuffer, isStreaming, delayedCharacterInfo, typingCharacterName, isOptimistic]);
+  }, [newestMsgId, streamBuffer, thinkingBuffer, hasLiveStream, delayedCharacterInfo, typingCharacterName, isOptimistic]);
 
   // Preserve scroll on load-more
   useLayoutEffect(() => {
@@ -516,6 +522,35 @@ export function ConversationView({
     fetchNextPage();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
+  const [transcriptWindowStart, setTranscriptWindowStart] = useState<number | null>(null);
+
+  useEffect(() => {
+    setTranscriptWindowStart(null);
+  }, [chatId]);
+
+  const transcriptWindow = useMemo(
+    () => getTranscriptRenderWindow(messages, { startIndex: transcriptWindowStart }),
+    [messages, transcriptWindowStart],
+  );
+
+  const showOlderTranscriptMessages = useCallback(() => {
+    setTranscriptWindowStart((current) => {
+      const start = current ?? transcriptWindow.startIndex;
+      return Math.max(0, start - TRANSCRIPT_RENDER_WINDOW_STEP);
+    });
+  }, [transcriptWindow.startIndex]);
+
+  const showNewerTranscriptMessages = useCallback(() => {
+    setTranscriptWindowStart((current) => {
+      const start = current ?? transcriptWindow.startIndex;
+      return Math.min(transcriptWindow.latestStartIndex, start + TRANSCRIPT_RENDER_WINDOW_STEP);
+    });
+  }, [transcriptWindow.latestStartIndex, transcriptWindow.startIndex]);
+
+  const jumpToLatestTranscriptMessages = useCallback(() => {
+    setTranscriptWindowStart(null);
+  }, []);
+
   // ── Build message list with day separators ──
   // Assistant messages with multiple lines are split into separate visual
   // messages so each line appears as its own bubble (Discord-style).
@@ -528,24 +563,25 @@ export function ConversationView({
       .trim();
 
   const renderedItems = useMemo(() => {
-    if (!messages) return [];
+    const visibleMessages = transcriptWindow.messages;
+    if (!messages || !visibleMessages) return [];
     // Offset so message numbers reflect absolute position in the full chat history,
-    // not just the position within the paginated window.
-    const messageOffset = totalMessageCount - messages.length;
+    // not just the position within the paginated and mounted render windows.
+    const messageOffset = totalMessageCount - messages.length + transcriptWindow.startIndex;
     const items: Array<
       | { type: "separator"; key: string; label: string }
       | { type: "message"; key: string; msg: Message; isGrouped: boolean; index: number }
     > = [];
     let lastDay = "";
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i]!;
+    for (let i = 0; i < visibleMessages.length; i++) {
+      const msg = visibleMessages[i]!;
       if (isHiddenFromUser(msg)) continue;
       const day = getDayKey(msg.createdAt);
       if (day !== lastDay) {
         items.push({ type: "separator", key: `sep-${day}`, label: formatDaySeparator(msg.createdAt) });
         lastDay = day;
       }
-      const prev = i > 0 ? messages[i - 1]! : null;
+      const prev = i > 0 ? visibleMessages[i - 1]! : null;
       // Break grouping if >5 minutes apart (like Discord)
       const TIME_GAP_MS = 5 * 60 * 1000;
       const timeTooFar = prev
@@ -624,7 +660,7 @@ export function ConversationView({
       items.push({ type: "message", key: msg.id, msg: displayMsg, isGrouped: grouped, index: messageOffset + i });
     }
     return items;
-  }, [messages, characterMap, chatCharIds, totalMessageCount]);
+  }, [messages, transcriptWindow.messages, transcriptWindow.startIndex, characterMap, chatCharIds, totalMessageCount]);
 
   // ── Staggered reveal for split assistant lines ──
   // When a new multi-line assistant message arrives, show lines one by one
@@ -913,6 +949,12 @@ export function ConversationView({
           </div>
         )}
 
+        <TranscriptWindowControls
+          hiddenBeforeCount={transcriptWindow.hiddenBeforeCount}
+          hiddenAfterCount={transcriptWindow.hiddenAfterCount}
+          onShowOlder={transcriptWindow.hiddenBeforeCount > 0 ? showOlderTranscriptMessages : undefined}
+        />
+
         {isLoading && (
           <div className="flex flex-col items-center gap-3 py-12">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--muted-foreground)]/20 border-t-[var(--muted-foreground)]/60" />
@@ -974,14 +1016,18 @@ export function ConversationView({
                 groupItems.push(filtered[j]! as typeof item);
                 j++;
               }
+              // Only the regenerating group consumes the per-token buffers; feed
+              // "" to every other group so their props stay byte-stable across the
+              // ~60 streamBuffer updates/sec and the memo() wrapper can bail out.
+              const isRegenGroup = regenerateMessageId === groupItems[0]!.msg.id;
               elements.push(
                 <SplitMessageGroup
                   key={`split-${baseId}`}
                   items={groupItems}
-                  isStreaming={isStreaming}
+                  isStreaming={hasLiveStream}
                   regenerateMessageId={regenerateMessageId}
-                  streamBuffer={streamBuffer}
-                  thinkingBuffer={thinkingBuffer}
+                  streamBuffer={isRegenGroup ? streamBuffer : ""}
+                  thinkingBuffer={isRegenGroup ? thinkingBuffer : ""}
                   lastAssistantMessageId={lastAssistantMessageId}
                   characterMap={characterMap}
                   personaInfo={personaInfo}
@@ -1000,7 +1046,7 @@ export function ConversationView({
 
             // Regular single message
             const { msg, isGrouped } = item;
-            const isRegenerating = isStreaming && regenerateMessageId === msg.id;
+            const isRegenerating = hasLiveStream && regenerateMessageId === msg.id;
             // During regeneration, don't pass isStreaming until content arrives — the
             // "X is typing..." indicator at the bottom provides visual feedback instead
             // of showing bouncing dots inside the message bubble.
@@ -1045,8 +1091,15 @@ export function ConversationView({
           return elements;
         })()}
 
+        <TranscriptWindowControls
+          hiddenBeforeCount={transcriptWindow.hiddenBeforeCount}
+          hiddenAfterCount={transcriptWindow.hiddenAfterCount}
+          onShowNewer={transcriptWindow.hiddenAfterCount > 0 ? showNewerTranscriptMessages : undefined}
+          onJumpToLatest={transcriptWindow.hiddenAfterCount > 0 ? jumpToLatestTranscriptMessages : undefined}
+        />
+
         {/* Delayed indicator (DND/idle — waiting for character to become available) */}
-        {delayedCharacterInfo && isStreaming && !streamBuffer && !thinkingBuffer && (
+        {delayedCharacterInfo && hasLiveStream && !streamBuffer && !thinkingBuffer && (
           <div className="flex items-center gap-2 px-4 py-1.5 text-[0.8125rem] text-[var(--text-secondary)]">
             <span className="italic">
               {delayedCharacterInfo.status === "dnd"
@@ -1145,7 +1198,70 @@ export function ConversationView({
 }
 
 // ── Split-line group wrapper — manages shared tap-to-show-actions state ──
-function SplitMessageGroup({
+type SplitMessageGroupItem = { key: string; msg: Message; isGrouped: boolean; index: number };
+
+type SplitMessageGroupProps = {
+  items: SplitMessageGroupItem[];
+  isStreaming: boolean;
+  regenerateMessageId: string | null;
+  streamBuffer: string;
+  thinkingBuffer: string;
+  lastAssistantMessageId: string | undefined | null;
+  characterMap: CharacterMap;
+  chatCharacterIds: string[];
+  personaInfo: PersonaInfo | undefined;
+  onDelete: (id: string) => void;
+  onRegenerate: (id: string) => void;
+  onEdit: (id: string, content: string) => void;
+  onSetActiveSwipe: (id: string, index: number) => void;
+  onToggleHiddenFromAI: (id: string, current: boolean) => void;
+  onPeekPrompt: () => void;
+};
+
+// Custom memo comparison: the parent rebuilds the `items` array (and this
+// per-group wrapper) fresh every render, so React's default shallow compare
+// would see a new `items` reference each frame and never bail. The underlying
+// message objects are referentially stable across the ~60 streamBuffer
+// updates/sec (renderedItems is memoized without the buffers in its deps), so we
+// compare `items` element-wise and every other prop by reference. Combined with
+// the render site feeding "" to non-regenerating groups, this lets each
+// non-regenerating group skip re-render for the whole duration of a stream.
+function areSplitGroupPropsEqual(prev: SplitMessageGroupProps, next: SplitMessageGroupProps): boolean {
+  if (
+    prev.isStreaming !== next.isStreaming ||
+    prev.regenerateMessageId !== next.regenerateMessageId ||
+    prev.streamBuffer !== next.streamBuffer ||
+    prev.thinkingBuffer !== next.thinkingBuffer ||
+    prev.lastAssistantMessageId !== next.lastAssistantMessageId ||
+    prev.characterMap !== next.characterMap ||
+    prev.chatCharacterIds !== next.chatCharacterIds ||
+    prev.personaInfo !== next.personaInfo ||
+    prev.onDelete !== next.onDelete ||
+    prev.onRegenerate !== next.onRegenerate ||
+    prev.onEdit !== next.onEdit ||
+    prev.onSetActiveSwipe !== next.onSetActiveSwipe ||
+    prev.onToggleHiddenFromAI !== next.onToggleHiddenFromAI ||
+    prev.onPeekPrompt !== next.onPeekPrompt
+  ) {
+    return false;
+  }
+  if (prev.items.length !== next.items.length) return false;
+  for (let i = 0; i < prev.items.length; i++) {
+    const a = prev.items[i]!;
+    const b = next.items[i]!;
+    if (a.msg !== b.msg || a.key !== b.key || a.isGrouped !== b.isGrouped || a.index !== b.index) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Memoized (like ConversationMessage) so non-regenerating groups skip re-render
+// during streaming. The render site only passes live streamBuffer/thinkingBuffer
+// to the regenerating group; combined with the comparator above, every other
+// group's props are stable and this memo() bails for the full duration of a
+// generation.
+const SplitMessageGroup = memo(function SplitMessageGroup({
   items,
   isStreaming,
   regenerateMessageId,
@@ -1161,43 +1277,29 @@ function SplitMessageGroup({
   onSetActiveSwipe,
   onToggleHiddenFromAI,
   onPeekPrompt,
-}: {
-  items: Array<{ key: string; msg: Message; isGrouped: boolean; index: number }>;
-  isStreaming: boolean;
-  regenerateMessageId: string | null;
-  streamBuffer: string;
-  thinkingBuffer: string;
-  lastAssistantMessageId: string | undefined | null;
-  characterMap: CharacterMap;
-  chatCharacterIds: string[];
-  personaInfo: PersonaInfo | undefined;
-  onDelete: (id: string) => void;
-  onRegenerate: (id: string) => void;
-  onEdit: (id: string, content: string) => void;
-  onSetActiveSwipe: (id: string, index: number) => void;
-  onToggleHiddenFromAI: (id: string, current: boolean) => void;
-  onPeekPrompt: () => void;
-}) {
+}: SplitMessageGroupProps) {
   const [showActions, setShowActions] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
   const editRef = useRef<HTMLTextAreaElement>(null);
+  const quoteFormat = useUIStore((s) => s.quoteFormat);
 
   const fullContent = items.map((gi) => gi.msg.content).join("\n");
   const messageId = items[0]!.msg.id;
 
   const handleStartEdit = useCallback(() => {
     setEditing(true);
-    setEditValue(fullContent);
+    setEditValue(formatTextQuotes(fullContent, quoteFormat));
     requestAnimationFrame(() => editRef.current?.focus());
-  }, [fullContent]);
+  }, [fullContent, quoteFormat]);
 
   const handleSaveEdit = useCallback(() => {
-    if (editValue.trim() !== fullContent) {
-      onEdit(messageId, editValue.trim());
+    const formatted = formatTextQuotes(editValue.trim(), quoteFormat);
+    if (formatted !== fullContent) {
+      onEdit(messageId, formatted);
     }
     setEditing(false);
-  }, [editValue, fullContent, messageId, onEdit]);
+  }, [editValue, fullContent, messageId, onEdit, quoteFormat]);
 
   if (editing) {
     // Show the first message header + a single textarea for the full content
@@ -1227,7 +1329,7 @@ function SplitMessageGroup({
           <textarea
             ref={editRef}
             value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
+            onChange={(e) => setEditValue(applyTextareaQuoteFormat(e.currentTarget, quoteFormat))}
             className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-2.5 text-[0.9375rem] leading-relaxed outline-none"
             rows={Math.min(editValue.split("\n").length + 1, 16)}
             onKeyDown={(e) => {
@@ -1361,4 +1463,4 @@ function SplitMessageGroup({
       })()}
     </div>
   );
-}
+}, areSplitGroupPropsEqual);

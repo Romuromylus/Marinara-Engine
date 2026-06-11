@@ -3,7 +3,13 @@
 // ──────────────────────────────────────────────
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { normalizeQuoteFormat, type QuoteFormat } from "@marinara-engine/shared";
+import {
+  IMAGE_STYLE_PROFILES_STORAGE_KEY,
+  normalizeImageStyleProfileSettings,
+  normalizeQuoteFormat,
+  type ImageStyleProfileSettings,
+  type QuoteFormat,
+} from "@marinara-engine/shared";
 
 type Panel =
   | "chat"
@@ -331,6 +337,7 @@ interface UIState {
   imagePortraitHeight: number;
   imageSelfieWidth: number;
   imageSelfieHeight: number;
+  imageStyleProfiles: ImageStyleProfileSettings;
 
   messageGrouping: boolean;
   showTimestamps: boolean;
@@ -367,6 +374,8 @@ interface UIState {
   intuitiveSwipeRerollLatest: boolean;
   /** When true, pressing Up Arrow with an empty chat input opens the last user message for editing (Conversation/Roleplay). */
   editLastMessageOnArrowUp: boolean;
+  /** When true, double-clicking or double-tapping a Roleplay message opens it for editing. */
+  editMessageOnDoubleClick: boolean;
   /** Persisted controls shown in the Chat Summary popover settings window. */
   summaryPopoverSettings: SummaryPopoverSettings;
 
@@ -406,6 +415,7 @@ interface UIState {
   // ── Sound ──
   convoNotificationSound: boolean;
   rpNotificationSound: boolean;
+  conversationBrowserNotifications: boolean;
 
   // ── Custom Conversation Prompt ──
   /** User's custom default system prompt for new conversations (null = built-in default). */
@@ -555,6 +565,7 @@ interface UIState {
   setImageBackgroundDimensions: (width: number, height: number) => void;
   setImagePortraitDimensions: (width: number, height: number) => void;
   setImageSelfieDimensions: (width: number, height: number) => void;
+  setImageStyleProfiles: (settings: ImageStyleProfileSettings) => void;
 
   setMessageGrouping: (v: boolean) => void;
   setShowTimestamps: (v: boolean) => void;
@@ -579,6 +590,7 @@ interface UIState {
   setIntuitiveSwipeNavigation: (v: boolean) => void;
   setIntuitiveSwipeRerollLatest: (v: boolean) => void;
   setEditLastMessageOnArrowUp: (v: boolean) => void;
+  setEditMessageOnDoubleClick: (v: boolean) => void;
   setSummaryPopoverSettings: (settings: Partial<SummaryPopoverSettings>) => void;
   setNarrationFontColor: (v: string) => void;
   setNarrationOpacity: (v: number) => void;
@@ -597,6 +609,7 @@ interface UIState {
   setConvoGradientField: (scheme: "dark" | "light", field: "from" | "to", value: string) => void;
   setConvoNotificationSound: (v: boolean) => void;
   setRpNotificationSound: (v: boolean) => void;
+  setConversationBrowserNotifications: (v: boolean) => void;
   setCustomConversationPrompt: (v: string | null) => void;
   setScheduleGenerationPreferences: (v: string) => void;
   rememberGameSetupOptions: (
@@ -693,6 +706,7 @@ export function pickSyncedSettings(state: UIState) {
     imagePortraitHeight: state.imagePortraitHeight,
     imageSelfieWidth: state.imageSelfieWidth,
     imageSelfieHeight: state.imageSelfieHeight,
+    [IMAGE_STYLE_PROFILES_STORAGE_KEY]: state.imageStyleProfiles,
 
     messageGrouping: state.messageGrouping,
     showTimestamps: state.showTimestamps,
@@ -717,6 +731,7 @@ export function pickSyncedSettings(state: UIState) {
     intuitiveSwipeNavigation: state.intuitiveSwipeNavigation,
     intuitiveSwipeRerollLatest: state.intuitiveSwipeRerollLatest,
     editLastMessageOnArrowUp: state.editLastMessageOnArrowUp,
+    editMessageOnDoubleClick: state.editMessageOnDoubleClick,
     summaryPopoverSettings: state.summaryPopoverSettings,
     narrationFontColor: state.narrationFontColor,
     narrationOpacity: state.narrationOpacity,
@@ -738,11 +753,13 @@ export function pickSyncedSettings(state: UIState) {
     hasCompletedOnboarding: state.hasCompletedOnboarding,
     gameTutorialDisabled: state.gameTutorialDisabled,
     linkApiBannerDismissed: state.linkApiBannerDismissed,
+    echoChamberOpen: state.echoChamberOpen,
     echoChamberSide: state.echoChamberSide,
     userStatusManual: state.userStatusManual,
     userActivity: state.userActivity,
     convoNotificationSound: state.convoNotificationSound,
     rpNotificationSound: state.rpNotificationSound,
+    conversationBrowserNotifications: state.conversationBrowserNotifications,
     customConversationPrompt: state.customConversationPrompt,
     scheduleGenerationPreferences: state.scheduleGenerationPreferences,
     impersonatePromptTemplate: state.impersonatePromptTemplate,
@@ -762,7 +779,7 @@ export const useUIStore = create<UIState>()(
   persist(
     (set, get) => ({
       sidebarOpen: true,
-      sidebarWidth: 280,
+      sidebarWidth: 320,
       rightPanelOpen: false,
       rightPanelWidth: 320,
       rightPanel: "chat" as Panel,
@@ -816,6 +833,7 @@ export const useUIStore = create<UIState>()(
       imagePortraitHeight: 1024,
       imageSelfieWidth: 896,
       imageSelfieHeight: 1152,
+      imageStyleProfiles: normalizeImageStyleProfileSettings(null),
 
       messageGrouping: true,
       showTimestamps: false,
@@ -840,6 +858,7 @@ export const useUIStore = create<UIState>()(
       intuitiveSwipeNavigation: false,
       intuitiveSwipeRerollLatest: false,
       editLastMessageOnArrowUp: true,
+      editMessageOnDoubleClick: true,
       summaryPopoverSettings: DEFAULT_SUMMARY_POPOVER_SETTINGS,
       narrationFontColor: "",
       narrationOpacity: 80,
@@ -859,6 +878,7 @@ export const useUIStore = create<UIState>()(
       },
       convoNotificationSound: true,
       rpNotificationSound: true,
+      conversationBrowserNotifications: false,
       customConversationPrompt: null,
       scheduleGenerationPreferences: "",
       learnedGameSetupOptions: DEFAULT_GAME_SETUP_LEARNED_OPTIONS,
@@ -966,8 +986,12 @@ export const useUIStore = create<UIState>()(
           presetDetailId: null,
           connectionDetailId: null,
           agentDetailId: null,
+          toolDetailId: null,
           personaDetailId: null,
           regexDetailId: null,
+          characterLibraryOpen: false,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           ...getMobileDetailReturnState(s),
         })),
       closeCharacterDetail: () =>
@@ -980,10 +1004,13 @@ export const useUIStore = create<UIState>()(
         set((s) => ({
           lorebookDetailId: id,
           characterLibraryOpen: false,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           characterDetailId: null,
           presetDetailId: null,
           connectionDetailId: null,
           agentDetailId: null,
+          toolDetailId: null,
           personaDetailId: null,
           regexDetailId: null,
           ...getMobileDetailReturnState(s),
@@ -998,10 +1025,13 @@ export const useUIStore = create<UIState>()(
         set((s) => ({
           presetDetailId: id,
           characterLibraryOpen: false,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           connectionDetailId: null,
           agentDetailId: null,
+          toolDetailId: null,
           personaDetailId: null,
           regexDetailId: null,
           ...getMobileDetailReturnState(s),
@@ -1016,10 +1046,13 @@ export const useUIStore = create<UIState>()(
         set((s) => ({
           connectionDetailId: id,
           characterLibraryOpen: false,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
           agentDetailId: null,
+          toolDetailId: null,
           personaDetailId: null,
           regexDetailId: null,
           ...getMobileDetailReturnState(s),
@@ -1034,6 +1067,8 @@ export const useUIStore = create<UIState>()(
         set((s) => ({
           agentDetailId: agentType,
           characterLibraryOpen: false,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1054,6 +1089,8 @@ export const useUIStore = create<UIState>()(
           toolDetailId: id,
           agentDetailId: null,
           characterLibraryOpen: false,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1072,6 +1109,8 @@ export const useUIStore = create<UIState>()(
         set((s) => ({
           personaDetailId: id,
           characterLibraryOpen: false,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1092,6 +1131,8 @@ export const useUIStore = create<UIState>()(
           regexDetailId: id,
           personaDetailId: null,
           characterLibraryOpen: false,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1243,6 +1284,7 @@ export const useUIStore = create<UIState>()(
           imageSelfieWidth: clampImageDimension(width),
           imageSelfieHeight: clampImageDimension(height),
         }),
+      setImageStyleProfiles: (settings) => set({ imageStyleProfiles: normalizeImageStyleProfileSettings(settings) }),
 
       setMessageGrouping: (v) => set({ messageGrouping: v }),
       setShowTimestamps: (v) => set({ showTimestamps: v }),
@@ -1273,6 +1315,7 @@ export const useUIStore = create<UIState>()(
       setIntuitiveSwipeNavigation: (v) => set({ intuitiveSwipeNavigation: v }),
       setIntuitiveSwipeRerollLatest: (v) => set({ intuitiveSwipeRerollLatest: v }),
       setEditLastMessageOnArrowUp: (v) => set({ editLastMessageOnArrowUp: v }),
+      setEditMessageOnDoubleClick: (v) => set({ editMessageOnDoubleClick: v }),
       setSummaryPopoverSettings: (settings) =>
         set((state) => ({
           summaryPopoverSettings: normalizeSummaryPopoverSettings({
@@ -1304,6 +1347,7 @@ export const useUIStore = create<UIState>()(
         })),
       setConvoNotificationSound: (v) => set({ convoNotificationSound: v }),
       setRpNotificationSound: (v) => set({ rpNotificationSound: v }),
+      setConversationBrowserNotifications: (v) => set({ conversationBrowserNotifications: v }),
       setCustomConversationPrompt: (v) => set({ customConversationPrompt: v }),
       setScheduleGenerationPreferences: (v) => set({ scheduleGenerationPreferences: v }),
       rememberGameSetupOptions: (options, text) =>
@@ -1380,7 +1424,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "marinara-engine-ui",
-      version: 37,
+      version: 40,
       // Debounce localStorage writes to avoid sync I/O on every state change
       storage: createJSONStorage(() => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1472,6 +1516,9 @@ export const useUIStore = create<UIState>()(
         if (version <= 7) {
           if (persisted.rightPanelWidth === undefined) {
             persisted.rightPanelWidth = 320;
+          }
+          if (persisted.sidebarWidth === 280) {
+            persisted.sidebarWidth = 320;
           }
         }
         // v8 → v9: add roleplay avatar layout setting
@@ -1696,6 +1743,21 @@ export const useUIStore = create<UIState>()(
           persisted.quoteFormat = normalizeQuoteFormat(persisted.quoteFormat);
         }
         persisted.quoteFormat = normalizeQuoteFormat(persisted.quoteFormat);
+        // v37 -> v38: customizable image style profiles.
+        if (version <= 37) {
+          persisted.imageStyleProfiles = normalizeImageStyleProfileSettings(
+            persisted[IMAGE_STYLE_PROFILES_STORAGE_KEY] ?? persisted.imageStyleProfiles,
+          );
+        }
+        persisted.imageStyleProfiles = normalizeImageStyleProfileSettings(persisted.imageStyleProfiles);
+        // v38 -> v39: opt-in browser notifications for background Conversation replies.
+        if (version <= 38 && persisted.conversationBrowserNotifications === undefined) {
+          persisted.conversationBrowserNotifications = false;
+        }
+        // v39 -> v40: let users disable accidental double-click or double-tap message editing.
+        if (version <= 39 && persisted.editMessageOnDoubleClick === undefined) {
+          persisted.editMessageOnDoubleClick = true;
+        }
         delete persisted.trackerPanelWidth;
         return persisted;
       },
@@ -1736,6 +1798,7 @@ export const useUIStore = create<UIState>()(
         imagePortraitHeight: state.imagePortraitHeight,
         imageSelfieWidth: state.imageSelfieWidth,
         imageSelfieHeight: state.imageSelfieHeight,
+        imageStyleProfiles: state.imageStyleProfiles,
 
         messageGrouping: state.messageGrouping,
         showTimestamps: state.showTimestamps,
@@ -1760,6 +1823,7 @@ export const useUIStore = create<UIState>()(
         intuitiveSwipeNavigation: state.intuitiveSwipeNavigation,
         intuitiveSwipeRerollLatest: state.intuitiveSwipeRerollLatest,
         editLastMessageOnArrowUp: state.editLastMessageOnArrowUp,
+        editMessageOnDoubleClick: state.editMessageOnDoubleClick,
         summaryPopoverSettings: state.summaryPopoverSettings,
         narrationFontColor: state.narrationFontColor,
         narrationOpacity: state.narrationOpacity,
@@ -1786,12 +1850,14 @@ export const useUIStore = create<UIState>()(
         hasMigratedExtensionsToServer: state.hasMigratedExtensionsToServer,
         hasCompletedOnboarding: state.hasCompletedOnboarding,
         linkApiBannerDismissed: state.linkApiBannerDismissed,
+        echoChamberOpen: state.echoChamberOpen,
         echoChamberSide: state.echoChamberSide,
         userStatusManual: state.userStatusManual,
         userStatus: state.userStatus,
         userActivity: state.userActivity,
         convoNotificationSound: state.convoNotificationSound,
         rpNotificationSound: state.rpNotificationSound,
+        conversationBrowserNotifications: state.conversationBrowserNotifications,
         customConversationPrompt: state.customConversationPrompt,
         scheduleGenerationPreferences: state.scheduleGenerationPreferences,
         impersonatePromptTemplate: state.impersonatePromptTemplate,

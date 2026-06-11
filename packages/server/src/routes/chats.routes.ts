@@ -6,6 +6,7 @@ import AdmZip from "adm-zip";
 import { logger } from "../lib/logger.js";
 import {
   LOCAL_SIDECAR_CONNECTION_ID,
+  PROFESSOR_MARI_ID,
   createChatSchema,
   createMessageSchema,
   appendChatSummaryEntryToMetadata,
@@ -51,7 +52,7 @@ import { join } from "path";
 import { DATA_DIR } from "../utils/data-dir.js";
 import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
 import {
-  findLastIndex,
+  findTrackerContextInsertIndex,
   isManualTrackerCharacterId,
   parseExtra,
   isMessageHiddenFromAI,
@@ -74,6 +75,7 @@ type TrackerWrapFormat = "xml" | "markdown" | "none";
 type EntryStateOverrides = Record<string, { ephemeral?: number | null; enabled?: boolean }>;
 const MEMORY_RECALL_IMPORT_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
 const MEMORY_RECALL_IMPORT_BATCH_SIZE = 500;
+const PROFESSOR_MARI_INTERNAL_CHAT_MARKER = "professor-mari";
 
 function toSafeExportName(name: string, fallback: string) {
   const safe = name
@@ -86,6 +88,23 @@ function toSafeExportName(name: string, fallback: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseChatMetadata(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return isRecord(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return isRecord(raw) ? raw : {};
+}
+
+function isInternalProfessorMariChat(chat: { metadata?: unknown }) {
+  return parseChatMetadata(chat.metadata).internalAssistant === PROFESSOR_MARI_INTERNAL_CHAT_MARKER;
 }
 
 function isUsableTimestamp(value: unknown): value is string {
@@ -316,6 +335,25 @@ function resolveLorebookGenerationTriggers(mode: unknown): string[] {
   return Array.from(new Set([modeTrigger, "chat"]));
 }
 
+function resolveChatCharacterIds(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+  if (typeof raw !== "string") return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function toPeekPromptMessages(
+  messages: Array<{ role: string; content: string }>,
+): Array<{ role: string; content: string }> {
+  return messages.map((message) => ({ role: message.role, content: message.content }));
+}
+
 function cardPromptText(value: unknown): string {
   return typeof value === "string" ? stripMacroComments(value).trim() : "";
 }
@@ -400,7 +438,47 @@ export async function chatsRoutes(app: FastifyInstance) {
   // List all chats
   app.get("/", async () => {
     const chats = await storage.list();
-    return chats.map(sanitizeChatGameNpcAvatars);
+    return chats.filter((chat) => !isInternalProfessorMariChat(chat)).map(sanitizeChatGameNpcAvatars);
+  });
+
+  app.get<{ Querystring: { connectionId?: string; personaId?: string } }>("/internal/professor-mari", async (req) => {
+    const chats = await storage.list();
+    const existing = chats.find(isInternalProfessorMariChat);
+    const connectionId =
+      typeof req.query.connectionId === "string" && req.query.connectionId ? req.query.connectionId : null;
+    const personaId = typeof req.query.personaId === "string" && req.query.personaId ? req.query.personaId : null;
+
+    if (existing) {
+      await storage.update(existing.id, {
+        characterIds: [PROFESSOR_MARI_ID],
+        connectionId,
+        personaId,
+        promptPresetId: null,
+      });
+      const updated = await storage.patchMetadata(existing.id, {
+        internalAssistant: PROFESSOR_MARI_INTERNAL_CHAT_MARKER,
+        enableAgents: false,
+        tags: ["internal"],
+      });
+      return sanitizeChatGameNpcAvatars(updated ?? existing);
+    }
+
+    const created = await storage.create({
+      name: "Professor Mari",
+      mode: "conversation",
+      characterIds: [PROFESSOR_MARI_ID],
+      groupId: null,
+      personaId,
+      promptPresetId: null,
+      connectionId,
+    });
+    if (!created) return created;
+    const updated = await storage.patchMetadata(created.id, {
+      internalAssistant: PROFESSOR_MARI_INTERNAL_CHAT_MARKER,
+      enableAgents: false,
+      tags: ["internal"],
+    });
+    return sanitizeChatGameNpcAvatars(updated ?? created);
   });
 
   // List chats by group
@@ -1419,7 +1497,14 @@ export async function chatsRoutes(app: FastifyInstance) {
       }
 
       if (cached) {
-        return { messages: cached.messages, parameters: null, generationInfo: cached.generationInfo ?? null };
+        return {
+          messages: cached.messages,
+          parameters: null,
+          source: "cached",
+          exact: true,
+          generationInfo: cached.generationInfo ?? null,
+          agentNote: "This is the cached text prompt saved after provider preparation for the active assistant swipe.",
+        };
       }
     }
 
@@ -1475,13 +1560,7 @@ export async function chatsRoutes(app: FastifyInstance) {
             presetStore.listChoiceBlocksForPreset(presetId),
           ]);
 
-          const allCharacterIds: string[] = (() => {
-            try {
-              return JSON.parse(chat.characterIds as string);
-            } catch {
-              return [];
-            }
-          })();
+          const allCharacterIds = resolveChatCharacterIds(chat.characterIds);
           const characterIds = resolveActiveCharacterIds(allCharacterIds, chatMeta, {
             mode: (chat.mode as string) ?? "roleplay",
             allowEmpty: true,
@@ -1910,16 +1989,23 @@ export async function chatsRoutes(app: FastifyInstance) {
               : null;
 
             if (contextBlock) {
-              const lastUserIdx = findLastIndex(assembled.messages, "user");
-              if (lastUserIdx >= 0) {
-                assembled.messages.splice(lastUserIdx, 0, { role: "system", content: contextBlock });
-              } else {
-                assembled.messages.splice(0, 0, { role: "system", content: contextBlock });
-              }
+              assembled.messages.splice(findTrackerContextInsertIndex(assembled.messages), 0, {
+                role: "user",
+                content: contextBlock,
+                contextKind: "injection",
+              });
             }
           }
 
-          return { messages: assembled.messages, parameters: assembled.parameters, generationInfo: null };
+          return {
+            messages: toPeekPromptMessages(assembled.messages),
+            parameters: assembled.parameters,
+            source: "live_preview",
+            exact: false,
+            generationInfo: null,
+            agentNote:
+              "No saved model request was available, so this is a live best-effort preview assembled without sending.",
+          };
         }
       } catch (e) {
         logger.error(e, "[peek-prompt] Assembler failed, falling through to cached/raw messages");
@@ -1935,7 +2021,14 @@ export async function chatsRoutes(app: FastifyInstance) {
       mappedMessages.pop();
     }
 
-    return { messages: mappedMessages, parameters: null, generationInfo: null };
+    return {
+      messages: mappedMessages,
+      parameters: null,
+      source: "raw_messages",
+      exact: false,
+      generationInfo: null,
+      agentNote: "Prompt assembly was unavailable, so only visible raw chat messages are shown.",
+    };
   });
 
   // ── Swipes ──
@@ -2133,11 +2226,11 @@ export async function chatsRoutes(app: FastifyInstance) {
 
     let chatsToExport: ChatRow[];
     if (scope === "all") {
-      chatsToExport = (await storage.list()) as ChatRow[];
+      chatsToExport = ((await storage.list()) as ChatRow[]).filter((chat) => !isInternalProfessorMariChat(chat));
     } else {
       if (uniqueIds.length === 0) return reply.status(400).send({ error: "No chats selected for export" });
       const rows = await Promise.all(uniqueIds.map((id) => storage.getById(id)));
-      chatsToExport = rows.filter((chat): chat is ChatRow => Boolean(chat));
+      chatsToExport = rows.filter((chat): chat is ChatRow => chat !== null && !isInternalProfessorMariChat(chat));
     }
 
     if (chatsToExport.length === 0) return reply.status(404).send({ error: "No chats found to export" });

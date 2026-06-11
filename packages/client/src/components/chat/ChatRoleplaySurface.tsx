@@ -4,6 +4,7 @@ import {
   lazy,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -24,19 +25,18 @@ import {
   Image,
   Loader2,
   MoreHorizontal,
-  Move,
   PenLine,
   ScrollText,
   Settings2,
   Swords,
   ChevronUp,
   ArrowRightLeft,
-  FlipHorizontal2,
   User,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { getConnectedChatDisplayName } from "../../lib/chat-display";
 import { playNotificationPing } from "../../lib/notification-sound";
+import { getTranscriptRenderWindow, TRANSCRIPT_RENDER_WINDOW_STEP } from "../../lib/transcript-render-window";
 import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useGameStateStore } from "../../stores/game-state.store";
@@ -46,6 +46,7 @@ import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { CyoaChoices } from "./CyoaChoices";
 import { ChatBranchSelector } from "./ChatBranchSelector";
+import { TranscriptWindowControls } from "./TranscriptWindowControls";
 import { EndSceneBar } from "./SceneBanner";
 import { ChatCommonOverlays } from "./ChatCommonOverlays";
 import { ActiveWorldInfoButton } from "./ActiveWorldInfoButton";
@@ -680,7 +681,6 @@ type RoleplaySurfaceProps = {
   spritePlacements: Record<string, SpritePlacement>;
   spriteScale: number;
   spriteOpacity: number;
-  hasCustomSpritePlacements: boolean;
   spriteArrangeMode: boolean;
   enabledAgentTypes: Set<string>;
   chatCharIds: string[];
@@ -744,7 +744,6 @@ type RoleplaySurfaceProps = {
   onResetSpritePlacements: () => void;
   onSpriteSideChange: (side: SpriteSide) => void;
   onToggleSpriteArrange: () => void;
-  onToggleSpritePosition: () => void;
   onExpressionChange: (characterId: string, expression: string, options?: { immediate?: boolean }) => void;
   onSpritePlacementChange: (characterId: string, placement: SpritePlacement) => void;
   onDeleteConfirm: () => void;
@@ -781,7 +780,6 @@ export function ChatRoleplaySurface({
   spritePlacements,
   spriteScale,
   spriteOpacity,
-  hasCustomSpritePlacements,
   spriteArrangeMode,
   enabledAgentTypes,
   chatCharIds,
@@ -845,7 +843,6 @@ export function ChatRoleplaySurface({
   onResetSpritePlacements,
   onSpriteSideChange,
   onToggleSpriteArrange,
-  onToggleSpritePosition,
   onExpressionChange,
   onSpritePlacementChange,
   onDeleteConfirm,
@@ -859,6 +856,8 @@ export function ChatRoleplaySurface({
   onSelectAllBelowSelection,
   isGrouped,
 }: RoleplaySurfaceProps) {
+  const isStreamCommitted = useChatStore((s) => s.committedStreamChatIds.has(activeChatId));
+  const hasLiveStream = isStreaming && !isStreamCommitted;
   const linkedChatName = chat?.connectedChatId
     ? getConnectedChatDisplayName(allChats?.find((c) => c.id === chat.connectedChatId))
     : undefined;
@@ -868,6 +867,9 @@ export function ChatRoleplaySurface({
   const initialLoadSettledRef = useRef(false);
   const prevMessageKeysRef = useRef<Set<string>>(new Set());
   const seenMessageKeysRef = useRef(roleplayNotificationSeenKeys);
+  const topChromeRef = useRef<HTMLDivElement>(null);
+  const inputChromeRef = useRef<HTMLDivElement>(null);
+  const [chromeHeights, setChromeHeights] = useState({ top: 0, bottom: 0 });
   const hideEchoChamberOnMobile =
     sidebarOpen || rightPanelOpen || settingsOpen || filesOpen || galleryOpen || wizardOpen;
   const overlaySpriteDisplayModes = expressionAvatarsEnabled
@@ -876,10 +878,54 @@ export function ChatRoleplaySurface({
   const showSpriteOverlay =
     expressionAgentEnabled && spriteCharacterIds.length > 0 && overlaySpriteDisplayModes.length > 0;
 
+  useLayoutEffect(() => {
+    const measure = () => {
+      const top = Math.ceil(topChromeRef.current?.getBoundingClientRect().height ?? 0);
+      const bottom = Math.ceil(inputChromeRef.current?.getBoundingClientRect().height ?? 0);
+      setChromeHeights((current) => (current.top === top && current.bottom === bottom ? current : { top, bottom }));
+    };
+
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    if (topChromeRef.current) observer.observe(topChromeRef.current);
+    if (inputChromeRef.current) observer.observe(inputChromeRef.current);
+    return () => observer.disconnect();
+  }, [activeChatId, centerCompact, chatMeta.enableAgents, chatMeta.sceneStatus, combatAgentEnabled]);
+
   useEffect(() => {
     initialLoadSettledRef.current = false;
     prevMessageKeysRef.current = new Set();
   }, [activeChatId]);
+
+  const [transcriptWindowStart, setTranscriptWindowStart] = useState<number | null>(null);
+
+  useEffect(() => {
+    setTranscriptWindowStart(null);
+  }, [activeChatId]);
+
+  const transcriptWindow = useMemo(
+    () => getTranscriptRenderWindow(messages, { startIndex: transcriptWindowStart }),
+    [messages, transcriptWindowStart],
+  );
+
+  const showOlderTranscriptMessages = () => {
+    setTranscriptWindowStart((current) => {
+      const start = current ?? transcriptWindow.startIndex;
+      return Math.max(0, start - TRANSCRIPT_RENDER_WINDOW_STEP);
+    });
+  };
+
+  const showNewerTranscriptMessages = () => {
+    setTranscriptWindowStart((current) => {
+      const start = current ?? transcriptWindow.startIndex;
+      return Math.min(transcriptWindow.latestStartIndex, start + TRANSCRIPT_RENDER_WINDOW_STEP);
+    });
+  };
+
+  const jumpToLatestTranscriptMessages = () => {
+    setTranscriptWindowStart(null);
+  };
 
   useEffect(() => {
     if (!messages) return;
@@ -919,6 +965,9 @@ export function ChatRoleplaySurface({
     }
   }, [activeChatId, messages]);
 
+  const visibleMessages = transcriptWindow.messages;
+  const loadedMessageOffset = totalMessageCount - (messages?.length ?? 0);
+
   return (
     <div data-component="ChatArea.Roleplay" className="flex flex-1 overflow-hidden">
       <div className="rpg-chat-area mari-chat-area relative flex flex-1 flex-col overflow-hidden">
@@ -938,15 +987,14 @@ export function ChatRoleplaySurface({
               editing={spriteArrangeMode}
               spriteScale={spriteScale}
               spriteOpacity={spriteOpacity}
-              onExpressionChange={onExpressionChange}
               onPlacementChange={onSpritePlacementChange}
             />
           </Suspense>
         )}
 
-        <div className="flex flex-1 overflow-hidden">
-          <div className="flex flex-1 flex-col overflow-hidden">
-            <>
+        <div className="relative flex flex-1 overflow-hidden">
+          <div className="relative flex flex-1 flex-col overflow-hidden">
+            <div ref={topChromeRef} className="pointer-events-none absolute inset-x-0 top-0 z-40">
               <div
                 data-tracker-panel-anchor="roleplay-hud"
                 className={cn(
@@ -1014,24 +1062,6 @@ export function ChatRoleplaySurface({
                       title="Manage Chat Files"
                       onClick={onOpenFiles}
                     />
-                    {showSpriteOverlay && (
-                      <RpToolbarButton
-                        icon={<Move size="0.875rem" />}
-                        title={spriteArrangeMode ? "Finish arranging sprites" : "Arrange sprites"}
-                        onClick={onToggleSpriteArrange}
-                      />
-                    )}
-                    {showSpriteOverlay && (
-                      <RpToolbarButton
-                        icon={<FlipHorizontal2 size="0.875rem" />}
-                        title={
-                          hasCustomSpritePlacements
-                            ? `Mirror sprites to the ${spritePosition === "left" ? "right" : "left"}`
-                            : `Sprite default side: ${spritePosition}`
-                        }
-                        onClick={onToggleSpritePosition}
-                      />
-                    )}
                     <RpToolbarButton icon={<Image size="0.875rem" />} title="Gallery" onClick={onOpenGallery} />
                     {chat?.connectedChatId && (
                       <RpToolbarButton
@@ -1057,7 +1087,7 @@ export function ChatRoleplaySurface({
               >
                 {chat && chatMeta.enableAgents && (
                   <div
-                    className="flex w-full items-center justify-between pb-1 pt-2"
+                    className="flex min-w-0 w-full items-center gap-1.5 overflow-x-auto pb-1 pt-2"
                     style={{
                       paddingLeft: "calc(0.5rem + var(--tracker-panel-hud-clear-left, 0px))",
                       paddingRight: "calc(0.5rem + var(--tracker-panel-hud-clear-right, 0px))",
@@ -1078,7 +1108,7 @@ export function ChatRoleplaySurface({
                         injectionSourceMessages={messages}
                       />
                     </Suspense>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex shrink-0 items-center gap-1.5">
                       <ToolbarMenu>
                         <ChatBranchSelector
                           activeChatId={activeChatId}
@@ -1119,24 +1149,6 @@ export function ChatRoleplaySurface({
                           title="Manage Chat Files"
                           onClick={onOpenFiles}
                         />
-                        {showSpriteOverlay && (
-                          <RpToolbarButton
-                            icon={<Move size="0.875rem" />}
-                            title={spriteArrangeMode ? "Finish arranging sprites" : "Arrange sprites"}
-                            onClick={onToggleSpriteArrange}
-                          />
-                        )}
-                        {showSpriteOverlay && (
-                          <RpToolbarButton
-                            icon={<FlipHorizontal2 size="0.875rem" />}
-                            title={
-                              hasCustomSpritePlacements
-                                ? `Mirror sprites to the ${spritePosition === "left" ? "right" : "left"}`
-                                : `Sprite default side: ${spritePosition}`
-                            }
-                            onClick={onToggleSpritePosition}
-                          />
-                        )}
                         <RpToolbarButton icon={<Image size="0.875rem" />} title="Gallery" onClick={onOpenGallery} />
                         {chat?.connectedChatId && (
                           <RpToolbarButton
@@ -1211,7 +1223,7 @@ export function ChatRoleplaySurface({
                   </div>
                 )}
               </div>
-            </>
+            </div>
 
             {encounterActive && (
               <Suspense fallback={null}>
@@ -1219,14 +1231,19 @@ export function ChatRoleplaySurface({
               </Suspense>
             )}
 
-            <div className={cn("relative z-10 flex-1 overflow-hidden", TRACKER_FOREGROUND_AVOIDANCE_CLASS)}>
+            <div className={cn("absolute inset-0 z-10 overflow-hidden", TRACKER_FOREGROUND_AVOIDANCE_CLASS)}>
               <div
                 ref={scrollRef}
                 data-chat-scroll
                 className={cn(
-                  "rpg-chat-messages-mobile mari-messages-scroll relative h-full overflow-y-auto overflow-x-hidden pb-1 pt-4",
+                  "rpg-chat-messages-mobile mari-messages-scroll relative h-full overflow-y-auto overflow-x-hidden pt-4",
                   centerCompact ? "px-3" : "px-3 md:px-[15%]",
                 )}
+                style={{
+                  paddingBottom: Math.max(16, chromeHeights.bottom + 12),
+                  scrollPaddingTop: Math.max(16, chromeHeights.top + 8),
+                  scrollPaddingBottom: Math.max(16, chromeHeights.bottom + 12),
+                }}
               >
                 {hasNextPage && (
                   <div className="mb-3 flex justify-center">
@@ -1245,15 +1262,25 @@ export function ChatRoleplaySurface({
                   </div>
                 )}
 
+                <TranscriptWindowControls
+                  hiddenBeforeCount={transcriptWindow.hiddenBeforeCount}
+                  hiddenAfterCount={transcriptWindow.hiddenAfterCount}
+                  onShowOlder={transcriptWindow.hiddenBeforeCount > 0 ? showOlderTranscriptMessages : undefined}
+                  className="pt-0"
+                />
+
                 {isLoading && (
                   <div className="flex flex-col items-center gap-3 py-12">
                     <div className="h-8 w-8 animate-spin rounded-full border-2 border-foreground/20 border-t-white/60" />
                   </div>
                 )}
 
-                {messages?.map((msg, i) => {
+                {visibleMessages?.map((msg, i) => {
                   if (isHiddenFromUser(msg)) return null;
-                  const isRegenerating = isStreaming && regenerateMessageId === msg.id;
+                  const sourceIndex = transcriptWindow.startIndex + i;
+                  const messageDepth = (messages?.length ?? 0) - 1 - sourceIndex;
+                  const messageOrderIndex = loadedMessageOffset + sourceIndex;
+                  const isRegenerating = hasLiveStream && regenerateMessageId === msg.id;
                   return (
                     <div
                       key={msg.id}
@@ -1281,10 +1308,10 @@ export function ChatRoleplaySurface({
                           characterMap={characterMap}
                           personaInfo={personaInfo}
                           chatMode={chatMode}
-                          messageDepth={messages.length - 1 - i}
-                          messageIndex={totalMessageCount - messages.length + i + 1}
-                          messageOrderIndex={totalMessageCount - messages.length + i}
-                          isGrouped={isGrouped(i)}
+                          messageDepth={messageDepth}
+                          messageIndex={messageOrderIndex + 1}
+                          messageOrderIndex={messageOrderIndex}
+                          isGrouped={isGrouped(sourceIndex)}
                           groupChatMode={groupChatMode}
                           chatCharacterIds={chatCharIds}
                           expressionAvatarResolver={expressionAvatarResolver}
@@ -1310,10 +1337,10 @@ export function ChatRoleplaySurface({
                           characterMap={characterMap}
                           personaInfo={personaInfo}
                           chatMode={chatMode}
-                          messageDepth={messages.length - 1 - i}
-                          messageIndex={totalMessageCount - messages.length + i + 1}
-                          messageOrderIndex={totalMessageCount - messages.length + i}
-                          isGrouped={isGrouped(i)}
+                          messageDepth={messageDepth}
+                          messageIndex={messageOrderIndex + 1}
+                          messageOrderIndex={messageOrderIndex}
+                          isGrouped={isGrouped(sourceIndex)}
                           groupChatMode={groupChatMode}
                           chatCharacterIds={chatCharIds}
                           expressionAvatarResolver={expressionAvatarResolver}
@@ -1326,9 +1353,16 @@ export function ChatRoleplaySurface({
                   );
                 })}
 
-                {!isStreaming && <CyoaChoices messages={messages} />}
+                <TranscriptWindowControls
+                  hiddenBeforeCount={transcriptWindow.hiddenBeforeCount}
+                  hiddenAfterCount={transcriptWindow.hiddenAfterCount}
+                  onShowNewer={transcriptWindow.hiddenAfterCount > 0 ? showNewerTranscriptMessages : undefined}
+                  onJumpToLatest={transcriptWindow.hiddenAfterCount > 0 ? jumpToLatestTranscriptMessages : undefined}
+                />
 
-                {isStreaming && !regenerateMessageId && (
+                {!isStreaming && <CyoaChoices messages={visibleMessages} />}
+
+                {hasLiveStream && !regenerateMessageId && (
                   <StreamingIndicator
                     activeChatId={activeChatId}
                     chatCharIds={chatCharIds}
@@ -1344,8 +1378,11 @@ export function ChatRoleplaySurface({
               </div>
             </div>
 
-            <div className={cn("relative z-20", TRACKER_FOREGROUND_AVOIDANCE_CLASS)}>
-              <div className={cn("relative", centerCompact ? "px-3" : "px-3 md:px-[12%]")}>
+            <div
+              ref={inputChromeRef}
+              className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-30", TRACKER_FOREGROUND_AVOIDANCE_CLASS)}
+            >
+              <div className={cn("pointer-events-auto relative", centerCompact ? "px-3" : "px-3 md:px-[12%]")}>
                 {chatMeta.sceneStatus === "active" && (
                   <EndSceneBar
                     sceneChatId={activeChatId}

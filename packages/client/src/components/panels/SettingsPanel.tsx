@@ -20,9 +20,20 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ADMIN_SECRET_STORAGE_KEY, ApiError, api, getAdminSecretHeader } from "../../lib/api-client";
 import { chatBackgroundUrlToMetadata } from "../../lib/backgrounds";
 import { forceRefreshSpa } from "@/lib/browser-runtime";
-import React, { useRef, useState, useCallback, useEffect } from "react";
+import React, { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { toast } from "sonner";
-import { APP_VERSION, type QuoteFormat, type Theme } from "@marinara-engine/shared";
+import {
+  APP_VERSION,
+  DEFAULT_IMAGE_STYLE_PROFILES,
+  compileImagePrompt,
+  normalizeImageStyleProfileSettings,
+  type ImagePromptKind,
+  type ImagePromptMode,
+  type ImageStyleProfile,
+  type ImageStyleProfileSettings,
+  type QuoteFormat,
+  type Theme,
+} from "@marinara-engine/shared";
 import {
   findDuplicateTheme,
   useCreateTheme,
@@ -298,6 +309,20 @@ const GAME_ASSET_CATEGORY_BY_ID = new Map(GAME_ASSET_CATEGORIES.map((category) =
 
 // Module-level set survives component remounts (e.g. mobile AnimatePresence unmount/remount)
 const mountedSettingsTabs = new Set<string>();
+const IMAGE_STYLE_SUBJECT_KINDS: ImagePromptKind[] = [
+  "avatar",
+  "portrait",
+  "selfie",
+  "background",
+  "illustration",
+  "sprite",
+];
+const IMAGE_PROMPT_MODE_OPTIONS: Array<{ value: ImagePromptMode; label: string }> = [
+  { value: "hybrid", label: "Hybrid" },
+  { value: "danbooru", label: "Danbooru tags" },
+  { value: "tagged", label: "Tags" },
+  { value: "natural", label: "Natural language" },
+];
 
 function ImageDimensionRow({
   label,
@@ -340,6 +365,310 @@ function ImageDimensionRow({
           className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs"
         />
       </div>
+    </div>
+  );
+}
+
+function ImageStyleProfilesEditor({
+  value,
+  onChange,
+}: {
+  value: ImageStyleProfileSettings;
+  onChange: (settings: ImageStyleProfileSettings) => void;
+}) {
+  const settings = normalizeImageStyleProfileSettings(value);
+  const [selectedId, setSelectedId] = useState(settings.defaultProfileId);
+  const [previewKind, setPreviewKind] = useState<ImagePromptKind>("portrait");
+  const [previewPrompt, setPreviewPrompt] = useState(
+    "Create a portrait of Mira, anime style, best quality, high quality, detailed eyes. Avoid blurry, text, watermark. no extra fingers",
+  );
+  const selected = settings.profiles.find((profile) => profile.id === selectedId) ?? settings.profiles[0]!;
+  const preview = useMemo(
+    () =>
+      compileImagePrompt({
+        kind: previewKind,
+        prompt: previewPrompt,
+        styleProfiles: { ...settings, defaultProfileId: selected.id },
+        styleProfileId: selected.id,
+      }),
+    [previewKind, previewPrompt, selected.id, settings],
+  );
+  const cleanupCount =
+    preview.diagnostics.removedPositiveDuplicates.length +
+    preview.diagnostics.removedNegativeDuplicates.length +
+    preview.diagnostics.movedNegativeFragments.length;
+
+  useEffect(() => {
+    if (!settings.profiles.some((profile) => profile.id === selectedId)) {
+      setSelectedId(settings.defaultProfileId);
+    }
+  }, [selectedId, settings.defaultProfileId, settings.profiles]);
+
+  const commit = useCallback(
+    (next: ImageStyleProfileSettings) => {
+      onChange(normalizeImageStyleProfileSettings(next));
+    },
+    [onChange],
+  );
+
+  const updateSelected = useCallback(
+    (patch: Partial<ImageStyleProfile>) => {
+      commit({
+        ...settings,
+        profiles: settings.profiles.map((profile) =>
+          profile.id === selected.id ? { ...profile, ...patch, id: selected.id } : profile,
+        ),
+      });
+    },
+    [commit, selected.id, settings],
+  );
+
+  const updateSubjectTags = useCallback(
+    (kind: ImagePromptKind, tags: string) => {
+      updateSelected({ subjectTags: { ...selected.subjectTags, [kind]: tags } });
+    },
+    [selected.subjectTags, updateSelected],
+  );
+
+  const cloneSelected = useCallback(() => {
+    let suffix = 1;
+    let id = `${selected.id}-custom`;
+    while (settings.profiles.some((profile) => profile.id === id)) {
+      suffix += 1;
+      id = `${selected.id}-custom-${suffix}`;
+    }
+    const clone = { ...selected, id, name: `${selected.name} Custom`, builtIn: false };
+    commit({ ...settings, profiles: [...settings.profiles, clone], defaultProfileId: id });
+    setSelectedId(id);
+  }, [commit, selected, settings]);
+
+  const resetSelected = useCallback(() => {
+    const builtIn = DEFAULT_IMAGE_STYLE_PROFILES.find((profile) => profile.id === selected.id);
+    if (!builtIn) return;
+    commit({
+      ...settings,
+      profiles: settings.profiles.map((profile) => (profile.id === selected.id ? { ...builtIn } : profile)),
+    });
+  }, [commit, selected.id, settings]);
+
+  const deleteSelected = useCallback(() => {
+    if (selected.builtIn || settings.profiles.length <= 1) return;
+    const profiles = settings.profiles.filter((profile) => profile.id !== selected.id);
+    const defaultProfileId = settings.defaultProfileId === selected.id ? profiles[0]!.id : settings.defaultProfileId;
+    commit({ profiles, defaultProfileId });
+    setSelectedId(defaultProfileId);
+  }, [commit, selected.builtIn, selected.id, settings]);
+
+  const setDefaultProfileId = useCallback(
+    (defaultProfileId: string) => {
+      commit({ ...settings, defaultProfileId });
+    },
+    [commit, settings],
+  );
+
+  return (
+    <div className="rounded-lg bg-[var(--background)]/55 p-3 ring-1 ring-[var(--border)]">
+      <div className="space-y-3">
+        <div className="grid gap-2">
+          <label className="min-w-0">
+            <span className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+              Default style
+            </span>
+            <select
+              value={settings.defaultProfileId}
+              onChange={(event) => setDefaultProfileId(event.target.value)}
+              className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 text-xs"
+            >
+              {settings.profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="min-w-0">
+            <span className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+              Editing
+            </span>
+            <select
+              value={selected.id}
+              onChange={(event) => setSelectedId(event.target.value)}
+              className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 text-xs"
+            >
+              {settings.profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={cloneSelected}
+            className="inline-flex h-8 items-center gap-1 rounded-md bg-[var(--secondary)] px-2.5 text-xs ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)]"
+          >
+            <Plus size="0.75rem" />
+            Clone
+          </button>
+          <button
+            type="button"
+            onClick={resetSelected}
+            disabled={!selected.builtIn}
+            className="inline-flex h-8 items-center gap-1 rounded-md bg-[var(--secondary)] px-2.5 text-xs ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <RotateCcw size="0.75rem" />
+            Reset
+          </button>
+          <button
+            type="button"
+            onClick={deleteSelected}
+            disabled={selected.builtIn || settings.profiles.length <= 1}
+            className="inline-flex h-8 items-center gap-1 rounded-md bg-[var(--secondary)] px-2.5 text-xs text-[var(--destructive)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <Trash2 size="0.75rem" />
+            Delete
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        <label className="min-w-0">
+          <span className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">Name</span>
+          <input
+            value={selected.name}
+            onChange={(event) => updateSelected({ name: event.target.value })}
+            className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 text-xs"
+          />
+        </label>
+        <label className="min-w-0">
+          <span className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+            Prompt grammar
+          </span>
+          <select
+            value={selected.promptMode}
+            onChange={(event) => updateSelected({ promptMode: event.target.value as ImagePromptMode })}
+            className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 text-xs"
+          >
+            {IMAGE_PROMPT_MODE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <label className="mt-3 block">
+        <span className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">Style text</span>
+        <textarea
+          value={selected.styleText}
+          onChange={(event) => updateSelected({ styleText: event.target.value })}
+          className="min-h-20 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-2 text-xs leading-relaxed"
+        />
+      </label>
+
+      <div className="mt-3 grid gap-3">
+        <label className="block">
+          <span className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">Positive tags</span>
+          <textarea
+            value={selected.positiveTags}
+            onChange={(event) => updateSelected({ positiveTags: event.target.value })}
+            className="min-h-24 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-2 text-xs leading-relaxed"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">Negative tags</span>
+          <textarea
+            value={selected.negativeTags}
+            onChange={(event) => updateSelected({ negativeTags: event.target.value })}
+            className="min-h-24 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-2 text-xs leading-relaxed"
+          />
+        </label>
+      </div>
+
+      <details className="mt-3 rounded-md bg-[var(--secondary)]/55 p-2.5 ring-1 ring-[var(--border)]">
+        <summary className="cursor-pointer text-xs font-medium text-[var(--foreground)]">Per-image tags</summary>
+        <div className="mt-2 grid gap-2">
+          {IMAGE_STYLE_SUBJECT_KINDS.map((kind) => (
+            <label key={kind} className="block">
+              <span className="mb-1 block text-[0.625rem] font-medium capitalize text-[var(--muted-foreground)]">
+                {kind}
+              </span>
+              <textarea
+                value={selected.subjectTags[kind] ?? ""}
+                onChange={(event) => updateSubjectTags(kind, event.target.value)}
+                className="min-h-14 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2.5 py-2 text-xs leading-relaxed"
+              />
+            </label>
+          ))}
+        </div>
+      </details>
+
+      <details className="mt-2 rounded-md bg-[var(--secondary)]/55 p-2 ring-1 ring-[var(--border)]" open>
+        <summary className="cursor-pointer text-xs font-medium text-[var(--foreground)]">Test bench</summary>
+        <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="space-y-2">
+            <label className="block">
+              <span className="mb-1 block text-[0.625rem] font-medium text-[var(--muted-foreground)]">Image kind</span>
+              <select
+                value={previewKind}
+                onChange={(event) => setPreviewKind(event.target.value as ImagePromptKind)}
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs"
+              >
+                {IMAGE_STYLE_SUBJECT_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {kind}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                Sample input
+              </span>
+              <textarea
+                value={previewPrompt}
+                onChange={(event) => setPreviewPrompt(event.target.value)}
+                className="min-h-32 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 font-mono text-xs"
+                spellCheck={false}
+              />
+            </label>
+            <div className="text-[0.625rem] text-[var(--muted-foreground)]">
+              {cleanupCount > 0
+                ? `${cleanupCount} duplicate or misplaced fragment${cleanupCount === 1 ? "" : "s"} cleaned.`
+                : "No cleanup needed for this sample."}
+            </div>
+          </div>
+          <div className="grid gap-2">
+            <label className="block">
+              <span className="mb-1 block text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                Final positive prompt
+              </span>
+              <textarea
+                value={preview.prompt}
+                readOnly
+                className="min-h-32 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 font-mono text-xs"
+                spellCheck={false}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                Final negative prompt
+              </span>
+              <textarea
+                value={preview.negativePrompt}
+                readOnly
+                className="min-h-20 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 font-mono text-xs"
+                spellCheck={false}
+              />
+            </label>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
@@ -687,23 +1016,23 @@ export function SettingsPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Tab bar */}
-      <div className="flex flex-shrink-0 flex-wrap border-b border-[var(--sidebar-border)]">
+      <div className="grid flex-shrink-0 grid-cols-2 gap-2 p-3 pb-2 md:grid-cols-3">
         {TABS.map((tab) => (
           <button
             key={tab.id}
+            type="button"
+            aria-pressed={settingsTab === tab.id}
             onClick={() => setSettingsTab(tab.id)}
             className={cn(
-              "relative px-3 py-2.5 text-xs font-medium transition-colors",
+              "flex min-w-0 items-center justify-center rounded-xl border px-2 py-2.5 font-medium text-white transition-all [container-type:inline-size] active:scale-[0.98]",
               settingsTab === tab.id
-                ? "text-[var(--foreground)]"
-                : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+                ? "border-[var(--primary)]/35 bg-[var(--accent)]"
+                : "border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)]/35 hover:bg-[var(--accent)]",
             )}
           >
-            {tab.label}
-            {settingsTab === tab.id && (
-              <span className="absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-[var(--primary)]" />
-            )}
+            <span className="max-w-full whitespace-nowrap text-center text-[clamp(0.5625rem,12cqw,0.75rem)] leading-tight">
+              {tab.label}
+            </span>
           </button>
         ))}
       </div>
@@ -753,6 +1082,8 @@ function GeneralSettings() {
   const imageSelfieWidth = useUIStore((s) => s.imageSelfieWidth);
   const imageSelfieHeight = useUIStore((s) => s.imageSelfieHeight);
   const setImageSelfieDimensions = useUIStore((s) => s.setImageSelfieDimensions);
+  const imageStyleProfiles = useUIStore((s) => s.imageStyleProfiles);
+  const setImageStyleProfiles = useUIStore((s) => s.setImageStyleProfiles);
   const enterToSendRP = useUIStore((s) => s.enterToSendRP);
   const setEnterToSendRP = useUIStore((s) => s.setEnterToSendRP);
   const enterToSendConvo = useUIStore((s) => s.enterToSendConvo);
@@ -781,6 +1112,8 @@ function GeneralSettings() {
   const setIntuitiveSwipeRerollLatest = useUIStore((s) => s.setIntuitiveSwipeRerollLatest);
   const editLastMessageOnArrowUp = useUIStore((s) => s.editLastMessageOnArrowUp);
   const setEditLastMessageOnArrowUp = useUIStore((s) => s.setEditLastMessageOnArrowUp);
+  const editMessageOnDoubleClick = useUIStore((s) => s.editMessageOnDoubleClick);
+  const setEditMessageOnDoubleClick = useUIStore((s) => s.setEditMessageOnDoubleClick);
   const rescanGameAssets = useGameAssetStore((s) => s.rescanAssets);
   const assetFileRef = useRef<HTMLInputElement>(null);
   const [assetCategory, setAssetCategory] = useState<GameAssetCategoryId>("backgrounds");
@@ -1123,6 +1456,13 @@ function GeneralSettings() {
         help="In Conversation and Roleplay modes, press Up Arrow while the chat input is empty to open the most recent message in the chat for editing — whether it's yours or the AI's."
       />
 
+      <ToggleSetting
+        label="Double-click edits messages"
+        checked={editMessageOnDoubleClick}
+        onChange={setEditMessageOnDoubleClick}
+        help="When on, double-click or double-tap a Roleplay message to open it for editing. Turn it off to avoid accidental edits; edit buttons and keyboard shortcuts still work."
+      />
+
       <div className="rounded-xl bg-[var(--secondary)]/50 p-4 ring-1 ring-[var(--border)]">
         <div className="mb-3 flex flex-col gap-1">
           <div className="text-xs font-semibold text-[var(--foreground)]">Image Generation</div>
@@ -1160,6 +1500,14 @@ function GeneralSettings() {
             height={imageSelfieHeight}
             onCommit={setImageSelfieDimensions}
           />
+
+          <div className="mt-1">
+            <div className="mb-2 flex items-center gap-1 text-xs font-medium text-[var(--foreground)]">
+              Style Profiles
+              <HelpTooltip text="Defines what Anime, Danbooru, Realistic, and custom styles mean when Marinara compiles image prompts. Profiles merge with per-chat and connection settings, then clean duplicate tags before sending." />
+            </div>
+            <ImageStyleProfilesEditor value={imageStyleProfiles} onChange={setImageStyleProfiles} />
+          </div>
         </div>
       </div>
 
@@ -2973,7 +3321,7 @@ type ProfileImportProgressData = {
 };
 
 type ProfileImportProgressState = {
-  status: "reading" | "starting" | "running" | "success" | "error";
+  status: "reading" | "preview" | "starting" | "running" | "success" | "error";
   label: string;
   completedItems: number;
   totalItems: number;
@@ -2999,6 +3347,16 @@ type ProfileImportStreamEvent =
     }
   | { type: "error"; data?: string | { error?: string; message?: string } };
 
+type ProfileImportPreviewResult = {
+  success?: boolean;
+  preview?: boolean;
+  imported?: ProfileImportStats;
+  warnings?: ProfileImportWarning[];
+  fileFingerprint?: string;
+  error?: string;
+  message?: string;
+};
+
 function formatProfileImportDuration(seconds: number) {
   const safeSeconds = Math.max(0, Math.round(seconds));
   if (safeSeconds < 60) return `${safeSeconds}s`;
@@ -3017,6 +3375,7 @@ function estimateProfileImportRemainingSeconds(progress: ProfileImportProgressSt
 
 function getProfileImportPercent(progress: ProfileImportProgressState) {
   if (progress.status === "success") return 100;
+  if (progress.status === "preview") return 0;
   if (progress.totalItems <= 0) return progress.status === "running" ? 8 : 0;
   const percent = Math.round((progress.completedItems / progress.totalItems) * 100);
   return Math.min(99, Math.max(progress.status === "running" ? 8 : 0, percent));
@@ -3040,6 +3399,23 @@ function formatProfileImportStats(stats?: ProfileImportStats) {
     .filter(([count]) => typeof count === "number" && count > 0)
     .map(([count, label]) => `${count} ${label}`)
     .join(", ");
+}
+
+function getProfileImportItemCount(stats?: ProfileImportStats) {
+  if (!stats) return 0;
+  const counts: Array<number | undefined> = [
+    stats.characters,
+    stats.personas,
+    stats.lorebooks,
+    stats.presets,
+    stats.agents,
+    stats.themes,
+    stats.chats,
+    stats.messages,
+    stats.connections,
+    stats.files,
+  ];
+  return counts.reduce<number>((total, count) => total + (typeof count === "number" && count > 0 ? count : 0), 0);
 }
 
 function getProfileImportErrorMessage(data: unknown) {
@@ -3079,6 +3455,22 @@ function formatProfileImportWarningDetails(warnings: ProfileImportWarning[]) {
   const visible = paths.slice(0, 3).join(", ");
   const extra = paths.length > 3 ? `, +${paths.length - 3} more` : "";
   return `Missing: ${visible}${extra}`;
+}
+
+function formatProfileImportConfirmationMessage(preview: ProfileImportPreviewResult) {
+  const warnings = normalizeProfileImportWarnings(preview.warnings);
+  const found = formatProfileImportStats(preview.imported) || "no counted records";
+  const warningDetail =
+    warnings.length > 0
+      ? `${formatProfileImportWarningSummary(warnings)} ${formatProfileImportWarningDetails(warnings)}`
+      : "";
+  return [
+    `Found: ${found}.`,
+    warningDetail,
+    "Importing writes profile data from this file and cannot be undone. Continue?",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function getDownloadFilename(res: Response, fallback: string) {
@@ -3156,6 +3548,7 @@ function ImportSettings() {
   const [profileImportProgress, setProfileImportProgress] = useState<ProfileImportProgressState | null>(null);
   const profileImportBusy =
     profileImportProgress?.status === "reading" ||
+    profileImportProgress?.status === "preview" ||
     profileImportProgress?.status === "starting" ||
     profileImportProgress?.status === "running";
 
@@ -3163,7 +3556,11 @@ function ImportSettings() {
     if (!profileImportBusy) return;
     const timer = window.setInterval(() => {
       setProfileImportProgress((current) =>
-        current && (current.status === "reading" || current.status === "starting" || current.status === "running")
+        current &&
+        (current.status === "reading" ||
+          current.status === "preview" ||
+          current.status === "starting" ||
+          current.status === "running")
           ? { ...current, elapsedSeconds: Math.floor((Date.now() - current.startedAt) / 1000) }
           : current,
       );
@@ -3221,6 +3618,12 @@ function ImportSettings() {
     const file = e.target.files?.[0];
     if (!file) return;
     const startedAt = Date.now();
+    const makeImportBody = (isZip: boolean, text: string): BodyInit => {
+      if (!isZip) return text;
+      const form = new FormData();
+      form.append("file", file, file.name);
+      return form;
+    };
     setProfileImportProgress({
       status: "reading",
       label: "Reading profile file",
@@ -3231,14 +3634,10 @@ function ImportSettings() {
     });
     try {
       const isZip = await isZipFile(file);
-      let body: BodyInit;
-      if (isZip) {
-        const form = new FormData();
-        form.append("file", file, file.name);
-        body = form;
-      } else {
-        const text = await file.text();
-        const envelope = JSON.parse(text) as { type?: string };
+      let profileText = "";
+      if (!isZip) {
+        profileText = await file.text();
+        const envelope = JSON.parse(profileText) as { type?: string };
         if (envelope.type !== "marinara_profile") {
           setProfileImportProgress({
             status: "error",
@@ -3253,7 +3652,75 @@ function ImportSettings() {
           e.target.value = "";
           return;
         }
-        body = text;
+      }
+
+      setProfileImportProgress((current) =>
+        current
+          ? {
+              ...current,
+              status: "preview",
+              label: isZip ? "Scanning profile archive" : "Scanning profile file",
+              elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+            }
+          : current,
+      );
+      const previewRes = await api.raw("/backup/import-profile?preview=true", {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        body: makeImportBody(isZip, profileText),
+      });
+      if (!previewRes.ok) {
+        const data = (await previewRes.json().catch(() => ({}))) as { error?: string; message?: string };
+        throw new Error(data.message ?? data.error ?? previewRes.statusText ?? "Unknown error");
+      }
+      const preview = (await previewRes.json()) as ProfileImportPreviewResult;
+      if (preview.success === false) {
+        throw new Error(preview.message ?? preview.error ?? "Unknown error");
+      }
+      const previewWarnings = normalizeProfileImportWarnings(preview.warnings);
+      const previewTotalItems = Math.max(1, getProfileImportItemCount(preview.imported));
+      setProfileImportProgress({
+        status: "preview",
+        label: "Review profile import",
+        completedItems: 0,
+        totalItems: previewTotalItems,
+        startedAt,
+        elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+        imported: preview.imported,
+        warnings: previewWarnings,
+      });
+
+      const confirmed = await showConfirmDialog({
+        title: "Import Profile",
+        message: formatProfileImportConfirmationMessage(preview),
+        confirmLabel: "Import",
+        cancelLabel: "Cancel",
+        tone: "destructive",
+      });
+      if (!confirmed) {
+        setProfileImportProgress(null);
+        e.target.value = "";
+        return;
+      }
+
+      if (!isZip) {
+        // Re-parse the cached text after the confirmation boundary so malformed
+        // JSON still reports as a profile-file error before we start streaming.
+        const envelope = JSON.parse(profileText) as { type?: string };
+        if (envelope.type !== "marinara_profile") {
+          setProfileImportProgress({
+            status: "error",
+            label: "Profile import failed",
+            completedItems: 0,
+            totalItems: 1,
+            startedAt,
+            elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
+            error: "Not a valid profile export file.",
+          });
+          toast.error("Not a valid profile export file.");
+          e.target.value = "";
+          return;
+        }
       }
       setProfileImportProgress((current) =>
         current
@@ -3269,8 +3736,9 @@ function ImportSettings() {
         method: "POST",
         headers: {
           Accept: "text/event-stream",
+          ...(preview.fileFingerprint ? { "X-Profile-Preview-Fingerprint": preview.fileFingerprint } : {}),
         },
-        body,
+        body: makeImportBody(isZip, profileText),
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
@@ -3369,7 +3837,11 @@ function ImportSettings() {
         )}
       >
         {profileImportBusy ? <Loader2 size="1rem" className="animate-spin" /> : <Download size="1rem" />}
-        {profileImportBusy ? "Importing Profile..." : "Import Profile (JSON/ZIP)"}
+        {profileImportBusy
+          ? profileImportProgress?.status === "reading" || profileImportProgress?.status === "preview"
+            ? "Scanning Profile..."
+            : "Importing Profile..."
+          : "Import Profile (JSON/ZIP)"}
         <input
           type="file"
           accept=".json,.zip,application/json,application/zip"
@@ -3439,7 +3911,8 @@ function ImportSettings() {
               </div>
               {formatProfileImportStats(profileImportProgress.imported) && (
                 <div className="text-[0.6875rem] text-[var(--muted-foreground)]">
-                  Imported so far: {formatProfileImportStats(profileImportProgress.imported)}
+                  {profileImportProgress.status === "preview" ? "Found" : "Imported so far"}:{" "}
+                  {formatProfileImportStats(profileImportProgress.imported)}
                 </div>
               )}
               {profileImportProgress.warnings?.length ? (

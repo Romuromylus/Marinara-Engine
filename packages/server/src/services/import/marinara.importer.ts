@@ -9,6 +9,7 @@ import { createCharacterGalleryStorage } from "../storage/character-gallery.stor
 import { createLorebooksStorage } from "../storage/lorebooks.storage.js";
 import { createPromptsStorage } from "../storage/prompts.storage.js";
 import { normalizeTimestampOverrides, type TimestampOverrides } from "./import-timestamps.js";
+import { resolveLorebookEntryRole } from "./lorebook-role.js";
 import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import { DATA_DIR } from "../../utils/data-dir.js";
@@ -53,6 +54,16 @@ async function saveAvatarFromDataUrl(dataUrl: unknown, prefix: string, id: strin
   const filepath = assertInsideDir(avatarsDir, join(avatarsDir, filename));
   await writeFile(filepath, decoded.buffer);
   return `/api/avatars/file/${filename}`;
+}
+
+function readLorebookScope(value: unknown): { mode: "all" | "disabled" | "specific"; chatIds: string[] } {
+  if (!value || typeof value !== "object") return { mode: "all", chatIds: [] };
+  const raw = value as Record<string, unknown>;
+  const mode = raw.mode === "disabled" || raw.mode === "specific" ? raw.mode : "all";
+  const chatIds = Array.isArray(raw.chatIds)
+    ? raw.chatIds.filter((chatId): chatId is string => typeof chatId === "string" && chatId.trim().length > 0)
+    : [];
+  return { mode, chatIds: Array.from(new Set(chatIds)) };
 }
 
 // Restore sprites embedded as [{ filename, data }, ...] in a native export
@@ -383,6 +394,7 @@ async function importLorebook(data: unknown, db: DB) {
       chatId: typeof lb.chatId === "string" ? lb.chatId : null,
       isGlobal: lb.isGlobal === true || lb.isGlobal === "true",
       enabled: lb.enabled !== false,
+      scope: readLorebookScope(lb.scope),
       tags: Array.isArray(lb.tags) ? lb.tags.map(String) : [],
       generatedBy: "import",
       sourceAgentId: typeof lb.sourceAgentId === "string" ? lb.sourceAgentId : null,
@@ -444,7 +456,7 @@ async function importLorebook(data: unknown, db: DB) {
         position: Number(e.position ?? 0),
         depth: Number(e.depth ?? 4),
         order: Number(e.order ?? 100),
-        role: (e.role as any) ?? "system",
+        role: resolveLorebookEntryRole(e.role),
         sticky: e.sticky != null ? Number(e.sticky) : null,
         cooldown: e.cooldown != null ? Number(e.cooldown) : null,
         delay: e.delay != null ? Number(e.delay) : null,

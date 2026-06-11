@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   findKnownModel,
   LOCAL_SIDECAR_CONNECTION_ID,
+  isClaudeAdaptiveOnlyNoSamplingModel,
   resolveMacros,
   stripMacroComments,
   type APIProvider,
@@ -36,14 +37,17 @@ import { applyRegexScriptsToPromptMessages } from "../../services/regex/regex-ap
 import { sendSseEvent, startSseReply } from "./sse.js";
 import {
   appendReadableAttachmentsToContent,
+  dedupeLastMessageWrappers,
   extractImageAttachmentDataUrls,
-  findLastIndex,
+  findTrackerContextInsertIndex,
   isMessageHiddenFromAI,
   mergeCustomParameters,
   parseExtra,
   parseStoredGenerationParameters,
+  prefixGroupIndividualHistorySpeakers,
   resolveActiveCharacterIds,
   resolvePromptCharacterIdsForTarget,
+  resolveCharacterNameMap,
   resolveRegenerationGameStateAnchor,
   resolveProviderTopK,
   normalizeServiceTier,
@@ -56,6 +60,14 @@ import { createGameStateStorage, type GameStateVisibleAnchor } from "../../servi
 import { logger } from "../../lib/logger.js";
 
 type WrapFormat = "xml" | "markdown" | "none";
+type DryRunPromptMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+  images?: string[];
+  contextKind?: "prompt" | "history" | "injection";
+  characterId?: string | null;
+  providerMetadata?: Record<string, unknown>;
+};
 
 function cardPromptText(value: unknown): string {
   return typeof value === "string" ? stripMacroComments(value).trim() : "";
@@ -211,22 +223,19 @@ function formatTrackersContextBlock(args: {
 }
 
 function injectTrackerContext(
-  finalMessages: Array<{ role: "system" | "user" | "assistant"; content: string; images?: string[] }>,
+  finalMessages: DryRunPromptMessage[],
   contextBlock: string,
-  placement: "append" | "beforeLastUser",
-): Array<{ role: "system" | "user" | "assistant"; content: string; images?: string[] }> {
+  placement: "append" | "beforeLastHistoryMessage",
+): DryRunPromptMessage[] {
+  const trackerMessage = { role: "user" as const, content: contextBlock, contextKind: "injection" as const };
+
   if (placement === "append") {
-    finalMessages.push({ role: "system", content: contextBlock });
+    finalMessages.push(trackerMessage);
     return finalMessages;
   }
 
-  const lastUserIdx = findLastIndex(finalMessages as any, "user");
-  if (lastUserIdx >= 0) {
-    finalMessages.splice(lastUserIdx, 0, { role: "system", content: contextBlock });
-    return finalMessages;
-  }
-
-  finalMessages.push({ role: "system", content: contextBlock });
+  dedupeLastMessageWrappers(finalMessages);
+  finalMessages.splice(findTrackerContextInsertIndex(finalMessages), 0, trackerMessage);
   return finalMessages;
 }
 
@@ -242,10 +251,10 @@ function wrapperMessages(
 }
 
 function wrapConversationHistoryAndLastMessageInPlace(
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string; images?: string[] }>,
+  messages: DryRunPromptMessage[],
   wrapFormat: WrapFormat,
   opts?: { excludeTrailingImpersonationInstruction?: boolean },
-): Array<{ role: "system" | "user" | "assistant"; content: string; images?: string[] }> {
+): DryRunPromptMessage[] {
   if (wrapFormat === "none") return messages;
 
   // NOTE: This function is a dry-run-only compatibility shim for extensions.
@@ -283,10 +292,15 @@ function wrapConversationHistoryAndLastMessageInPlace(
     return messages.length - 1;
   })();
 
-  const convoStart = messages.findIndex((m) => m.role === "user" || m.role === "assistant");
+  const historyIndexes = messages
+    .map((message, index) => (message.contextKind === "history" ? index : -1))
+    .filter((index) => index >= 0);
+  const convoStart =
+    historyIndexes[0] ?? messages.findIndex((m) => m.role === "user" || m.role === "assistant");
   if (convoStart < 0 || lastNonInstructionIdx < convoStart) return messages;
 
   const convoEnd = (() => {
+    if (historyIndexes.length > 0) return historyIndexes[historyIndexes.length - 1]!;
     for (let i = lastNonInstructionIdx; i >= convoStart; i--) {
       const r = messages[i]!.role;
       if (r === "user" || r === "assistant") return i;
@@ -302,18 +316,12 @@ function wrapConversationHistoryAndLastMessageInPlace(
   if (convoLen <= 0) return messages;
 
   // Replicate the preset marker-expander behavior:
-  // - Find the last USER message in the conversation slice
+  // - Find the final message in the conversation slice
   // - Wrap everything before that as chat_history
-  // - Wrap that last USER message as last_message
-  let lastUserIdx = -1;
-  for (let i = convoEnd; i >= convoStart; i--) {
-    if (out[i]!.role === "user") {
-      lastUserIdx = i;
-      break;
-    }
-  }
+  // - Wrap that final message as last_message
+  const lastMessageIdx = convoEnd;
   const historyStartIdx = convoStart;
-  const historyEndIdx = (lastUserIdx >= 0 ? lastUserIdx : convoEnd + 1) - 1;
+  const historyEndIdx = lastMessageIdx - 1;
 
   // 1) Only apply the normal preset-style wrapping if it's not already present.
   if (!hasPresetWrapping) {
@@ -325,12 +333,10 @@ function wrapConversationHistoryAndLastMessageInPlace(
         };
         out[historyEndIdx] = { ...out[historyEndIdx]!, content: `${out[historyEndIdx]!.content}\n</chat_history>` };
       }
-      if (lastUserIdx >= 0) {
-        out[lastUserIdx] = {
-          ...out[lastUserIdx]!,
-          content: `<last_message>\n${out[lastUserIdx]!.content}\n</last_message>`,
-        };
-      }
+      out[lastMessageIdx] = {
+        ...out[lastMessageIdx]!,
+        content: `<last_message>\n${out[lastMessageIdx]!.content}\n</last_message>`,
+      };
     } else if (wrapFormat === "markdown") {
       if (historyEndIdx >= historyStartIdx) {
         out[historyStartIdx] = {
@@ -338,9 +344,7 @@ function wrapConversationHistoryAndLastMessageInPlace(
           content: `## Chat History\n${out[historyStartIdx]!.content}`,
         };
       }
-      if (lastUserIdx >= 0) {
-        out[lastUserIdx] = { ...out[lastUserIdx]!, content: `## Last Message\n${out[lastUserIdx]!.content}` };
-      }
+      out[lastMessageIdx] = { ...out[lastMessageIdx]!, content: `## Last Message\n${out[lastMessageIdx]!.content}` };
     }
   }
 
@@ -359,8 +363,8 @@ function wrapConversationHistoryAndLastMessageInPlace(
   })();
 
   const assistantToWrapIdx = (() => {
-    // In preset mode, `chat_history` wraps the last user message, but any assistant replies
-    // after that user message remain unwrapped. Prefer wrapping the last such assistant.
+    // Older preset mode wrapped the last user message, leaving assistant replies unwrapped.
+    // Prefer wrapping any assistant after an existing last_message marker for compatibility.
     if (lastMessageMarkerIdx >= 0) {
       for (let i = convoEnd; i > lastMessageMarkerIdx; i--) {
         if (out[i]!.role === "assistant") return i;
@@ -380,12 +384,10 @@ function wrapConversationHistoryAndLastMessageInPlace(
     // If tracker context ended up *after* the assistant we want to tag, move it
     // before the assistant so the final assistant tag remains the tail of convo.
     //
-    // This is a dry-run-only shim: tracker injection in this route uses "insert before
-    // last user", which can land after assistant turns if the preset has trailing user
-    // sections. Extensions expect trackers to be established context *before* the final
-    // assistant message.
-    const isTrackerContextMessage = (m: { role: string; content: string }): boolean => {
-      if (m.role !== "system") return false;
+    // This is a dry-run-only shim for extension previews. Tracker context is an
+    // injection outside chat history, not part of the conversation slice.
+    const isTrackerContextMessage = (m: DryRunPromptMessage): boolean => {
+      if (m.contextKind !== "injection" && m.role !== "system") return false;
       const c = (m.content ?? "").trimStart();
       if (wrapFormat === "xml") return c.startsWith("<context>") || c.includes("\n</context>");
       return c.startsWith("# Context\n*(Established state as of the last message.");
@@ -601,9 +603,9 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     const knownModelContext = normalizeMaxContext(findKnownModel(conn.provider as APIProvider, conn.model)?.context);
 
     // Minimal, safe parameter defaults (still allow chat-level overrides)
-    let temperature = 1;
+    let temperature: number | undefined = 1;
     let maxTokens = 2048;
-    let topP = 1;
+    let topP: number | undefined = 1;
     let topK = 0;
     let frequencyPenalty = 0;
     let presencePenalty = 0;
@@ -707,6 +709,8 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       return {
         role: m.role === "narrator" ? ("system" as const) : (m.role as "user" | "assistant" | "system"),
         content: appendReadableAttachmentsToContent((m.content as string) ?? "", attachments),
+        contextKind: "history" as const,
+        characterId: typeof m.characterId === "string" && m.characterId ? m.characterId : null,
         ...(images?.length ? { images } : {}),
         ...geminiParts,
       };
@@ -720,7 +724,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     }
 
     // Build prompt messages
-    let finalMessages: Array<{ role: "system" | "user" | "assistant"; content: string; images?: string[] }> = [];
+    let finalMessages: DryRunPromptMessage[] = [];
     let wrapFormat: WrapFormat = "xml";
 
     // Optional: fine-grained prompt assembly (server-side) for extensions.
@@ -738,10 +742,11 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       mode: chatMode,
       allowEmpty: true,
     });
-    const promptCharacterIds = resolvePromptCharacterIdsForTarget(
-      characterIds,
-      typeof body.forCharacterId === "string" ? body.forCharacterId : null,
-    );
+    const promptTargetCharacterId =
+      typeof body.forCharacterId === "string" && characterIds.includes(body.forCharacterId)
+        ? body.forCharacterId
+        : null;
+    const promptCharacterIds = resolvePromptCharacterIdsForTarget(characterIds, promptTargetCharacterId);
 
     // Persona resolution (same strategy as generation; read-only)
     let personaId: string | null = null;
@@ -861,10 +866,25 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     // Apply regex scripts to prompt messages (mirrors main /generate, but stays read-only).
     applyRegexScriptsToPromptMessages(mappedMessages, await regexScriptsStore.list(), {
       resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
+      targetCharacterId: promptTargetCharacterId,
     });
 
     for (const msg of mappedMessages) {
       msg.content = msg.content.replace(/\n([ \t]*\n){2,}/g, "\n\n");
+    }
+    const dryRunGroupChatMode = ((chatMeta.groupChatMode as string) ?? "merged") as string;
+    const shouldPrefixGroupHistorySpeakers =
+      chatMeta.groupSpeakerNamesInHistory === true &&
+      characterIds.length > 1 &&
+      chatMode !== "conversation" &&
+      chatMode !== "game" &&
+      dryRunGroupChatMode === "individual";
+    if (shouldPrefixGroupHistorySpeakers) {
+      const characterNamesById = await resolveCharacterNameMap(allCharacterIds, (id) => chars.getById(id));
+      mappedMessages = prefixGroupIndividualHistorySpeakers(mappedMessages, {
+        personaName,
+        characterNamesById,
+      });
     }
     promptMacroContext.lastInput = [...mappedMessages].reverse().find((message) => message.role === "user")?.content;
 
@@ -1083,8 +1103,11 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         ? (mappedMessages.map((m: any) => ({
             role: m.role,
             content: m.content,
+            contextKind: "history" as const,
+            characterId: m.characterId ?? null,
             ...(m.images ? { images: m.images } : {}),
-          })) as Array<{ role: "system" | "user" | "assistant"; content: string; images?: string[] }>)
+            ...(m.providerMetadata ? { providerMetadata: m.providerMetadata } : {}),
+          })) as DryRunPromptMessage[])
         : [];
 
       const lastConvIdx = (() => {
@@ -1198,8 +1221,8 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         if (key === "trackers") {
           if (!trackersBlock) continue;
           // Trackers already come out wrapped as `<context> ... </context>` when using XML.
-          // In promptParts mode, honor `promptParts.order` strictly (no splicing before last user).
-          finalMessages.push({ role: "system", content: trackersBlock });
+          // In promptParts mode, honor `promptParts.order` strictly.
+          finalMessages.push({ role: "user", content: trackersBlock, contextKind: "injection" });
           continue;
         }
       }
@@ -1396,7 +1419,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       const snap = await loadLatestGameSnapshot(app, chatId, visibleGameStateAnchor, regenerateMessageId);
       const contextBlock = snap ? formatTrackersContextBlock({ wrapFormat, snap, chatMeta }) : null;
       if (contextBlock) {
-        finalMessages = injectTrackerContext(finalMessages, contextBlock, "beforeLastUser");
+        finalMessages = injectTrackerContext(finalMessages, contextBlock, "beforeLastHistoryMessage");
       }
     }
 
@@ -1423,23 +1446,29 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     if (assistantPrefill.trim()) {
       finalMessages.push({ role: "assistant", content: assistantPrefill });
     }
+    dedupeLastMessageWrappers(finalMessages);
 
     // ── Parameter normalization (mirror /api/generate) ──
-    // Resolve "maximum" reasoning effort to the highest level for the current model.
-    // GPT-5.4 and Claude Opus 4.7+ support "xhigh" — all others get "high".
-    let resolvedEffort: "low" | "medium" | "high" | "xhigh" | null =
-      reasoningEffort !== "maximum" ? reasoningEffort : null;
-    if (reasoningEffort === "maximum") {
-      const modelLower = (conn.model ?? "").toLowerCase();
-      const supportsXhigh =
-        modelLower.startsWith("gpt-5.4") ||
-        modelLower === "grok-4.20-multi-agent" ||
-        /claude-opus-4-(?:[7-9]|\d{2,})/.test(modelLower);
-      resolvedEffort = supportsXhigh ? "xhigh" : "high";
-    }
-
     const modelLower = (conn.model ?? "").toLowerCase();
     const providerLower = (conn.provider ?? "").toLowerCase();
+
+    // Resolve "maximum" reasoning effort to the highest provider-facing level.
+    // Native Anthropic/Claude subscription adaptive-only models use "max";
+    // OpenAI-compatible Claude routes keep "xhigh". All other models get "high".
+    let resolvedEffort: "low" | "medium" | "high" | "xhigh" | "max" | null =
+      reasoningEffort !== "maximum" ? reasoningEffort : null;
+    if (reasoningEffort === "maximum") {
+      const isNativeAnthropicAdaptiveOnly =
+        (providerLower === "anthropic" || providerLower === "claude_subscription") &&
+        isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
+      const supportsXhigh =
+        modelLower.startsWith("gpt-5.5") ||
+        modelLower.startsWith("gpt-5.4") ||
+        modelLower === "grok-4.20-multi-agent" ||
+        isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
+      resolvedEffort = isNativeAnthropicAdaptiveOnly ? "max" : supportsXhigh ? "xhigh" : "high";
+    }
+
     const isXaiAutoReasoningModel =
       (providerLower === "xai" && (modelLower.startsWith("grok-4.3") || modelLower.startsWith("grok-4-1-fast"))) ||
       (providerLower === "openrouter" && modelLower.startsWith("x-ai/grok-"));
@@ -1458,10 +1487,11 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     // ── Claude 4.5+ sampling parameter restrictions ──
     const modelLc = (conn.model ?? "").toLowerCase();
 
-    // Claude Opus 4.7+: ALL sampling params removed except max_tokens (provider returns 400 otherwise).
-    const isClaudeNoSampling = /claude-opus-4-(?:[7-9]|\d{2,})/.test(modelLc);
+    // Claude adaptive-only models: ALL sampling params removed except max_tokens (provider returns 400 otherwise).
+    const isClaudeNoSampling = isClaudeAdaptiveOnlyNoSamplingModel(modelLc);
     if (isClaudeNoSampling) {
-      topP = undefined as any;
+      temperature = undefined;
+      topP = undefined;
       topK = 0;
       frequencyPenalty = 0;
       presencePenalty = 0;
@@ -1472,7 +1502,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       !isClaudeNoSampling &&
       (/claude-(opus|sonnet)-4-[56]/.test(modelLc) || /claude-(opus|sonnet)-4\.[56]/.test(modelLc));
     if (isClaudeTemperatureOnly) {
-      topP = undefined as any;
+      topP = undefined;
       topK = 0;
       frequencyPenalty = 0;
       presencePenalty = 0;

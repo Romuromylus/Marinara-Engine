@@ -116,6 +116,7 @@ const CREATE_TABLES: string[] = [
     chat_id TEXT,
     is_global TEXT NOT NULL DEFAULT 'false',
     enabled TEXT NOT NULL DEFAULT 'true',
+    scope TEXT NOT NULL DEFAULT '{"mode":"all","chatIds":[]}',
     tags TEXT NOT NULL DEFAULT '[]',
     generated_by TEXT,
     source_agent_id TEXT,
@@ -255,6 +256,7 @@ const CREATE_TABLES: string[] = [
     base_url TEXT NOT NULL DEFAULT '',
     api_key_encrypted TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
+    image_path TEXT,
     max_context INTEGER NOT NULL DEFAULT 128000,
     max_parallel_jobs INTEGER NOT NULL DEFAULT 1,
     is_default TEXT NOT NULL DEFAULT 'false',
@@ -282,6 +284,7 @@ const CREATE_TABLES: string[] = [
     phase TEXT NOT NULL,
     enabled TEXT NOT NULL DEFAULT 'true',
     connection_id TEXT,
+    image_path TEXT,
     prompt_template TEXT NOT NULL DEFAULT '',
     settings TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
@@ -362,6 +365,7 @@ const CREATE_TABLES: string[] = [
     placement TEXT NOT NULL DEFAULT '["ai_output"]',
     flags TEXT NOT NULL DEFAULT 'gi',
     prompt_only TEXT NOT NULL DEFAULT 'false',
+    target_character_ids TEXT NOT NULL DEFAULT '[]',
     "order" INTEGER NOT NULL DEFAULT 0,
     min_depth INTEGER,
     max_depth INTEGER,
@@ -490,6 +494,16 @@ interface ColumnMigration {
 const COLUMN_MIGRATIONS: ColumnMigration[] = [
   {
     table: "api_connections",
+    column: "image_path",
+    definition: "TEXT",
+  },
+  {
+    table: "agent_configs",
+    column: "image_path",
+    definition: "TEXT",
+  },
+  {
+    table: "api_connections",
     column: "enable_caching",
     definition: "TEXT NOT NULL DEFAULT 'false'",
   },
@@ -604,6 +618,11 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     definition: "TEXT",
   },
   {
+    table: "regex_scripts",
+    column: "target_character_ids",
+    definition: "TEXT NOT NULL DEFAULT '[]'",
+  },
+  {
     table: "api_connections",
     column: "comfyui_workflow",
     definition: "TEXT",
@@ -647,6 +666,11 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: "lorebooks",
     column: "image_path",
     definition: "TEXT",
+  },
+  {
+    table: "lorebooks",
+    column: "scope",
+    definition: 'TEXT NOT NULL DEFAULT \'{"mode":"all","chatIds":[]}\'',
   },
   {
     table: "api_connections",
