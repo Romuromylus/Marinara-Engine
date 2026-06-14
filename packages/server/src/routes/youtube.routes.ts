@@ -41,6 +41,42 @@ function decodeEntities(str: string): string {
   return str.replace(/&amp;|&quot;|&#39;|&lt;|&gt;/g, (m) => HTML_ENTITIES[m] ?? m);
 }
 
+/** Translate a YouTube Data API error body into a clear, actionable message. */
+function friendlyYoutubeError(status: number, body: string): string {
+  let reason = "";
+  let message = "";
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string; errors?: Array<{ reason?: string }> } };
+    reason = (parsed.error?.errors?.[0]?.reason ?? "").toLowerCase();
+    message = parsed.error?.message ?? "";
+  } catch {
+    /* non-JSON body */
+  }
+  const blob = `${reason} ${message} ${body}`.toLowerCase();
+
+  if (
+    blob.includes("api keys are not supported") ||
+    reason === "accessnotconfigured" ||
+    blob.includes("has not been used in project") ||
+    blob.includes("it is disabled")
+  ) {
+    return "YouTube Data API v3 is not enabled for this key's Google Cloud project. Open the Google Cloud Console API Library, enable “YouTube Data API v3”, wait a minute, then try again.";
+  }
+  if (reason === "keyinvalid" || blob.includes("api key not valid")) {
+    return "This YouTube Data API key is invalid. Re-check the key pasted in the YouTube DJ settings.";
+  }
+  if (reason === "keyexpired") {
+    return "This YouTube Data API key has expired. Create a new key in Google Cloud Console.";
+  }
+  if (blob.includes("referer") || blob.includes("referrer")) {
+    return "This key is restricted to HTTP referrers, but searches run server-side (no referrer). Set the key's Application restriction to None or IP addresses.";
+  }
+  if (reason === "quotaexceeded" || reason === "dailylimitexceeded" || blob.includes("quota")) {
+    return "YouTube Data API daily quota exceeded for this key. Try again tomorrow, or use a different key.";
+  }
+  return `YouTube API error (${status}): ${message || body.slice(0, 160)}`;
+}
+
 export async function youtubeRoutes(app: FastifyInstance) {
   const storage = createAgentsStorage(app.db);
 
@@ -126,7 +162,7 @@ export async function youtubeRoutes(app: FastifyInstance) {
       const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) {
         const body = await res.text();
-        return reply.status(res.status).send({ error: `YouTube API error (${res.status}): ${body.slice(0, 200)}` });
+        return reply.status(res.status).send({ error: friendlyYoutubeError(res.status, body) });
       }
       const data = (await res.json()) as {
         items?: Array<{
