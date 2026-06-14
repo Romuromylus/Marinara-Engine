@@ -27,6 +27,7 @@ import { schedulePlannerAgentManifest } from "./schedule-planner/manifest.js";
 import { secretPlotDriverAgentManifest } from "./secret-plot-driver/manifest.js";
 import { spotifyAgentManifest } from "./spotify/manifest.js";
 import { worldStateAgentManifest } from "./world-state/manifest.js";
+import { youtubeAgentManifest } from "./youtube/manifest.js";
 
 export const BUILT_IN_AGENT_MANIFESTS: readonly BuiltInAgentManifest[] = [
   proseGuardianAgentManifest,
@@ -57,6 +58,7 @@ export const BUILT_IN_AGENT_MANIFESTS: readonly BuiltInAgentManifest[] = [
   hapticAgentManifest,
   cyoaAgentManifest,
   secretPlotDriverAgentManifest,
+  youtubeAgentManifest,
 ];
 
 export function getBuiltInAgentManifest(agentId: string): BuiltInAgentManifest | null {
