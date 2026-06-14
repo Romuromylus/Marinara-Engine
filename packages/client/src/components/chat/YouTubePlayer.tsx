@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Music, Pause, Play, X } from "lucide-react";
 import { useAgentStore } from "@/stores/agent.store";
+import { useUIStore } from "@/stores/ui.store";
 import { api } from "@/lib/api-client";
 
 // The YouTube IFrame API attaches itself to window; it has no bundled types.
@@ -50,6 +51,7 @@ export function YouTubePlayer() {
   const youtubePlay = useAgentStore((s) => s.youtubePlay);
   const youtubeVolume = useAgentStore((s) => s.youtubeVolume);
   const clearYoutube = useAgentStore((s) => s.clearYoutube);
+  const youtubePlayerEnabled = useUIStore((s) => s.youtubePlayerEnabled);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
@@ -99,6 +101,7 @@ export function YouTubePlayer() {
 
   // React to a new "play" intent.
   useEffect(() => {
+    if (!youtubePlayerEnabled) return; // player disabled in Settings — don't fetch or play
     if (!youtubePlay) return;
     if (youtubePlay.nonce === lastNonceRef.current) return;
     lastNonceRef.current = youtubePlay.nonce;
@@ -135,7 +138,19 @@ export function YouTubePlayer() {
     return () => {
       cancelled = true;
     };
-  }, [youtubePlay, ensurePlayer]);
+  }, [youtubePlay, ensurePlayer, youtubePlayerEnabled]);
+
+  // Stop playback immediately if the user disables the player mid-track.
+  useEffect(() => {
+    if (youtubePlayerEnabled) return;
+    try {
+      playerRef.current?.stopVideo();
+    } catch {
+      /* ignore */
+    }
+    lastQueryRef.current = "";
+    setNowPlaying(null);
+  }, [youtubePlayerEnabled]);
 
   // Apply DJ volume changes without changing the track.
   useEffect(() => {
@@ -173,7 +188,7 @@ export function YouTubePlayer() {
     clearYoutube();
   };
 
-  const visible = !!nowPlaying || loading || !!error;
+  const visible = youtubePlayerEnabled && (!!nowPlaying || loading || !!error);
 
   return (
     <div

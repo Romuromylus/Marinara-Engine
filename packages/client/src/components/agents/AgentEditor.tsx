@@ -581,7 +581,15 @@ export function AgentEditor() {
         : (dbConfig.settings as Record<string, unknown>)
       : {};
     const preservedSpotifyFields: Record<string, unknown> = {};
-    for (const key of ["spotifyAccessToken", "spotifyRefreshToken", "spotifyExpiresAt", "spotifyScope"]) {
+    for (const key of [
+      "spotifyAccessToken",
+      "spotifyRefreshToken",
+      "spotifyExpiresAt",
+      "spotifyScope",
+      // YouTube DJ key is encrypted server-side and not exposed by the form — preserve it
+      // so a normal agent Save (e.g. toggling Enabled) doesn't wipe the stored key.
+      "youtubeApiKey",
+    ]) {
       if (currentSettings[key] !== undefined) preservedSpotifyFields[key] = currentSettings[key];
     }
 
@@ -1975,16 +1983,18 @@ export function AgentEditor() {
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
-                    disabled={youtubeSaving || !localYoutubeApiKey.trim() || !dbConfig?.id}
+                    disabled={youtubeSaving || !localYoutubeApiKey.trim()}
                     onClick={async () => {
-                      if (!dbConfig?.id) return;
                       setYoutubeSaving(true);
                       setYoutubeError(null);
                       try {
+                        // agentId is optional — the server creates the built-in YouTube DJ
+                        // config if it doesn't exist yet, so the user never has to hit the
+                        // top-right Save first.
                         const res = await fetch("/api/youtube/save-key", {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ agentId: dbConfig.id, apiKey: localYoutubeApiKey.trim() }),
+                          body: JSON.stringify({ agentId: dbConfig?.id, apiKey: localYoutubeApiKey.trim() }),
                         });
                         if (!res.ok) {
                           const data = await res.json().catch(() => ({}));
@@ -1992,6 +2002,8 @@ export function AgentEditor() {
                         }
                         setYoutubeConfigured(true);
                         setLocalYoutubeApiKey("");
+                        // Refresh the agent list so dbConfig (the new/updated config row) populates.
+                        qc.invalidateQueries({ queryKey: agentKeys.all });
                       } catch (err) {
                         setYoutubeError(err instanceof Error ? err.message : "Save failed");
                       } finally {
@@ -2029,9 +2041,6 @@ export function AgentEditor() {
                 </div>
 
                 {youtubeError && <p className="text-[0.6875rem] text-red-400">{youtubeError}</p>}
-                {!dbConfig?.id && (
-                  <p className="text-[0.625rem] text-white/30">Save the agent first, then add your API key.</p>
-                )}
 
                 <div className="rounded-lg bg-white/5 p-3 text-[0.6875rem] text-white/50 leading-relaxed">
                   <p className="mb-1 font-medium text-white/60">How to get a free key:</p>

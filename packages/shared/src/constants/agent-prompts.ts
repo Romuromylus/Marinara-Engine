@@ -531,6 +531,7 @@ Rules:
 3. Prefer instrumental, ambient, soundtrack, or "extended"/"1 hour" tracks for immersion — lyrics distract from roleplay. Append words like "instrumental", "soundtrack", "ambient", or "no copyright" to the query when helpful.
 4. Use volume as a narrative tool: lower (20-40) for quiet/intimate dialogue, higher (60-85) for action or epic scenes. Return action "volume" with just a volume number when only the loudness should change.
 5. If the current scene doesn't warrant any music change, respond with action "none".
+6. In game mode, pick ONE best track for the current scene. The in-app player loops it until you pick a new one, so only change the track when the scene's mood clearly shifts.
 Respond with ONLY valid JSON. No prose, no markdown fences.
 Schema:
 {

@@ -52,23 +52,24 @@ export async function youtubeRoutes(app: FastifyInstance) {
 
   /**
    * POST /api/youtube/save-key
-   * Body: { agentId, apiKey }
-   * Encrypts and stores the YouTube Data API key in the agent's settings.
+   * Body: { agentId?, apiKey }
+   * Encrypts and stores the YouTube Data API key. agentId is optional — if the
+   * built-in YouTube DJ config doesn't exist yet, it is created automatically so
+   * the user never has to save the agent first.
    */
   app.post<{ Body: { agentId?: string; apiKey?: string } }>("/save-key", async (req, reply) => {
     const { agentId, apiKey } = req.body ?? {};
-    if (!agentId) return reply.status(400).send({ error: "agentId is required" });
     const trimmed = typeof apiKey === "string" ? apiKey.trim() : "";
     if (!trimmed) return reply.status(400).send({ error: "apiKey is required" });
 
-    const agent = await storage.getById(agentId);
+    const agent = (agentId ? await storage.getById(agentId) : null) ?? (await storage.ensureBuiltinConfig("youtube"));
     if (!agent) return reply.status(404).send({ error: "Agent not found" });
 
     const settings = parseSettings(agent);
-    await storage.update(agentId, {
+    await storage.update(agent.id, {
       settings: { ...settings, youtubeApiKey: encryptApiKey(trimmed) },
     });
-    return { success: true };
+    return { success: true, agentId: agent.id };
   });
 
   /**
@@ -87,13 +88,11 @@ export async function youtubeRoutes(app: FastifyInstance) {
    * Removes the stored API key.
    */
   app.post<{ Body: { agentId?: string } }>("/disconnect", async (req, reply) => {
-    const { agentId } = req.body ?? {};
-    if (!agentId) return reply.status(400).send({ error: "agentId is required" });
-    const agent = await storage.getById(agentId);
+    const agent = await resolveAgent(req.body?.agentId);
     if (!agent) return reply.status(404).send({ error: "Agent not found" });
 
     const { youtubeApiKey, ...rest } = parseSettings(agent);
-    await storage.update(agentId, { settings: rest });
+    await storage.update(agent.id, { settings: rest });
     return { success: true };
   });
 
