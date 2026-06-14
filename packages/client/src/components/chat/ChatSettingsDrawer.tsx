@@ -3609,7 +3609,7 @@ export function ChatSettingsDrawer({
                           <span>YouTube DJ Music</span>
                         </div>
                         <p className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                          Play mood-matched music from YouTube in an embedded in-app player during the game.
+                          Use YouTube (in-app player) instead of the built-in Game Mode music library.
                         </p>
                       </div>
                       <div
