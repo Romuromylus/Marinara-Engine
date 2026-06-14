@@ -80,6 +80,7 @@ export const TRACKER_PANEL_SIZE_PROFILE_WIDTHS: Record<TrackerPanelSizeProfile, 
 export const TRACKER_PANEL_WIDTH_DEFAULT = TRACKER_PANEL_SIZE_PROFILE_WIDTHS.standard;
 export const TRACKER_PANEL_WIDTH_MIN = TRACKER_PANEL_SIZE_PROFILE_WIDTHS.compact;
 export const TRACKER_PANEL_WIDTH_MAX = TRACKER_PANEL_SIZE_PROFILE_WIDTHS.expanded;
+export const TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR = "#09090b";
 const IMAGE_DIMENSION_MIN = 64;
 const IMAGE_DIMENSION_MAX = 4096;
 const GAME_SETUP_LEARNED_LIMIT = 60;
@@ -202,6 +203,11 @@ export function normalizeTrackerTemperatureUnit(value: unknown): TrackerTemperat
     : "celsius";
 }
 
+function normalizeTrackerPanelBackgroundColor(value: unknown) {
+  if (typeof value !== "string") return TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR;
+  return value.trim() || TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR;
+}
+
 function normalizeLearnedGameSetupOption(value: unknown) {
   if (typeof value !== "string") return "";
   return value.replace(/\s+/g, " ").trim().slice(0, 160);
@@ -272,6 +278,7 @@ interface UIState {
   trackerPanelThoughtBubbleDisplay: TrackerThoughtBubbleDisplay;
   trackerPanelDockedThoughtsAlwaysVisible: boolean;
   trackerPanelSizeProfile: TrackerPanelSizeProfile;
+  trackerPanelBackgroundColor: string;
   trackerTemperatureUnit: TrackerTemperatureUnit;
   trackerPanelCollapsedSections: TrackerPanelCollapsedSections;
   trackerPanelSectionOrder: TrackerPanelSectionOrder;
@@ -372,6 +379,8 @@ interface UIState {
   chibiProfessorMariEnabled: boolean;
   /** When true, show the global Spotify mini player in the app chrome. */
   spotifyPlayerEnabled: boolean;
+  /** When true, show the YouTube DJ mini player when the agent plays a track. */
+  youtubePlayerEnabled: boolean;
   /** Mobile Spotify widget collapsed state. */
   spotifyMobileWidgetCollapsed: boolean;
   /** Mobile Spotify widget position in viewport pixels. */
@@ -423,6 +432,7 @@ interface UIState {
   // ── Sound ──
   convoNotificationSound: boolean;
   rpNotificationSound: boolean;
+  gameNotificationSound: boolean;
   conversationBrowserNotifications: boolean;
 
   // ── Custom Conversation Prompt ──
@@ -513,6 +523,7 @@ interface UIState {
   setTrackerPanelThoughtBubbleDisplay: (display: TrackerThoughtBubbleDisplay) => void;
   setTrackerPanelDockedThoughtsAlwaysVisible: (visible: boolean) => void;
   setTrackerPanelSizeProfile: (profile: TrackerPanelSizeProfile) => void;
+  setTrackerPanelBackgroundColor: (color: string) => void;
   setTrackerTemperatureUnit: (unit: TrackerTemperatureUnit) => void;
   setTrackerPanelSectionOrder: (order: TrackerPanelSectionOrder) => void;
   setTrackerPanelSectionCollapsed: (section: TrackerDataPanelSection, collapsed: boolean) => void;
@@ -595,6 +606,7 @@ interface UIState {
   setSpeechToTextEnabled: (v: boolean) => void;
   setChibiProfessorMariEnabled: (v: boolean) => void;
   setSpotifyPlayerEnabled: (v: boolean) => void;
+  setYoutubePlayerEnabled: (v: boolean) => void;
   setSpotifyMobileWidgetCollapsed: (v: boolean) => void;
   setSpotifyMobileWidgetPosition: (position: FloatingWidgetPosition) => void;
   setIntuitiveSwipeNavigation: (v: boolean) => void;
@@ -619,6 +631,7 @@ interface UIState {
   setConvoGradientField: (scheme: "dark" | "light", field: "from" | "to", value: string) => void;
   setConvoNotificationSound: (v: boolean) => void;
   setRpNotificationSound: (v: boolean) => void;
+  setGameNotificationSound: (v: boolean) => void;
   setConversationBrowserNotifications: (v: boolean) => void;
   setCustomConversationPrompt: (v: string | null) => void;
   setScheduleGenerationPreferences: (v: string) => void;
@@ -694,6 +707,7 @@ export function pickSyncedSettings(state: UIState) {
     trackerPanelThoughtBubbleDisplay: state.trackerPanelThoughtBubbleDisplay,
     trackerPanelDockedThoughtsAlwaysVisible: state.trackerPanelDockedThoughtsAlwaysVisible,
     trackerPanelSizeProfile: state.trackerPanelSizeProfile,
+    trackerPanelBackgroundColor: state.trackerPanelBackgroundColor,
     trackerTemperatureUnit: state.trackerTemperatureUnit,
     trackerPanelCollapsedSections: state.trackerPanelCollapsedSections,
     trackerPanelSectionOrder: state.trackerPanelSectionOrder,
@@ -739,6 +753,7 @@ export function pickSyncedSettings(state: UIState) {
     speechToTextEnabled: state.speechToTextEnabled,
     chibiProfessorMariEnabled: state.chibiProfessorMariEnabled,
     spotifyPlayerEnabled: state.spotifyPlayerEnabled,
+    youtubePlayerEnabled: state.youtubePlayerEnabled,
     spotifyMobileWidgetCollapsed: state.spotifyMobileWidgetCollapsed,
     spotifyMobileWidgetPosition: state.spotifyMobileWidgetPosition,
     intuitiveSwipeNavigation: state.intuitiveSwipeNavigation,
@@ -772,6 +787,7 @@ export function pickSyncedSettings(state: UIState) {
     userActivity: state.userActivity,
     convoNotificationSound: state.convoNotificationSound,
     rpNotificationSound: state.rpNotificationSound,
+    gameNotificationSound: state.gameNotificationSound,
     conversationBrowserNotifications: state.conversationBrowserNotifications,
     customConversationPrompt: state.customConversationPrompt,
     scheduleGenerationPreferences: state.scheduleGenerationPreferences,
@@ -804,6 +820,7 @@ export const useUIStore = create<UIState>()(
       trackerPanelThoughtBubbleDisplay: "inline" as TrackerThoughtBubbleDisplay,
       trackerPanelDockedThoughtsAlwaysVisible: false,
       trackerPanelSizeProfile: "standard" as TrackerPanelSizeProfile,
+      trackerPanelBackgroundColor: TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR,
       trackerTemperatureUnit: "celsius" as TrackerTemperatureUnit,
       trackerPanelCollapsedSections: {},
       trackerPanelSectionOrder: [...TRACKER_DATA_PANEL_SECTIONS],
@@ -869,6 +886,7 @@ export const useUIStore = create<UIState>()(
       speechToTextEnabled: false,
       chibiProfessorMariEnabled: true,
       spotifyPlayerEnabled: false,
+      youtubePlayerEnabled: true,
       spotifyMobileWidgetCollapsed: true,
       spotifyMobileWidgetPosition: { x: 16, y: 96 },
       intuitiveSwipeNavigation: false,
@@ -894,6 +912,7 @@ export const useUIStore = create<UIState>()(
       },
       convoNotificationSound: true,
       rpNotificationSound: true,
+      gameNotificationSound: true,
       conversationBrowserNotifications: false,
       customConversationPrompt: null,
       scheduleGenerationPreferences: "",
@@ -956,6 +975,8 @@ export const useUIStore = create<UIState>()(
         set({ trackerPanelDockedThoughtsAlwaysVisible: visible }),
       setTrackerPanelSizeProfile: (profile) =>
         set({ trackerPanelSizeProfile: normalizeTrackerPanelSizeProfile(profile) }),
+      setTrackerPanelBackgroundColor: (color) =>
+        set({ trackerPanelBackgroundColor: normalizeTrackerPanelBackgroundColor(color) }),
       setTrackerTemperatureUnit: (unit) => set({ trackerTemperatureUnit: normalizeTrackerTemperatureUnit(unit) }),
       setTrackerPanelSectionOrder: (order) =>
         set({ trackerPanelSectionOrder: normalizeTrackerPanelSectionOrder(order) }),
@@ -1326,6 +1347,7 @@ export const useUIStore = create<UIState>()(
       setSpeechToTextEnabled: (v) => set({ speechToTextEnabled: v }),
       setChibiProfessorMariEnabled: (v) => set({ chibiProfessorMariEnabled: v }),
       setSpotifyPlayerEnabled: (v) => set({ spotifyPlayerEnabled: v }),
+      setYoutubePlayerEnabled: (v) => set({ youtubePlayerEnabled: v }),
       setSpotifyMobileWidgetCollapsed: (v) => set({ spotifyMobileWidgetCollapsed: v }),
       setSpotifyMobileWidgetPosition: (position) =>
         set({
@@ -1369,6 +1391,7 @@ export const useUIStore = create<UIState>()(
         })),
       setConvoNotificationSound: (v) => set({ convoNotificationSound: v }),
       setRpNotificationSound: (v) => set({ rpNotificationSound: v }),
+      setGameNotificationSound: (v) => set({ gameNotificationSound: v }),
       setConversationBrowserNotifications: (v) => set({ conversationBrowserNotifications: v }),
       setCustomConversationPrompt: (v) => set({ customConversationPrompt: v }),
       setScheduleGenerationPreferences: (v) => set({ scheduleGenerationPreferences: v }),
@@ -1446,7 +1469,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "marinara-engine-ui",
-      version: 41,
+      version: 44,
       // Debounce localStorage writes to avoid sync I/O on every state change
       storage: createJSONStorage(() => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1774,7 +1797,7 @@ export const useUIStore = create<UIState>()(
           );
         }
         persisted.imageStyleProfiles = normalizeImageStyleProfileSettings(persisted.imageStyleProfiles);
-        // v38 -> v39: opt-in browser notifications for background Conversation replies.
+        // v38 -> v39: opt-in browser notifications for background replies.
         if (version <= 38 && persisted.conversationBrowserNotifications === undefined) {
           persisted.conversationBrowserNotifications = false;
         }
@@ -1789,6 +1812,22 @@ export const useUIStore = create<UIState>()(
           if (persisted.imageIllustrationWidth === undefined) persisted.imageIllustrationWidth = 896;
           if (persisted.imageIllustrationHeight === undefined) persisted.imageIllustrationHeight = 1280;
         }
+        // v41 -> v42: Game mode gets its own turn-loaded notification sound setting.
+        if (version <= 41 && persisted.gameNotificationSound === undefined) {
+          persisted.gameNotificationSound = true;
+        }
+        // v42 -> v44: reconcile parallel v43 UI preference additions.
+        if (version <= 43 && persisted.youtubePlayerEnabled === undefined) {
+          persisted.youtubePlayerEnabled = true;
+        }
+        if (version <= 43) {
+          persisted.trackerPanelBackgroundColor = normalizeTrackerPanelBackgroundColor(
+            persisted.trackerPanelBackgroundColor,
+          );
+        }
+        persisted.trackerPanelBackgroundColor = normalizeTrackerPanelBackgroundColor(
+          persisted.trackerPanelBackgroundColor,
+        );
         delete persisted.trackerPanelWidth;
         return persisted;
       },
@@ -1804,6 +1843,7 @@ export const useUIStore = create<UIState>()(
         trackerPanelThoughtBubbleDisplay: state.trackerPanelThoughtBubbleDisplay,
         trackerPanelDockedThoughtsAlwaysVisible: state.trackerPanelDockedThoughtsAlwaysVisible,
         trackerPanelSizeProfile: state.trackerPanelSizeProfile,
+        trackerPanelBackgroundColor: state.trackerPanelBackgroundColor,
         trackerTemperatureUnit: state.trackerTemperatureUnit,
         trackerPanelCollapsedSections: state.trackerPanelCollapsedSections,
         trackerPanelSectionOrder: state.trackerPanelSectionOrder,
@@ -1852,6 +1892,7 @@ export const useUIStore = create<UIState>()(
         speechToTextEnabled: state.speechToTextEnabled,
         chibiProfessorMariEnabled: state.chibiProfessorMariEnabled,
         spotifyPlayerEnabled: state.spotifyPlayerEnabled,
+        youtubePlayerEnabled: state.youtubePlayerEnabled,
         spotifyMobileWidgetCollapsed: state.spotifyMobileWidgetCollapsed,
         spotifyMobileWidgetPosition: state.spotifyMobileWidgetPosition,
         intuitiveSwipeNavigation: state.intuitiveSwipeNavigation,
@@ -1891,6 +1932,7 @@ export const useUIStore = create<UIState>()(
         userActivity: state.userActivity,
         convoNotificationSound: state.convoNotificationSound,
         rpNotificationSound: state.rpNotificationSound,
+        gameNotificationSound: state.gameNotificationSound,
         conversationBrowserNotifications: state.conversationBrowserNotifications,
         customConversationPrompt: state.customConversationPrompt,
         scheduleGenerationPreferences: state.scheduleGenerationPreferences,

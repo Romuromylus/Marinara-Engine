@@ -80,6 +80,8 @@ export function ConversationSoundSetting() {
   const setConvoNotificationSound = useUIStore((s) => s.setConvoNotificationSound);
   const rpNotificationSound = useUIStore((s) => s.rpNotificationSound);
   const setRpNotificationSound = useUIStore((s) => s.setRpNotificationSound);
+  const gameNotificationSound = useUIStore((s) => s.gameNotificationSound);
+  const setGameNotificationSound = useUIStore((s) => s.setGameNotificationSound);
   const conversationBrowserNotifications = useUIStore((s) => s.conversationBrowserNotifications);
   const setConversationBrowserNotifications = useUIStore((s) => s.setConversationBrowserNotifications);
   const [browserPermission, setBrowserPermission] = useState<LocalNotificationPermission>("default");
@@ -104,7 +106,7 @@ export function ConversationSoundSetting() {
       setBrowserPermission(permission);
       if (permission === "granted") {
         setConversationBrowserNotifications(true);
-        toast.success("Browser notifications enabled for background Conversation replies.");
+        toast.success("Browser notifications enabled for background replies.");
         return;
       }
       setConversationBrowserNotifications(false);
@@ -139,13 +141,22 @@ export function ConversationSoundSetting() {
           if (v) playNotificationPing();
         }}
       />
+      <ToggleSetting
+        label="Game mode"
+        checked={gameNotificationSound}
+        onChange={(v) => {
+          setGameNotificationSound(v);
+          if (v) playNotificationPing();
+        }}
+        help="Play when a Game turn finishes loading."
+      />
       <div className="mt-1 flex items-center gap-1.5">
         <Bell size="0.75rem" className="text-[var(--muted-foreground)]" />
         <span className="text-xs font-medium">Browser Notifications</span>
         <HelpTooltip text="Show an operating-system browser notification when a background Conversation reply arrives while Marinara is not focused. Message content is hidden." />
       </div>
       <ToggleSetting
-        label="Background Conversation replies"
+        label="Background replies"
         checked={conversationBrowserNotifications && browserPermission === "granted"}
         onChange={handleBrowserNotificationToggle}
       />

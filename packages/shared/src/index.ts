@@ -25,6 +25,7 @@ export * from "./types/game.js";
 export * from "./types/sidecar.js";
 export * from "./types/image-generation-defaults.js";
 export * from "./types/image-style-profile.js";
+export * from "./types/professor-mari-workspace.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
@@ -58,6 +59,7 @@ export * from "./constants/game-assets.js";
 export * from "./features/agents/agent-manifest.types.js";
 export * from "./features/agents/agent-registry.js";
 export * from "./features/function-calls/tool-definitions.js";
+export * from "./features/folder-packages/manifest-package.js";
 
 // Utils
 export * from "./utils/macro-engine.js";

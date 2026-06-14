@@ -4,6 +4,7 @@
 import {
   APP_LANGUAGE_OPTIONS,
   TRACKER_DATA_PANEL_SECTIONS,
+  TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR,
   useUIStore,
   getTrackerPanelWidthForProfile,
   type ConversationMessageStyle,
@@ -28,6 +29,9 @@ import {
   DEFAULT_IMAGE_STYLE_PROFILES,
   compileImagePrompt,
   normalizeImageStyleProfileSettings,
+  createFolderEntry,
+  getFolderImportEntries,
+  getFolderManifestConfig,
   type ImagePromptKind,
   type ImagePromptMode,
   type ImageStyleProfile,
@@ -85,6 +89,7 @@ import { useChatStore } from "../../stores/chat.store";
 import { useGameAssetStore } from "../../stores/game-asset.store";
 import { chatKeys } from "../../hooks/use-chats";
 import { HelpTooltip } from "../ui/HelpTooltip";
+import { ColorPicker } from "../ui/ColorPicker";
 import { TrackerPanelIcon } from "../ui/TrackerPanelIcon";
 import { TrackerSizeTierIcon } from "../ui/TrackerSizeTierIcon";
 import { ImageUploadDropzone } from "../ui/ImageUploadDropzone";
@@ -140,11 +145,7 @@ function fitSettingsArtPreviewSizes(sizes: SettingsArtPreviewSize[]): SettingsAr
     visibleSizes.reduce((sum, size) => sum + size.width, 0) +
     SETTINGS_ART_PREVIEW_FRAME.gap * Math.max(0, visibleSizes.length - 1);
   const maxHeight = Math.max(...visibleSizes.map((size) => size.height));
-  const fit = Math.min(
-    1,
-    SETTINGS_ART_PREVIEW_FRAME.width / totalWidth,
-    SETTINGS_ART_PREVIEW_FRAME.height / maxHeight,
-  );
+  const fit = Math.min(1, SETTINGS_ART_PREVIEW_FRAME.width / totalWidth, SETTINGS_ART_PREVIEW_FRAME.height / maxHeight);
 
   return sizes.map((size) => ({
     width: size.width * fit,
@@ -814,6 +815,8 @@ function TrackerPanelAppearanceDrawer({
   setTrackerPanelDockedThoughtsAlwaysVisible,
   trackerPanelSizeProfile,
   setTrackerPanelSizeProfile,
+  trackerPanelBackgroundColor,
+  setTrackerPanelBackgroundColor,
   trackerTemperatureUnit,
   setTrackerTemperatureUnit,
 }: {
@@ -829,11 +832,21 @@ function TrackerPanelAppearanceDrawer({
   setTrackerPanelDockedThoughtsAlwaysVisible: (visible: boolean) => void;
   trackerPanelSizeProfile: TrackerPanelSizeProfile;
   setTrackerPanelSizeProfile: (profile: TrackerPanelSizeProfile) => void;
+  trackerPanelBackgroundColor: string;
+  setTrackerPanelBackgroundColor: (color: string) => void;
   trackerTemperatureUnit: TrackerTemperatureUnit;
   setTrackerTemperatureUnit: (unit: TrackerTemperatureUnit) => void;
 }) {
   const [drawerOpen, setDrawerOpen] = useState(true);
   const drawerId = React.useId();
+  const handleTrackerPanelBackgroundColorChange = useCallback(
+    (color: string) => {
+      setTrackerPanelBackgroundColor(
+        color.trim().toLowerCase().startsWith("linear-gradient") ? TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR : color,
+      );
+    },
+    [setTrackerPanelBackgroundColor],
+  );
 
   const toggleTrackerPanel = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -916,6 +929,17 @@ function TrackerPanelAppearanceDrawer({
             onChange={setTrackerPanelUseExpressionSprites}
             help="When on, tracker portraits can switch to Expression Engine sprites if that agent is enabled for the chat and the character has matching sprite images."
           />
+          <div className="mt-2">
+            <ColorPicker
+              value={trackerPanelBackgroundColor}
+              onChange={handleTrackerPanelBackgroundColorChange}
+              compact
+              label="Panel background"
+              helpText="Pick the Tracker panel and tracker section background color. CSS color values are accepted."
+              emptyText={`Default ${TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR}`}
+              clearLabel="Reset"
+            />
+          </div>
           <div className="mt-2 grid gap-1.5">
             <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
               Desktop size
@@ -1122,6 +1146,8 @@ function GeneralSettings() {
   const setChibiProfessorMariEnabled = useUIStore((s) => s.setChibiProfessorMariEnabled);
   const spotifyPlayerEnabled = useUIStore((s) => s.spotifyPlayerEnabled);
   const setSpotifyPlayerEnabled = useUIStore((s) => s.setSpotifyPlayerEnabled);
+  const youtubePlayerEnabled = useUIStore((s) => s.youtubePlayerEnabled);
+  const setYoutubePlayerEnabled = useUIStore((s) => s.setYoutubePlayerEnabled);
   const intuitiveSwipeNavigation = useUIStore((s) => s.intuitiveSwipeNavigation);
   const setIntuitiveSwipeNavigation = useUIStore((s) => s.setIntuitiveSwipeNavigation);
   const intuitiveSwipeRerollLatest = useUIStore((s) => s.intuitiveSwipeRerollLatest);
@@ -1174,6 +1200,12 @@ function GeneralSettings() {
             checked={spotifyPlayerEnabled}
             onChange={setSpotifyPlayerEnabled}
             help="Shows a compact Spotify player in the top bar on desktop and as a draggable floating widget on mobile. Requires the Spotify DJ agent to be connected."
+          />
+          <ToggleSetting
+            label="YouTube DJ mini player"
+            checked={youtubePlayerEnabled}
+            onChange={setYoutubePlayerEnabled}
+            help="Shows a floating YouTube player when the YouTube DJ agent plays a track. When off, the player never appears and no music plays, but the agent can still pick tracks."
           />
           <ToggleSetting
             label="Mini Mari surprise visits"
@@ -1749,6 +1781,8 @@ function AppearanceSettings() {
   const setTrackerPanelDockedThoughtsAlwaysVisible = useUIStore((s) => s.setTrackerPanelDockedThoughtsAlwaysVisible);
   const trackerPanelSizeProfile = useUIStore((s) => s.trackerPanelSizeProfile);
   const setTrackerPanelSizeProfile = useUIStore((s) => s.setTrackerPanelSizeProfile);
+  const trackerPanelBackgroundColor = useUIStore((s) => s.trackerPanelBackgroundColor);
+  const setTrackerPanelBackgroundColor = useUIStore((s) => s.setTrackerPanelBackgroundColor);
   const trackerTemperatureUnit = useUIStore((s) => s.trackerTemperatureUnit);
   const setTrackerTemperatureUnit = useUIStore((s) => s.setTrackerTemperatureUnit);
 
@@ -2221,6 +2255,8 @@ function AppearanceSettings() {
         setTrackerPanelDockedThoughtsAlwaysVisible={setTrackerPanelDockedThoughtsAlwaysVisible}
         trackerPanelSizeProfile={trackerPanelSizeProfile}
         setTrackerPanelSizeProfile={setTrackerPanelSizeProfile}
+        trackerPanelBackgroundColor={trackerPanelBackgroundColor}
+        setTrackerPanelBackgroundColor={setTrackerPanelBackgroundColor}
         trackerTemperatureUnit={trackerTemperatureUnit}
         setTrackerTemperatureUnit={setTrackerTemperatureUnit}
       />
@@ -3062,30 +3098,69 @@ function ThemesSettings() {
     if (!file) return;
     try {
       const text = await file.text();
-      let importedThemeName: string;
-      let importedThemeCss: string;
+      const latestThemes = await api.get<Theme[]>("/themes");
+      let workingThemes = [...latestThemes];
+      let imported = 0;
+      let skipped = 0;
+      let failed = 0;
 
       if (file.name.endsWith(".json")) {
         const parsed = JSON.parse(text);
-        importedThemeName =
-          typeof parsed.name === "string" && parsed.name.trim() ? parsed.name : file.name.replace(/\.json$/, "");
-        importedThemeCss = typeof parsed.css === "string" ? parsed.css : "";
+        const entries = getFolderImportEntries(parsed, ["themes"]);
+        for (const entry of entries) {
+          const source = getFolderManifestConfig(entry);
+          if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+          const record = source as Record<string, unknown>;
+          const importedThemeName =
+            typeof record.name === "string" && record.name.trim() ? record.name : file.name.replace(/\.json$/, "");
+          const importedThemeCss = typeof record.css === "string" ? record.css : "";
+          if (!importedThemeCss.trim()) continue;
+          const duplicate = findDuplicateTheme(workingThemes, importedThemeName, importedThemeCss);
+          if (duplicate) {
+            skipped++;
+            continue;
+          }
+          try {
+            const created = await createTheme.mutateAsync({
+              name: importedThemeName,
+              css: importedThemeCss,
+              installedAt: new Date().toISOString(),
+            });
+            workingThemes = [created, ...workingThemes];
+            imported++;
+          } catch (err) {
+            failed++;
+            console.warn("[ThemesSettings] Failed to import theme entry:", importedThemeName, err);
+          }
+        }
       } else {
-        importedThemeName = file.name.replace(/\.css$/, "");
-        importedThemeCss = text;
+        const importedThemeName = file.name.replace(/\.css$/, "");
+        const importedThemeCss = text;
+        const duplicate = findDuplicateTheme(workingThemes, importedThemeName, importedThemeCss);
+        if (duplicate) {
+          skipped++;
+        } else {
+          const created = await createTheme.mutateAsync({
+            name: importedThemeName,
+            css: importedThemeCss,
+            installedAt: new Date().toISOString(),
+          });
+          workingThemes = [created, ...workingThemes];
+          imported++;
+        }
       }
 
-      const latestThemes = await api.get<Theme[]>("/themes");
-      const duplicate = findDuplicateTheme(latestThemes, importedThemeName, importedThemeCss);
-      if (duplicate) {
-        toast.success(`Theme "${duplicate.name}" is already synced`);
+      if (imported > 0 || skipped > 0 || failed > 0) {
+        const summary = [
+          imported > 0 ? `${imported} imported` : null,
+          skipped > 0 ? `${skipped} already synced` : null,
+          failed > 0 ? `${failed} failed` : null,
+        ].filter(Boolean);
+        const message = `Theme import: ${summary.join(", ")}`;
+        if (failed > 0) toast.warning(message);
+        else toast.success(message);
       } else {
-        await createTheme.mutateAsync({
-          name: importedThemeName,
-          css: importedThemeCss,
-          installedAt: new Date().toISOString(),
-        });
-        toast.success(`Theme "${importedThemeName}" imported`);
+        toast.error("No valid themes found in file.");
       }
     } catch (err) {
       console.error("[ThemesSettings] Failed to import theme:", err);
@@ -3093,7 +3168,6 @@ function ThemesSettings() {
     }
     e.target.value = "";
   };
-
   // ── CSS Editor View ──
   if (editorOpen) {
     return (
@@ -3281,19 +3355,29 @@ function ThemesSettings() {
                 </button>
                 <button
                   onClick={() => {
-                    const json = JSON.stringify({ name: t.name, css: t.css }, null, 2);
-                    const blob = new Blob([json], { type: "application/json" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `${t.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
-                    a.click();
-                    URL.revokeObjectURL(url);
+                    downloadJsonFile(
+                      {
+                        kind: "marinara.theme-folder",
+                        version: 1,
+                        exportedAt: new Date().toISOString(),
+                        folderName: "Themes",
+                        themes: [
+                          createFolderEntry({
+                            folderName: "Themes",
+                            itemName: t.name,
+                            itemKind: "marinara.theme",
+                            config: { name: t.name, css: t.css },
+                            fallbackName: "theme",
+                          }),
+                        ],
+                      },
+                      `${sanitizeExportFilenamePart(t.name, "theme")}.json`,
+                    );
                   }}
                   className="rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-emerald-500/10 hover:text-emerald-400"
                   title="Export theme"
                 >
-                  <Download size="0.6875rem" />
+                  <Upload size="0.6875rem" />
                 </button>
                 <button
                   onClick={() => {
@@ -3391,16 +3475,40 @@ function ExtensionsSettings() {
 
       if (file.name.endsWith(".json")) {
         const parsed = JSON.parse(text);
-        const name = parsed.name ?? file.name.replace(/\.json$/, "");
-        await createExtension.mutateAsync({
-          name,
-          description: parsed.description ?? "",
-          css: parsed.css ?? null,
-          js: parsed.js ?? null,
-          enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : true,
-          installedAt,
-        });
-        toast.success(`Extension "${name}" installed`);
+        const entries = getFolderImportEntries(parsed, ["extensions"]);
+        let imported = 0;
+        let failed = 0;
+        for (const entry of entries) {
+          const source = getFolderManifestConfig(entry);
+          if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+          const record = source as Record<string, unknown>;
+          const name =
+            typeof record.name === "string" && record.name.trim() ? record.name : file.name.replace(/\.json$/, "");
+          try {
+            await createExtension.mutateAsync({
+              name,
+              description: typeof record.description === "string" ? record.description : "",
+              css: typeof record.css === "string" ? record.css : null,
+              js: typeof record.js === "string" ? record.js : null,
+              enabled: typeof record.enabled === "boolean" ? record.enabled : true,
+              installedAt,
+            });
+            imported++;
+          } catch (err) {
+            failed++;
+            console.warn("[ExtensionsSettings] Failed to import extension entry:", name, err);
+          }
+        }
+        if (imported === 0 && failed === 0) throw new Error("No valid extensions found in file");
+        if (failed > 0) {
+          toast.warning(
+            imported > 0
+              ? `Installed ${imported} extension${imported === 1 ? "" : "s"} (${failed} failed).`
+              : `Failed to install ${failed} extension${failed === 1 ? "" : "s"}.`,
+          );
+        } else {
+          toast.success(`Installed ${imported} extension${imported === 1 ? "" : "s"}`);
+        }
       } else if (file.name.endsWith(".js")) {
         const name = file.name.replace(/\.js$/, "");
         await createExtension.mutateAsync({
@@ -3491,13 +3599,25 @@ function ExtensionsSettings() {
                   onClick={() => {
                     downloadJsonFile(
                       {
-                        kind: "marinara.extension",
+                        kind: "marinara.extension-folder",
                         version: 1,
-                        name: ext.name,
-                        description: ext.description ?? "",
-                        css: ext.css ?? null,
-                        js: ext.js ?? null,
-                        enabled: ext.enabled,
+                        exportedAt: new Date().toISOString(),
+                        folderName: "Extensions",
+                        extensions: [
+                          createFolderEntry({
+                            folderName: "Extensions",
+                            itemName: ext.name,
+                            itemKind: "marinara.extension",
+                            config: {
+                              name: ext.name,
+                              description: ext.description ?? "",
+                              css: ext.css ?? null,
+                              js: ext.js ?? null,
+                              enabled: ext.enabled,
+                            },
+                            fallbackName: "extension",
+                          }),
+                        ],
                       },
                       `${sanitizeExportFilenamePart(ext.name, "extension")}.json`,
                     );
@@ -3505,7 +3625,7 @@ function ExtensionsSettings() {
                   className="rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-emerald-500/10 hover:text-emerald-400"
                   title="Export extension"
                 >
-                  <Download size="0.6875rem" />
+                  <Upload size="0.6875rem" />
                 </button>
                 <button
                   onClick={() => deleteExtension.mutate(ext.id)}

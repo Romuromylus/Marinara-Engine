@@ -51,9 +51,8 @@ import { ChatSettingsSection as Section } from "../../features/chat-settings/Cha
 import { AdvancedParametersSection } from "../../features/chat-settings/sections/AdvancedParametersSection";
 import { ChatNameSection } from "../../features/chat-settings/sections/ChatNameSection";
 import { ConnectionSection } from "../../features/chat-settings/sections/ConnectionSection";
-import { ContextLimitSection } from "../../features/chat-settings/sections/ContextLimitSection";
 import { ConversationPromptSection } from "../../features/chat-settings/sections/ConversationPromptSection";
-import { DiscordMirrorSection } from "../../features/chat-settings/sections/DiscordMirrorSection";
+import { DiscordMirrorControls } from "../../features/chat-settings/sections/DiscordMirrorSection";
 import { FunctionCallingSection } from "../../features/chat-settings/sections/FunctionCallingSection";
 import { GameExtraPromptSection } from "../../features/chat-settings/sections/GameExtraPromptSection";
 import { ImpersonateSection } from "../../features/chat-settings/sections/ImpersonateSection";
@@ -116,6 +115,7 @@ import {
 } from "../../hooks/use-chat-presets";
 import type {
   AgentPhase,
+  AgentPromptTemplateOption,
   ChatMode,
   ChatMemoryChunk,
   ChatMemoryRecallExportPayload,
@@ -130,19 +130,22 @@ import {
   BUILT_IN_AGENTS,
   BUILT_IN_TOOLS,
   DEFAULT_AGENT_CONTEXT_SIZE,
+  DEFAULT_AGENT_PROMPT_TEMPLATE_ID,
   DEFAULT_AGENT_TOOLS,
   DEFAULT_AGENT_MAX_TOKENS,
   DEFAULT_AGENT_PROMPTS,
   getChatModeCapabilities,
   LIMITS,
-  MAX_AGENT_MAX_TOKENS,
   MIN_AGENT_MAX_TOKENS,
   estimateAgentLoadCost,
+  getAgentPromptTemplateOptions,
   AGENT_COST_HIGH_CALLS,
   AGENT_COST_HIGH_TOKENS,
   getDefaultBuiltInAgentSettings,
   isAgentAvailableInChatMode,
   isAgentHiddenFromChatSettingsPicker,
+  normalizeAgentPromptTemplateSelectionMap,
+  resolveAgentPromptTemplate,
 } from "@marinara-engine/shared";
 import type { Chat, CharacterGroup, Lorebook } from "@marinara-engine/shared";
 import {
@@ -199,6 +202,26 @@ const MODE_INTROS: Record<ChatMode, string> = {
   game: "Full Game Master with built-in dice, combat, encounters, world state, and session/map tracking — the Scene Analysis toggle below adds optional cinematic visuals (backgrounds, music, weather).",
 };
 
+const CHAT_SETTINGS_ORDER = {
+  settingsPresets: -1600,
+  modeIntro: -1500,
+  chatName: -1400,
+  connection: -1300,
+  promptPreset: -1200,
+  advancedParameters: -1100,
+  persona: -1000,
+  characters: -900,
+  groupChat: -800,
+  connectedChat: -700,
+  connectedNotes: -690,
+  lorebooks: -600,
+  agents: -500,
+  impersonate: -400,
+  memoryRecall: -300,
+  functionCalling: -200,
+  translation: -100,
+} as const;
+
 type AvailableAgent = {
   id: string;
   name: string;
@@ -254,12 +277,12 @@ function normalizePositiveInteger(value: unknown, fallback: number, max: number)
 
 function normalizeAgentMaxTokens(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_AGENT_MAX_TOKENS;
-  return Math.max(MIN_AGENT_MAX_TOKENS, Math.min(MAX_AGENT_MAX_TOKENS, Math.trunc(value)));
+  return Math.max(MIN_AGENT_MAX_TOKENS, Math.trunc(value));
 }
 
 function normalizeAgentMaxTokensInputValue(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 1;
-  return Math.max(1, Math.min(MAX_AGENT_MAX_TOKENS, Math.trunc(value)));
+  return Math.max(1, Math.trunc(value));
 }
 
 function normalizeSpriteDisplayValue(value: unknown, fallback: number, min: number, max: number): number {
@@ -444,7 +467,10 @@ export function ChatSettingsDrawer({
     typeof metadata.gameSpotifyPlaylistId === "string" ? metadata.gameSpotifyPlaylistId : "";
   const gameSpotifyArtist = typeof metadata.gameSpotifyArtist === "string" ? metadata.gameSpotifyArtist : "";
   const gameAgentFeatureCount =
-    (metadata.enableAgents ? 1 : 0) + (gameLorebookKeeperEnabled ? 1 : 0) + (gameUseSpotifyMusic ? 1 : 0);
+    (metadata.enableAgents ? 1 : 0) +
+    (gameLorebookKeeperEnabled ? 1 : 0) +
+    (gameUseSpotifyMusic ? 1 : 0) +
+    (activeAgentIds.includes("youtube") ? 1 : 0);
   const spriteCharacterIds: string[] = Array.isArray(metadata.spriteCharacterIds) ? metadata.spriteCharacterIds : [];
   const spriteDisplayModes = normalizeSpriteDisplayModes(metadata.spriteDisplayModes);
   const spritePosition: "left" | "right" = metadata.spritePosition === "right" ? "right" : "left";
@@ -489,6 +515,37 @@ export function ChatSettingsDrawer({
     }
     return map;
   }, [agentConfigs]);
+  const agentPromptTemplateSelections = useMemo(
+    () => normalizeAgentPromptTemplateSelectionMap(metadata.agentPromptTemplateIds),
+    [metadata.agentPromptTemplateIds],
+  );
+  const readLatestAgentPromptTemplateSelections = useCallback(() => {
+    const latestChat = qc.getQueryData<Chat>(chatKeys.detail(chat.id));
+    const latestMetadata =
+      latestChat && typeof latestChat.metadata === "string"
+        ? JSON.parse(latestChat.metadata)
+        : (latestChat?.metadata ?? metadata);
+    return normalizeAgentPromptTemplateSelectionMap(
+      latestMetadata && typeof latestMetadata === "object"
+        ? (latestMetadata as { agentPromptTemplateIds?: unknown }).agentPromptTemplateIds
+        : undefined,
+    );
+  }, [chat.id, metadata, qc]);
+  const getPromptOptionsForAgent = useCallback(
+    (agentId: string) => {
+      const cfg = agentConfigsByType.get(agentId);
+      const settings = {
+        ...getDefaultBuiltInAgentSettings(agentId),
+        ...parseAgentSettings(cfg?.settings),
+      };
+      return getAgentPromptTemplateOptions({
+        promptTemplate: cfg?.promptTemplate || "",
+        fallbackPromptTemplate: DEFAULT_AGENT_PROMPTS[agentId] || "",
+        settings,
+      });
+    },
+    [agentConfigsByType],
+  );
   const conversationCommandsEnabled = metadata.characterCommands !== false;
 
   // Build the available agent list: built-in + custom agents from DB
@@ -535,9 +592,17 @@ export function ChatSettingsDrawer({
       const meta = availableAgents.find((a) => a.id === id);
       if (!meta) return [];
       const cfg = agentConfigsByType.get(id);
-      // `||` (not `??`) — custom configs often have an empty-string promptTemplate
-      // meaning "no override", and we still want to count the built-in default.
-      const promptTemplate = cfg?.promptTemplate || DEFAULT_AGENT_PROMPTS[id] || "";
+      const settings = {
+        ...getDefaultBuiltInAgentSettings(id),
+        ...parseAgentSettings(cfg?.settings),
+      };
+      const promptTemplate = resolveAgentPromptTemplate({
+        agentType: id,
+        promptTemplate: cfg?.promptTemplate || "",
+        fallbackPromptTemplate: DEFAULT_AGENT_PROMPTS[id] || "",
+        settings,
+        selectedPromptTemplateId: agentPromptTemplateSelections[id] ?? null,
+      });
       return [
         {
           type: id,
@@ -552,7 +617,7 @@ export function ChatSettingsDrawer({
       cost: estimateAgentLoadCost(inputs, chat.connectionId ?? null),
       tokensByType,
     };
-  }, [activeAgentIds, availableAgents, agentConfigsByType, chat.connectionId]);
+  }, [activeAgentIds, agentConfigsByType, agentPromptTemplateSelections, availableAgents, chat.connectionId]);
 
   const lorebookKeeperActive = activeAgentIds.includes("lorebook-keeper");
   const expressionActive = activeAgentIds.includes("expression");
@@ -989,10 +1054,23 @@ export function ChatSettingsDrawer({
     const isRemoving = idx >= 0;
     if (isRemoving) current.splice(idx, 1);
     else current.push(agentId);
+    const latestPromptTemplateSelections = readLatestAgentPromptTemplateSelections();
+    const nextPromptTemplateSelections =
+      isRemoving && latestPromptTemplateSelections[agentId]
+        ? (() => {
+            const next = { ...latestPromptTemplateSelections };
+            delete next[agentId];
+            return next;
+          })()
+        : null;
     let metadataSaved = false;
     try {
       await updateMeta.mutateAsync(
-        { id: chat.id, activeAgentIds: current },
+        {
+          id: chat.id,
+          activeAgentIds: current,
+          ...(nextPromptTemplateSelections ? { agentPromptTemplateIds: nextPromptTemplateSelections } : {}),
+        },
         {
           onSuccess: async () => {
             metadataSaved = true;
@@ -1014,6 +1092,19 @@ export function ChatSettingsDrawer({
       });
     }
   };
+
+  const updateAgentPromptTemplateSelection = useCallback(
+    (agentId: string, promptTemplateId: string) => {
+      const next = { ...readLatestAgentPromptTemplateSelections() };
+      if (!promptTemplateId || promptTemplateId === DEFAULT_AGENT_PROMPT_TEMPLATE_ID) {
+        delete next[agentId];
+      } else {
+        next[agentId] = promptTemplateId;
+      }
+      updateMeta.mutate({ id: chat.id, agentPromptTemplateIds: next });
+    },
+    [chat.id, readLatestAgentPromptTemplateSelections, updateMeta],
+  );
 
   const handleLorebookKeeperBackfill = useCallback(async () => {
     await retryAgents(chat.id, ["lorebook-keeper"], { lorebookKeeperBackfill: true });
@@ -1351,7 +1442,8 @@ export function ChatSettingsDrawer({
         enableAgents: true,
         gameUseSpotifyMusic: true,
         gameSpotifySourceType,
-        activeAgentIds: Array.from(new Set([...activeAgentIds, "spotify"])),
+        // Mutually exclusive with YouTube DJ — only one music source at a time.
+        activeAgentIds: Array.from(new Set([...activeAgentIds.filter((id) => id !== "youtube"), "spotify"])),
       });
     } catch (error) {
       await showAlertDialog({
@@ -1363,6 +1455,62 @@ export function ChatSettingsDrawer({
       });
     }
   }, [activeAgentIds, chat.id, ensureSpotifyAgent, gameSpotifySourceType, gameUseSpotifyMusic, updateMeta]);
+
+  const ensureYoutubeAgent = useCallback(async () => {
+    const builtInMeta = BUILT_IN_AGENTS.find((entry) => entry.id === "youtube");
+    if (!builtInMeta) throw new Error("YouTube DJ agent metadata is missing.");
+    const config = agentConfigsByType.get("youtube") ?? null;
+    const nextSettings: Record<string, unknown> = {
+      ...getDefaultBuiltInAgentSettings("youtube"),
+      ...parseAgentSettings(config?.settings),
+      enabledTools: DEFAULT_AGENT_TOOLS.youtube ?? [],
+    };
+
+    if (config) {
+      await updateAgentConfig.mutateAsync({ id: config.id, enabled: true, settings: nextSettings });
+      return;
+    }
+
+    await createAgent.mutateAsync({
+      type: builtInMeta.id,
+      name: builtInMeta.name,
+      description: builtInMeta.description,
+      phase: builtInMeta.phase,
+      enabled: true,
+      connectionId: null,
+      promptTemplate: "",
+      settings: nextSettings,
+    });
+  }, [agentConfigsByType, createAgent, updateAgentConfig]);
+
+  const toggleGameYouTubeMusic = useCallback(async () => {
+    if (activeAgentIds.includes("youtube")) {
+      await updateMeta.mutateAsync({
+        id: chat.id,
+        activeAgentIds: activeAgentIds.filter((id) => id !== "youtube"),
+      });
+      return;
+    }
+
+    try {
+      await ensureYoutubeAgent();
+      await updateMeta.mutateAsync({
+        id: chat.id,
+        enableAgents: true,
+        // Mutually exclusive with Spotify DJ — only one music source at a time.
+        gameUseSpotifyMusic: false,
+        activeAgentIds: Array.from(new Set([...activeAgentIds.filter((id) => id !== "spotify"), "youtube"])),
+      });
+    } catch (error) {
+      await showAlertDialog({
+        title: "Couldn't Enable YouTube DJ",
+        message:
+          error instanceof Error
+            ? error.message
+            : "YouTube DJ could not be enabled for this game. Check the YouTube agent setup and try again.",
+      });
+    }
+  }, [activeAgentIds, chat.id, ensureYoutubeAgent, updateMeta]);
 
   const toggleGameLorebookKeeper = useCallback(() => {
     const nextActiveAgentIds = activeAgentIds.filter((id) => id !== "lorebook-keeper");
@@ -1585,9 +1733,9 @@ export function ChatSettingsDrawer({
       <div className="absolute inset-0 z-40 bg-black/30 backdrop-blur-[2px]" onClick={onClose} />
 
       {/* Drawer */}
-      <div className="absolute right-0 top-0 z-50 flex h-full w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up max-md:pt-[env(safe-area-inset-top)]">
+      <div className="absolute right-0 top-0 z-50 flex h-full min-h-0 w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up max-md:pt-[env(safe-area-inset-top)]">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <h3 className="text-sm font-bold">Chat Settings</h3>
           <button
             onClick={onClose}
@@ -1597,9 +1745,13 @@ export function ChatSettingsDrawer({
           </button>
         </div>
 
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]">
         {/* Chat Settings Preset bar — hidden in Game Mode and scene chats. */}
         {modeCapabilities.supportsChatSettingsPresets && !isSceneChat && (
-          <div className="flex flex-col gap-2 border-b border-[var(--border)] px-4 py-3">
+          <div
+            style={{ order: CHAT_SETTINGS_ORDER.settingsPresets }}
+            className="flex shrink-0 flex-col gap-2 border-b border-[var(--border)] px-4 py-3"
+          >
             <input
               ref={presetFileInputRef}
               type="file"
@@ -1729,48 +1881,53 @@ export function ChatSettingsDrawer({
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto">
           {/* Hardcoded — CHAT_MODES.defaultAgents looks like the source of truth but is currently
               unused, and wouldn't cover non-agent built-ins (GM pipeline, autonomous messaging, etc.) anyway. */}
           {MODE_INTROS[chatMode as ChatMode] && (
-            <div className="border-b border-[var(--border)] px-4 py-2.5">
+            <div style={{ order: CHAT_SETTINGS_ORDER.modeIntro }} className="border-b border-[var(--border)] px-4 py-2.5">
               <p className="text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
                 {MODE_INTROS[chatMode as ChatMode]}
               </p>
             </div>
           )}
 
-          <ChatNameSection
-            chatName={chat.name}
-            editingName={editingName}
-            nameValue={nameVal}
-            onBeginEdit={() => {
-              setNameVal(chat.name);
-              setEditingName(true);
-            }}
-            onNameValueChange={setNameVal}
-            onSaveName={saveName}
-          />
+          <div style={{ order: CHAT_SETTINGS_ORDER.chatName }}>
+            <ChatNameSection
+              chatName={chat.name}
+              editingName={editingName}
+              nameValue={nameVal}
+              onBeginEdit={() => {
+                setNameVal(chat.name);
+                setEditingName(true);
+              }}
+              onNameValueChange={setNameVal}
+              onSaveName={saveName}
+            />
+          </div>
 
-          <ConnectionSection
-            connectionId={chat.connectionId ?? null}
-            connections={textConnectionsList}
-            isGame={isGame}
-            onConnectionChange={setConnection}
-          />
+          <div style={{ order: CHAT_SETTINGS_ORDER.connection }}>
+            <ConnectionSection
+              connectionId={chat.connectionId ?? null}
+              connections={textConnectionsList}
+              isGame={isGame}
+              onConnectionChange={setConnection}
+            />
+          </div>
 
           {/* Preset — hidden for conversation mode and game mode */}
           {modeCapabilities.supportsPromptPresets && !metadata.sceneSystemPrompt && (
-            <PromptPresetSection
-              promptPresetId={chat.promptPresetId ?? null}
-              presets={(presets ?? []) as Array<{ id: string; name: string }>}
-              hasVariables={currentPromptPresetHasVariables}
-              showLorebookMarkerWarning={showLorebookMarkerWarning}
-              onEditVariables={() => {
-                if (chat.promptPresetId) setChoiceModalPresetId(chat.promptPresetId);
-              }}
-              onPromptPresetChange={setPreset}
-            />
+            <div style={{ order: CHAT_SETTINGS_ORDER.promptPreset }}>
+              <PromptPresetSection
+                promptPresetId={chat.promptPresetId ?? null}
+                presets={(presets ?? []) as Array<{ id: string; name: string }>}
+                hasVariables={currentPromptPresetHasVariables}
+                showLorebookMarkerWarning={showLorebookMarkerWarning}
+                onEditVariables={() => {
+                  if (chat.promptPresetId) setChoiceModalPresetId(chat.promptPresetId);
+                }}
+                onPromptPresetChange={setPreset}
+              />
+            </div>
           )}
 
           {/* Extra Prompt — game mode only */}
@@ -1800,6 +1957,7 @@ export function ChatSettingsDrawer({
           {/* Party (game mode) */}
           {isGame && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.persona }}
               label="Party"
               icon={<Users size="0.875rem" />}
               count={chatCharIds.length + (chat.personaId ? 1 : 0)}
@@ -2057,6 +2215,7 @@ export function ChatSettingsDrawer({
           {/* Persona */}
           {!isGame && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.persona }}
               label="Persona"
               icon={<User size="0.875rem" />}
               help="Your persona defines who you are in this chat. The AI will address you by this persona's name and use its details for context."
@@ -2200,6 +2359,7 @@ export function ChatSettingsDrawer({
           {/* Characters — only show added ones + add button */}
           {!isGame && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.characters }}
               label="Characters"
               icon={<Users size="0.875rem" />}
               count={chatCharIds.length}
@@ -2476,6 +2636,7 @@ export function ChatSettingsDrawer({
           {/* Group Chat Settings — only when 2+ characters, game mode handles it internally */}
           {chatCharIds.length > 1 && modeCapabilities.supportsGroupChatControls && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.groupChat }}
               label="Group Chat"
               icon={<Users size="0.875rem" />}
               help={
@@ -3123,10 +3284,11 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          {/* Connected Chat — conversation mode: link to a roleplay or game chat */}
+          {/* Connected Roleplay — conversation mode: link to a roleplay or game chat */}
           {isConversation && (
             <Section
-              label="Connected Chat"
+              style={{ order: CHAT_SETTINGS_ORDER.connectedChat }}
+              label="Connected Roleplay"
               icon={<ArrowRightLeft size="0.875rem" />}
               help="Link this conversation to a roleplay or game. Recent messages from the linked chat are pulled into context here automatically. To send something the other direction, the character uses `<influence>` (steers the next linked turn, one-shot) or `<note>` (persists on every future linked turn until cleared)."
             >
@@ -3191,15 +3353,20 @@ export function ChatSettingsDrawer({
                         <MessageSquare size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
                         <span className="truncate">{getConnectedChatDisplayName(c)}</span>
                       </button>
-                    ))}
+                  ))}
                 </PickerDropdown>
               )}
+              <DiscordMirrorControls
+                webhookUrl={(metadata.discordWebhookUrl as string) ?? ""}
+                onWebhookUrlChange={(discordWebhookUrl) => updateMeta.mutate({ id: chat.id, discordWebhookUrl })}
+              />
             </Section>
           )}
 
           {/* Connected Conversation — roleplay mode: linked OOC chat + optional in-world DM command */}
           {isRoleplayMode && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.connectedChat }}
               label="Connected Conversation"
               icon={<ArrowRightLeft size="0.875rem" />}
               help={
@@ -3273,6 +3440,10 @@ export function ChatSettingsDrawer({
                     />
                   </div>
                 </button>
+                <DiscordMirrorControls
+                  webhookUrl={(metadata.discordWebhookUrl as string) ?? ""}
+                  onWebhookUrlChange={(discordWebhookUrl) => updateMeta.mutate({ id: chat.id, discordWebhookUrl })}
+                />
               </div>
             </Section>
           )}
@@ -3280,6 +3451,7 @@ export function ChatSettingsDrawer({
           {/* Connected Conversation — game mode: show linked OOC chat */}
           {isGame && chat.connectedChatId && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.connectedChat }}
               label="Connected Conversation"
               icon={<ArrowRightLeft size="0.875rem" />}
               help="Linked to a conversation. `<influence>` tags from the conversation steer the next turn here (one-shot, then consumed). `<note>` tags persist on every turn until cleared. Raw conversation messages are not injected — use `<note>` for facts this chat should keep remembering."
@@ -3305,15 +3477,24 @@ export function ChatSettingsDrawer({
                   </div>
                 );
               })()}
+              <DiscordMirrorControls
+                webhookUrl={(metadata.discordWebhookUrl as string) ?? ""}
+                onWebhookUrlChange={(discordWebhookUrl) => updateMeta.mutate({ id: chat.id, discordWebhookUrl })}
+              />
             </Section>
           )}
 
           {/* Notes from Conversation — durable notes saved by the connected conversation's character */}
-          {!isConversation && chat.connectedChatId && <ConversationNotesSection chatId={chat.id} />}
+          {!isConversation && chat.connectedChatId && (
+            <div style={{ order: CHAT_SETTINGS_ORDER.connectedNotes }}>
+              <ConversationNotesSection chatId={chat.id} />
+            </div>
+          )}
 
           {/* Connect to Conversation — game mode without existing link */}
           {chatMode === "game" && !chat.connectedChatId && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.connectedChat }}
               label="Connected Conversation"
               icon={<ArrowRightLeft size="0.875rem" />}
               help="Link this game to an OOC conversation. The conversation character uses `<influence>` (one-shot) or `<note>` (durable) to bridge content into the game; raw conversation messages are not injected. Game events and roleplay moments flow back into the conversation automatically."
@@ -3355,31 +3536,38 @@ export function ChatSettingsDrawer({
                         <MessageSquare size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
                         <span className="truncate">{getConnectedChatDisplayName(c)}</span>
                       </button>
-                    ))}
+                  ))}
                 </PickerDropdown>
               )}
+              <DiscordMirrorControls
+                webhookUrl={(metadata.discordWebhookUrl as string) ?? ""}
+                onWebhookUrlChange={(discordWebhookUrl) => updateMeta.mutate({ id: chat.id, discordWebhookUrl })}
+              />
             </Section>
           )}
 
-          <LorebooksSection
-            chatId={chat.id}
-            activeLorebooks={activeLorebooks}
-            lorebooks={(lorebooks ?? []) as Lorebook[]}
-            lorebookSearch={lbSearch}
-            lorebookTokenBudget={lorebookTokenBudget}
-            showLorebookPicker={showLbPicker}
-            onLorebookSearchChange={setLbSearch}
-            onLorebookTokenBudgetChange={(lorebookTokenBudget) =>
-              updateMeta.mutate({ id: chat.id, lorebookTokenBudget })
-            }
-            onPinLorebook={pinLorebookToChat}
-            onShowLorebookPickerChange={setShowLbPicker}
-            onToggleLorebook={toggleLorebook}
-          />
+          <div style={{ order: CHAT_SETTINGS_ORDER.lorebooks }}>
+            <LorebooksSection
+              chatId={chat.id}
+              activeLorebooks={activeLorebooks}
+              lorebooks={(lorebooks ?? []) as Lorebook[]}
+              lorebookSearch={lbSearch}
+              lorebookTokenBudget={lorebookTokenBudget}
+              showLorebookPicker={showLbPicker}
+              onLorebookSearchChange={setLbSearch}
+              onLorebookTokenBudgetChange={(lorebookTokenBudget) =>
+                updateMeta.mutate({ id: chat.id, lorebookTokenBudget })
+              }
+              onPinLorebook={pinLorebookToChat}
+              onShowLorebookPickerChange={setShowLbPicker}
+              onToggleLorebook={toggleLorebook}
+            />
+          </div>
 
           {/* Agents */}
           {modeCapabilities.sharedSections.includes("agents") && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.agents }}
               label="Agents"
               icon={<Sparkles size="0.875rem" />}
               count={isGame ? gameAgentFeatureCount : activeAgentIds.length}
@@ -3534,6 +3722,40 @@ export function ChatSettingsDrawer({
                           className={cn(
                             "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
                             gameUseSpotifyMusic && "translate-x-3.5",
+                          )}
+                        />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void toggleGameYouTubeMusic()}
+                      className={cn(
+                        "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-all",
+                        activeAgentIds.includes("youtube")
+                          ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30"
+                          : "bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                      )}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 text-xs font-medium">
+                          <Music2 size="0.75rem" className="text-[var(--primary)]" />
+                          <span>YouTube DJ Music</span>
+                        </div>
+                        <p className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
+                          Use YouTube (in-app player) instead of the built-in Game Mode music library.
+                        </p>
+                      </div>
+                      <div
+                        className={cn(
+                          "h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                          activeAgentIds.includes("youtube") ? "bg-[var(--primary)]" : "bg-[var(--muted-foreground)]/50",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                            activeAgentIds.includes("youtube") && "translate-x-3.5",
                           )}
                         />
                       </div>
@@ -4476,6 +4698,7 @@ export function ChatSettingsDrawer({
                                   {activeInCat.map((agent) => {
                                     const tokenEst = agentLoadCost.tokensByType.get(agent.id);
                                     const isSecretPlotDriver = agent.id === "secret-plot-driver";
+                                    const promptOptions = getPromptOptionsForAgent(agent.id);
                                     return (
                                       <div
                                         key={agent.id}
@@ -4509,6 +4732,15 @@ export function ChatSettingsDrawer({
                                             <Trash2 size="0.6875rem" />
                                           </button>
                                         </div>
+                                        <AgentPromptTemplateSelect
+                                          options={promptOptions}
+                                          selectedId={
+                                            agentPromptTemplateSelections[agent.id] ?? DEFAULT_AGENT_PROMPT_TEMPLATE_ID
+                                          }
+                                          onChange={(promptTemplateId) =>
+                                            updateAgentPromptTemplateSelection(agent.id, promptTemplateId)
+                                          }
+                                        />
                                         {isSecretPlotDriver && (
                                           <button
                                             type="button"
@@ -4597,32 +4829,44 @@ export function ChatSettingsDrawer({
                                 <div className="flex flex-col gap-1 mb-1.5">
                                   {activeCustom.map((agent) => {
                                     const tokenEst = agentLoadCost.tokensByType.get(agent.id);
+                                    const promptOptions = getPromptOptionsForAgent(agent.id);
                                     return (
                                       <div
                                         key={agent.id}
-                                        className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
+                                        className="rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
                                       >
-                                        <Sparkles size="0.875rem" className="text-[var(--primary)]" />
-                                        <div className="flex-1 min-w-0">
-                                          <span className="block truncate text-xs">{agent.name}</span>
-                                        </div>
-                                        {tokenEst != null ? (
-                                          <span
-                                            className="shrink-0 tabular-nums text-[0.625rem] text-[var(--muted-foreground)]"
-                                            title={`~${tokenEst.toLocaleString()} tokens of agent instructions (estimated)`}
+                                        <div className="flex items-center gap-2.5">
+                                          <Sparkles size="0.875rem" className="text-[var(--primary)]" />
+                                          <div className="flex-1 min-w-0">
+                                            <span className="block truncate text-xs">{agent.name}</span>
+                                          </div>
+                                          {tokenEst != null ? (
+                                            <span
+                                              className="shrink-0 tabular-nums text-[0.625rem] text-[var(--muted-foreground)]"
+                                              title={`~${tokenEst.toLocaleString()} tokens of agent instructions (estimated)`}
+                                            >
+                                              ~{tokenEst.toLocaleString()}
+                                            </span>
+                                          ) : null}
+                                          <button
+                                            onClick={() => {
+                                              void toggleAgent(agent.id);
+                                            }}
+                                            className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
+                                            title="Remove from chat"
                                           >
-                                            ~{tokenEst.toLocaleString()}
-                                          </span>
-                                        ) : null}
-                                        <button
-                                          onClick={() => {
-                                            void toggleAgent(agent.id);
-                                          }}
-                                          className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
-                                          title="Remove from chat"
-                                        >
-                                          <Trash2 size="0.6875rem" />
-                                        </button>
+                                            <Trash2 size="0.6875rem" />
+                                          </button>
+                                        </div>
+                                        <AgentPromptTemplateSelect
+                                          options={promptOptions}
+                                          selectedId={
+                                            agentPromptTemplateSelections[agent.id] ?? DEFAULT_AGENT_PROMPT_TEMPLATE_ID
+                                          }
+                                          onChange={(promptTemplateId) =>
+                                            updateAgentPromptTemplateSelection(agent.id, promptTemplateId)
+                                          }
+                                        />
                                       </div>
                                     );
                                   })}
@@ -4658,9 +4902,10 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          {/* Memory Recall — conversation mode: show here; roleplay: shown after Function Calling */}
+          {/* Memory Recall — conversation mode: placed before Function Calling by section order */}
           {isConversation && import.meta.env.VITE_MARINARA_LITE !== "true" && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.memoryRecall }}
               label="Memory Recall"
               icon={<Brain size="0.875rem" />}
               help="When enabled, relevant fragments from this chat are automatically recalled and injected into the prompt as memories. Uses the local embedding model when available, or the configured embedding connection."
@@ -4763,35 +5008,33 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          <DiscordMirrorSection
-            webhookUrl={(metadata.discordWebhookUrl as string) ?? ""}
-            onWebhookUrlChange={(discordWebhookUrl) => updateMeta.mutate({ id: chat.id, discordWebhookUrl })}
-          />
+          <div style={{ order: CHAT_SETTINGS_ORDER.functionCalling }}>
+            <FunctionCallingSection
+              enableTools={metadata.enableTools as boolean | undefined}
+              activeToolIds={activeToolIds}
+              pendingToolIds={pendingToolIds}
+              availableTools={availableTools}
+              showToolPicker={showToolPicker}
+              toolSearch={toolSearch}
+              onEnableToolsChange={(enableTools) => updateMeta.mutate({ id: chat.id, enableTools })}
+              onToggleTool={toggleTool}
+              onShowToolPickerChange={setShowToolPicker}
+              onToolSearchChange={setToolSearch}
+              onPendingToolIdsChange={(updater) => setPendingToolIds(updater)}
+              onAddPendingTools={() => {
+                const next = [...activeToolIds, ...pendingToolIds];
+                updateMeta.mutate({ id: chat.id, activeToolIds: next });
+                setPendingToolIds([]);
+                setShowToolPicker(false);
+              }}
+              onCreateCustomTool={handleCreateCustomTool}
+            />
+          </div>
 
-          <FunctionCallingSection
-            enableTools={metadata.enableTools as boolean | undefined}
-            activeToolIds={activeToolIds}
-            pendingToolIds={pendingToolIds}
-            availableTools={availableTools}
-            showToolPicker={showToolPicker}
-            toolSearch={toolSearch}
-            onEnableToolsChange={(enableTools) => updateMeta.mutate({ id: chat.id, enableTools })}
-            onToggleTool={toggleTool}
-            onShowToolPickerChange={setShowToolPicker}
-            onToolSearchChange={setToolSearch}
-            onPendingToolIdsChange={(updater) => setPendingToolIds(updater)}
-            onAddPendingTools={() => {
-              const next = [...activeToolIds, ...pendingToolIds];
-              updateMeta.mutate({ id: chat.id, activeToolIds: next });
-              setPendingToolIds([]);
-              setShowToolPicker(false);
-            }}
-            onCreateCustomTool={handleCreateCustomTool}
-          />
-
-          {/* Memory Recall — roleplay/game modes: show after Function Calling */}
+          {/* Memory Recall — roleplay/game modes: placed before Function Calling by section order */}
           {!isConversation && import.meta.env.VITE_MARINARA_LITE !== "true" && (
             <Section
+              style={{ order: CHAT_SETTINGS_ORDER.memoryRecall }}
               label="Memory Recall"
               icon={<Brain size="0.875rem" />}
               help="When enabled, relevant fragments from this chat are automatically recalled and injected into the prompt as memories. Uses the local embedding model when available, or the configured embedding connection."
@@ -4800,36 +5043,39 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          <TranslationSection
-            metadata={metadata}
-            textConnections={textConnectionsList}
-            onMetadataChange={(patch) => updateMeta.mutate({ id: chat.id, ...patch })}
-          />
+          <div style={{ order: CHAT_SETTINGS_ORDER.translation }}>
+            <TranslationSection
+              metadata={metadata}
+              textConnections={textConnectionsList}
+              onMetadataChange={(patch) => updateMeta.mutate({ id: chat.id, ...patch })}
+            />
+          </div>
 
           {/* Advanced Parameters */}
-          <AdvancedParametersSection
-            metadata={metadata}
-            isConversation={isConversation}
-            connectionId={chat.connectionId ?? null}
-            connections={(connections as Record<string, unknown>[]) ?? []}
-            onChatParametersChange={(chatParameters) => updateMeta.mutate({ id: chat.id, chatParameters })}
-          />
+          <div style={{ order: CHAT_SETTINGS_ORDER.advancedParameters }}>
+            <AdvancedParametersSection
+              metadata={metadata}
+              isConversation={isConversation}
+              connectionId={chat.connectionId ?? null}
+              connections={(connections as Record<string, unknown>[]) ?? []}
+              contextMessageLimit={metadata.contextMessageLimit as number | null | undefined}
+              excludePastReasoning={metadata.excludePastReasoning as boolean | undefined}
+              onChatParametersChange={(chatParameters) => updateMeta.mutate({ id: chat.id, chatParameters })}
+              onContextMessageLimitChange={(contextMessageLimit) =>
+                updateMeta.mutate({ id: chat.id, contextMessageLimit })
+              }
+              onExcludePastReasoningChange={(excludePastReasoning) =>
+                updateMeta.mutate({ id: chat.id, excludePastReasoning })
+              }
+            />
+          </div>
 
-          <ContextLimitSection
-            contextMessageLimit={metadata.contextMessageLimit as number | null | undefined}
-            excludePastReasoning={metadata.excludePastReasoning as boolean | undefined}
-            onContextMessageLimitChange={(contextMessageLimit) =>
-              updateMeta.mutate({ id: chat.id, contextMessageLimit })
-            }
-            onExcludePastReasoningChange={(excludePastReasoning) =>
-              updateMeta.mutate({ id: chat.id, excludePastReasoning })
-            }
-          />
-
-          <ImpersonateSection
-            presets={(presets ?? []) as Array<{ id: string; name: string }>}
-            connections={textConnectionsList}
-          />
+          <div style={{ order: CHAT_SETTINGS_ORDER.impersonate }}>
+            <ImpersonateSection
+              presets={(presets ?? []) as Array<{ id: string; name: string }>}
+              connections={textConnectionsList}
+            />
+          </div>
         </div>
       </div>
 
@@ -4925,7 +5171,6 @@ export function ChatSettingsDrawer({
                     <input
                       type="number"
                       min={MIN_AGENT_MAX_TOKENS}
-                      max={MAX_AGENT_MAX_TOKENS}
                       value={agentAddPreview.maxTokens}
                       onChange={(e) => {
                         const value = parseInt(e.target.value, 10);
@@ -6130,6 +6375,43 @@ function HapticConnectionPanel({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function AgentPromptTemplateSelect({
+  options,
+  selectedId,
+  onChange,
+}: {
+  options: AgentPromptTemplateOption[];
+  selectedId: string;
+  onChange: (promptTemplateId: string) => void;
+}) {
+  if (options.length <= 1) return null;
+  const activeOption = options.find((option) => option.id === selectedId) ?? options[0];
+
+  return (
+    <div className="mt-2 rounded-lg bg-[var(--background)]/25 px-2 py-2 ring-1 ring-[var(--border)]/70">
+      <label className="flex flex-col gap-1.5">
+        <span className="text-[0.5625rem] font-semibold uppercase text-[var(--muted-foreground)]">Prompt</span>
+        <select
+          value={activeOption?.id ?? DEFAULT_AGENT_PROMPT_TEMPLATE_ID}
+          onChange={(event) => onChange(event.target.value)}
+          className="w-full rounded-md bg-[var(--secondary)] px-2 py-1.5 text-[0.6875rem] text-[var(--foreground)] ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+        >
+          {options.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {activeOption?.description ? (
+        <p className="mt-1.5 text-[0.5625rem] leading-snug text-[var(--muted-foreground)]">
+          {activeOption.description}
+        </p>
+      ) : null}
     </div>
   );
 }

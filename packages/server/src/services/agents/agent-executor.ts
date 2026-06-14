@@ -1,14 +1,20 @@
 // ──────────────────────────────────────────────
 // Agent Executor — Single & Batched LLM execution
 // ──────────────────────────────────────────────
-import type { BaseLLMProvider, ChatMessage, LLMToolDefinition, LLMToolCall } from "../llm/base-provider.js";
-import type { AgentResult, AgentContext, AgentResultType } from "@marinara-engine/shared";
+import type {
+  BaseLLMProvider,
+  ChatMessage,
+  LLMToolDefinition,
+  LLMToolCall,
+  LLMUsage,
+} from "../llm/base-provider.js";
+import type { AgentResult, AgentContext, AgentResultType, AgentCallDebugEvent } from "@marinara-engine/shared";
 import {
   compactQuestProgressForContext,
   DEFAULT_AGENT_CONTEXT_SIZE,
   DEFAULT_AGENT_MAX_TOKENS,
-  MAX_AGENT_MAX_TOKENS,
   MIN_AGENT_MAX_TOKENS,
+  normalizeCustomAgentCapabilities,
   getDefaultAgentPrompt,
 } from "@marinara-engine/shared";
 import { isDebugAgentsEnabled } from "../../config/runtime-config.js";
@@ -27,6 +33,15 @@ function stripHtmlTags(text: string): string {
     .replace(/<\/?[a-zA-Z][^>]*>/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 /** Minimal agent config needed for execution. */
@@ -125,12 +140,76 @@ export function formatToolPayloadForLog(payload: string, maxLength = 400): strin
 }
 
 function normalizeAgentMaxTokens(value: unknown, fallback = DEFAULT_AGENT_MAX_TOKENS): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(MIN_AGENT_MAX_TOKENS, Math.min(MAX_AGENT_MAX_TOKENS, Math.trunc(value)));
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : fallback;
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(MIN_AGENT_MAX_TOKENS, Math.trunc(parsed));
 }
 
 function applyProviderMaxTokensOverride(provider: BaseLLMProvider, maxTokens: number): number {
   return provider.maxTokensOverrideValue !== null ? Math.min(maxTokens, provider.maxTokensOverrideValue) : maxTokens;
+}
+
+function debugMessages(messages: ChatMessage[]): AgentCallDebugEvent["messages"] {
+  return messages.map((message) => {
+    const next: NonNullable<AgentCallDebugEvent["messages"]>[number] = {
+      role: message.role,
+      content: message.content,
+    };
+    const name = (message as { name?: unknown }).name;
+    if (typeof name === "string" && name.trim()) next.name = name;
+    return next;
+  });
+}
+
+function debugToolNames(tools?: LLMToolDefinition[]): string[] | undefined {
+  if (!tools?.length) return undefined;
+  return tools.map((tool) => tool.function.name);
+}
+
+function debugUsage(usage?: LLMUsage): Partial<AgentCallDebugEvent> {
+  if (!usage) return {};
+  const fields: Partial<AgentCallDebugEvent> = {
+    promptTokens: usage.promptTokens,
+    completionTokens: usage.completionTokens,
+    totalTokens: usage.totalTokens,
+  };
+  if (typeof usage.completionReasoningTokens === "number") {
+    fields.reasoningTokens = usage.completionReasoningTokens;
+  }
+  return fields;
+}
+
+function emitAgentDebug(context: AgentContext, event: AgentCallDebugEvent): void {
+  try {
+    context.agentDebug?.(event);
+  } catch (err) {
+    logger.warn(err, "[agent-debug] Failed to emit debug event for %s", event.agentType);
+  }
+}
+
+function agentDebugBase(
+  config: AgentExecConfig,
+  model: string,
+  temperature: number,
+  maxTokens: number,
+): Pick<AgentCallDebugEvent, "agentId" | "agentType" | "agentName" | "phase" | "model" | "temperature" | "maxTokens"> {
+  return {
+    agentId: config.id,
+    agentType: config.type,
+    agentName: config.name,
+    phase: config.phase,
+    model,
+    temperature,
+    maxTokens,
+  };
+}
+
+function responseDebugFields(response: string): Pick<AgentCallDebugEvent, "response" | "responsePreview"> {
+  return {
+    response,
+    responsePreview: response.length > 1200 ? `${response.slice(0, 1200)}...` : response,
+  };
 }
 
 /**
@@ -178,7 +257,7 @@ export async function executeAgent(
         toolContext,
         streamResponses,
         startTime,
-        context.signal,
+        context,
       );
     }
 
@@ -188,6 +267,12 @@ export async function executeAgent(
       logger.debug(`[agent] [${msg.role}] ${msg.content}`);
     }
     logger.debug(`[agent] ═══ END PROMPT — temperature=${temperature} maxTokens=${maxTokens} ═══\n`);
+    emitAgentDebug(context, {
+      stage: "request",
+      ...agentDebugBase(config, model, temperature, maxTokens),
+      messageCount: messages.length,
+      messages: debugMessages(messages),
+    });
 
     let responseText = "";
     const result = await provider.chatComplete(messages, {
@@ -207,6 +292,15 @@ export async function executeAgent(
     responseText = responseText.trim();
     logger.info(`[agent] ${config.type} done (${responseText.length} chars, ${Date.now() - startTime}ms)`);
     logger.debug(`[agent] ${config.type} raw response: ${responseText.slice(0, 500)}`);
+    emitAgentDebug(context, {
+      stage: "response",
+      ...agentDebugBase(config, model, temperature, maxTokens),
+      messageCount: messages.length,
+      durationMs: Date.now() - startTime,
+      finishReason: result.finishReason,
+      ...debugUsage(result.usage),
+      ...responseDebugFields(responseText),
+    });
 
     // Parse the result based on agent type
     let parsed = parseAgentResponse(config, responseText);
@@ -215,8 +309,15 @@ export async function executeAgent(
 
     if (invalidJson && shouldRetryInvalidJsonAgent(config) && !context.signal?.aborted) {
       logger.warn("[agent] %s returned invalid JSON; retrying once with strict JSON reminder", config.type);
+      const retryMessages = buildInvalidJsonRetryMessages(messages, parsed.type, responseText);
+      emitAgentDebug(context, {
+        stage: "retry_request",
+        ...agentDebugBase(config, model, temperature, maxTokens),
+        messageCount: retryMessages.length,
+        messages: debugMessages(retryMessages),
+      });
       let retryResponseText = "";
-      const retryResult = await provider.chatComplete(buildInvalidJsonRetryMessages(messages, parsed.type, responseText), {
+      const retryResult = await provider.chatComplete(retryMessages, {
         model,
         temperature,
         maxTokens,
@@ -233,6 +334,15 @@ export async function executeAgent(
       responseText = retryResponseText.trim();
       logger.info("[agent] %s JSON retry done (%d chars, %dms)", config.type, responseText.length, Date.now() - startTime);
       logger.debug("[agent] %s JSON retry raw response: %s", config.type, responseText.slice(0, 500));
+      emitAgentDebug(context, {
+        stage: "retry_response",
+        ...agentDebugBase(config, model, temperature, maxTokens),
+        messageCount: retryMessages.length,
+        durationMs: Date.now() - startTime,
+        finishReason: retryResult.finishReason,
+        ...debugUsage(retryResult.usage),
+        ...responseDebugFields(responseText),
+      });
       parsed = parseAgentResponse(config, responseText);
       invalidJson = shouldFailInvalidJsonResult(config, parsed.data);
     }
@@ -248,6 +358,13 @@ export async function executeAgent(
       error: invalidJson ? invalidJsonAgentError(parsed.type) : null,
     };
   } catch (err) {
+    emitAgentDebug(context, {
+      stage: "error",
+      ...agentDebugBase(config, model, (config.settings.temperature as number) ?? 0.3, normalizeAgentMaxTokens(config.settings.maxTokens)),
+      messageCount: 0,
+      durationMs: Date.now() - startTime,
+      error: extractErrorMessage(err),
+    });
     return makeError(config, extractErrorMessage(err), startTime);
   }
 }
@@ -266,7 +383,7 @@ async function executeAgentWithTools(
   toolContext: AgentToolContext,
   streamResponses: boolean,
   startTime: number,
-  signal?: AbortSignal,
+  context: AgentContext,
 ): Promise<AgentResult> {
   const MAX_TOOL_ROUNDS = 5;
   const loopMessages = [...initialMessages];
@@ -274,16 +391,35 @@ async function executeAgentWithTools(
   const debugAgentsEnabled = isDebugAgentsEnabled() && logger.isLevelEnabled("debug");
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    emitAgentDebug(context, {
+      stage: "request",
+      ...agentDebugBase(config, model, temperature, maxTokens),
+      messageCount: loopMessages.length,
+      messages: debugMessages(loopMessages),
+      tools: debugToolNames(toolContext.tools),
+      round: round + 1,
+    });
     const result = await provider.chatComplete(loopMessages, {
       model,
       temperature,
       maxTokens,
       stream: streamResponses,
       tools: toolContext.tools,
-      signal,
+      signal: context.signal,
     });
 
     totalTokens += result.usage?.totalTokens ?? 0;
+    emitAgentDebug(context, {
+      stage: "response",
+      ...agentDebugBase(config, model, temperature, maxTokens),
+      messageCount: loopMessages.length,
+      tools: debugToolNames(toolContext.tools),
+      round: round + 1,
+      durationMs: Date.now() - startTime,
+      finishReason: result.finishReason,
+      ...debugUsage(result.usage),
+      ...responseDebugFields(result.content?.trim() ?? ""),
+    });
 
     // No tool calls → final response
     if (!result.toolCalls || result.toolCalls.length === 0) {
@@ -336,15 +472,32 @@ async function executeAgentWithTools(
   }
 
   // Exhausted tool rounds — make one final call without tools to get JSON response
+  emitAgentDebug(context, {
+    stage: "request",
+    ...agentDebugBase(config, model, temperature, maxTokens),
+    messageCount: loopMessages.length,
+    messages: debugMessages(loopMessages),
+    round: MAX_TOOL_ROUNDS + 1,
+  });
   const finalResult = await provider.chatComplete(loopMessages, {
     model,
     temperature,
     maxTokens,
     stream: streamResponses,
-    signal,
+    signal: context.signal,
   });
   totalTokens += finalResult.usage?.totalTokens ?? 0;
   const responseText = finalResult.content?.trim() ?? "";
+  emitAgentDebug(context, {
+    stage: "response",
+    ...agentDebugBase(config, model, temperature, maxTokens),
+    messageCount: loopMessages.length,
+    round: MAX_TOOL_ROUNDS + 1,
+    durationMs: Date.now() - startTime,
+    finishReason: finalResult.finishReason,
+    ...debugUsage(finalResult.usage),
+    ...responseDebugFields(responseText),
+  });
   const parsed = parseAgentResponse(config, responseText);
   const invalidJson = shouldFailInvalidJsonResult(config, parsed.data);
   return {
@@ -428,6 +581,10 @@ export async function executeAgentBatch(
   logger.info(`[agent-batch] Batching ${configs.length} agents: [${configs.map((c) => c.type).join(", ")}]`);
 
   const startTime = Date.now();
+  const perAgentTokens = configs.map((c) => normalizeAgentMaxTokens(c.settings.maxTokens));
+  const temperature = Math.min(...configs.map((c) => (c.settings.temperature as number) ?? 0.3));
+  const rawBatchMaxTokens = perAgentTokens.reduce((sum, tokens) => sum + tokens, 0);
+  const batchMaxTokens = applyProviderMaxTokensOverride(provider, rawBatchMaxTokens);
 
   try {
     // Build merged system prompt (includes lore + agent extras)
@@ -444,13 +601,6 @@ export async function executeAgentBatch(
 
     // Each agent reserves its own configured output budget. The context fitter
     // may still reduce this further if the prompt needs more room.
-    const perAgentTokens = configs.map((c) => normalizeAgentMaxTokens(c.settings.maxTokens));
-    const temperature = Math.min(...configs.map((c) => (c.settings.temperature as number) ?? 0.3));
-    const rawBatchMaxTokens = Math.min(
-      perAgentTokens.reduce((sum, tokens) => sum + tokens, 0),
-      MAX_AGENT_MAX_TOKENS,
-    );
-    const batchMaxTokens = applyProviderMaxTokensOverride(provider, rawBatchMaxTokens);
     const streamResponses = context.streaming !== false;
     logger.info(
       `[agent-batch] maxTokens: ${batchMaxTokens} (sum=${rawBatchMaxTokens} from [${perAgentTokens.join(", ")}]${provider.maxTokensOverrideValue !== null ? `, capped at ${provider.maxTokensOverrideValue}` : ""})`,
@@ -461,6 +611,19 @@ export async function executeAgentBatch(
       logger.debug(`[agent-batch] [${msg.role}] ${msg.content}`);
     }
     logger.debug(`[agent-batch] ═══ END BATCH PROMPT — temperature=${temperature} maxTokens=${batchMaxTokens} ═══\n`);
+    emitAgentDebug(context, {
+      stage: "request",
+      agentId: "__batch__",
+      agentType: "__batch__",
+      agentName: `Agent Batch (${configs.length})`,
+      phase: "batch",
+      model,
+      temperature,
+      maxTokens: batchMaxTokens,
+      messageCount: messages.length,
+      messages: debugMessages(messages),
+      batchedAgentTypes: configs.map((config) => config.type),
+    });
 
     // Use streaming (onToken) to keep the connection alive — avoids proxy
     // timeouts (e.g. Cloudflare 524) on large batch responses.
@@ -487,6 +650,22 @@ export async function executeAgentBatch(
 
     logger.info(`[agent-batch] Got response (${responseText.length} chars, ${durationMs}ms, ${totalTokens} tokens)`);
     logger.debug(`[agent-batch] ${responseText}`);
+    emitAgentDebug(context, {
+      stage: "response",
+      agentId: "__batch__",
+      agentType: "__batch__",
+      agentName: `Agent Batch (${configs.length})`,
+      phase: "batch",
+      model,
+      temperature,
+      maxTokens: batchMaxTokens,
+      messageCount: messages.length,
+      durationMs,
+      finishReason: result.finishReason,
+      ...debugUsage(result.usage),
+      ...responseDebugFields(responseText),
+      batchedAgentTypes: configs.map((config) => config.type),
+    });
 
     // Parse the batched response into individual results
     const { parsed, failed } = parseBatchResponse(configs, responseText, durationMs, totalTokens);
@@ -524,6 +703,20 @@ export async function executeAgentBatch(
   } catch (err) {
     // On failure, return errors for all agents in the batch
     const errMsg = err instanceof Error ? err.message : "Batch execution failed";
+    emitAgentDebug(context, {
+      stage: "error",
+      agentId: "__batch__",
+      agentType: "__batch__",
+      agentName: `Agent Batch (${configs.length})`,
+      phase: "batch",
+      model,
+      temperature,
+      maxTokens: batchMaxTokens,
+      messageCount: 0,
+      durationMs: Date.now() - startTime,
+      error: errMsg,
+      batchedAgentTypes: configs.map((config) => config.type),
+    });
     logger.error(err, "[agent-batch] Batch call FAILED: %s", errMsg);
     return configs.map((c) => makeError(c, errMsg, startTime));
   }
@@ -734,6 +927,59 @@ function shouldRunAgentIndividually(config: Pick<AgentExecConfig, "type">): bool
   );
 }
 
+function buildCustomAgentCapabilityBlock(config: AgentExecConfig, context: AgentContext): string {
+  const capabilities = normalizeCustomAgentCapabilities(config.settings);
+  const enabled = Object.entries(capabilities)
+    .filter(([, value]) => value === true)
+    .map(([key]) => key);
+  if (enabled.length === 0) return "";
+
+  const parts: string[] = ["<custom_agent_abilities>"];
+  parts.push(`Enabled ability toggles: ${enabled.join(", ")}.`);
+  parts.push(
+    `Only use these abilities when your selected output format or available tools explicitly support the action.`,
+  );
+
+  if (capabilities.edit_messages) {
+    parts.push(
+      `Message editing is enabled. For Text Rewrite, replace only the assistant response provided in <assistant_response>.`,
+    );
+  }
+
+  if (capabilities.edit_trackers) {
+    parts.push(
+      `Tracker editing is enabled. Return a tracker result type only when you intend to update the matching tracker state.`,
+    );
+  }
+
+  if (capabilities.change_frontend_styling) {
+    parts.push(
+      `Frontend styling is enabled. Return CSS in the configured result format only for deliberate temporary visual effects.`,
+    );
+  }
+
+  if (capabilities.edit_main_prompt) {
+    parts.push(
+      `Main prompt editing is enabled. Return prompt patch JSON instead of ordinary prose when you need to alter the outbound prompt.`,
+    );
+    const promptPreview = typeof context.memory._mainPromptPreview === "string" ? context.memory._mainPromptPreview : "";
+    if (promptPreview.trim()) {
+      parts.push(`<main_generation_prompt_preview>`);
+      parts.push(escapeXml(promptPreview));
+      parts.push(`</main_generation_prompt_preview>`);
+    }
+  }
+
+  if (capabilities.access_vectors) {
+    parts.push(
+      `Vector and embedding access is enabled for this agent's configuration. Use available source material and tools rather than inventing vector search results.`,
+    );
+  }
+
+  parts.push("</custom_agent_abilities>");
+  return parts.join("\n");
+}
+
 function buildStandardAgentMessages(config: AgentExecConfig, template: string, context: AgentContext): ChatMessage[] {
   // Build the agent's system prompt with <role> + <lore> + <agents> + extras
   const systemParts: string[] = [];
@@ -752,10 +998,17 @@ function buildStandardAgentMessages(config: AgentExecConfig, template: string, c
     systemParts.push(``);
     systemParts.push(extras);
   }
+  const customCapabilityBlock = buildCustomAgentCapabilityBlock(config, context);
+  if (customCapabilityBlock) {
+    systemParts.push(``);
+    systemParts.push(customCapabilityBlock);
+  }
 
   // Build multi-turn message array for this agent (sliced to its own contextSize)
   const agentContextSize = normalizeAgentContextSize(config.settings.contextSize);
-  return buildAgentMessages(systemParts.join("\n"), context, config.type, agentContextSize);
+  return buildAgentMessages(systemParts.join("\n"), context, config.type, agentContextSize, [config.type], {
+    includeMessageIds: normalizeCustomAgentCapabilities(config.settings).edit_messages === true,
+  });
 }
 
 export function buildKnowledgeRetrievalAgentMessagesForTest(
@@ -1020,6 +1273,7 @@ function buildAgentMessages(
   agentType: string,
   contextSize = 5,
   contextAgentTypes: string[] = [agentType],
+  options: { includeMessageIds?: boolean } = {},
 ): ChatMessage[] {
   // ── 1. System message — already contains <role>, <lore>, <agents>, and extras ──
   const messages: ChatMessage[] = [{ role: "system", content: systemPrompt }];
@@ -1047,6 +1301,9 @@ function buildAgentMessages(
       const msg = recent[msgIdx]!;
       const role: "user" | "assistant" = msg.role === "assistant" ? "assistant" : "user";
       let content = stripHtmlTags(msg.content).slice(0, 2000);
+      if (options.includeMessageIds && msg.id) {
+        content = `<message_id>${msg.id}</message_id>\n${content}`;
+      }
 
       // Append committed tracker data only to the last 3 assistant messages,
       // and only for agents whose output is structured (not text agents — see above).
@@ -1215,13 +1472,6 @@ function buildAvailableSpritesBlock(context: AgentContext): string {
 function buildAgentExtras(context: AgentContext, agentTypes: string[] = []): string {
   const parts: string[] = [];
 
-  const escapeXml = (value: string) =>
-    value
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&apos;");
   // Card Evolution Auditor needs the FULL character card (not just description)
   // so it can emit exact-match oldText edits. Gated on agent type because
   // forwarding every field would bloat context for agents that don't need it.
@@ -1334,6 +1584,12 @@ function buildAgentExtras(context: AgentContext, agentTypes: string[] = []): str
     parts.push(`<spotify_dj_constraints>`);
     parts.push(JSON.stringify(context.memory._spotifyDjConstraints));
     parts.push(`</spotify_dj_constraints>`);
+  }
+
+  if (agentTypes.includes("youtube") && context.memory._youtubeDjConstraints) {
+    parts.push(`<youtube_dj_constraints>`);
+    parts.push(JSON.stringify(context.memory._youtubeDjConstraints));
+    parts.push(`</youtube_dj_constraints>`);
   }
 
   if (agentTypes.includes("lorebook-keeper") && context.memory._existingLorebookEntries) {
@@ -1454,6 +1710,7 @@ const AGENT_RESULT_TYPE_MAP: Record<string, AgentResultType> = {
   "custom-tracker": "custom_tracker_update",
   "chat-summary": "chat_summary",
   spotify: "spotify_control",
+  youtube: "youtube_control",
   editor: "text_rewrite",
   "knowledge-retrieval": "context_injection",
   haptic: "haptic_command",
@@ -1480,6 +1737,7 @@ const AGENT_RESULT_TYPES = new Set<AgentResultType>([
   "custom_tracker_update",
   "chat_summary",
   "spotify_control",
+  "youtube_control",
   "haptic_command",
   "cyoa_choices",
   "secret_plot",
@@ -1487,6 +1745,8 @@ const AGENT_RESULT_TYPES = new Set<AgentResultType>([
   "party_action",
   "game_map_update",
   "game_state_transition",
+  "prompt_patch",
+  "frontend_theme_update",
 ]);
 
 const TEXT_RESULT_TYPES = new Set<AgentResultType>(["context_injection", "director_event"]);
@@ -1536,6 +1796,7 @@ const JSON_AGENTS = new Set([
   "custom-tracker",
   "chat-summary",
   "spotify",
+  "youtube",
   "editor",
   "haptic",
   "cyoa",

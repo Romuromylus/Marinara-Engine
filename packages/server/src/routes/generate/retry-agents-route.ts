@@ -4,10 +4,14 @@ import {
   BUILT_IN_AGENTS,
   BUILT_IN_TOOLS,
   DEFAULT_AGENT_TOOLS,
+  getDefaultAgentPrompt,
   applyQuestUpdatesToPlayerStats,
   getDefaultBuiltInAgentSettings,
   isAgentAvailableInChatMode,
+  normalizeAgentPromptTemplateSelectionMap,
+  resolveAgentPromptTemplate,
   stripMacroComments,
+  type AgentCallDebugEvent,
   type AgentContext,
   type AgentResult,
   type ChatMode,
@@ -30,6 +34,7 @@ import { createAgentsStorage } from "../../services/storage/agents.storage.js";
 import { createCharactersStorage } from "../../services/storage/characters.storage.js";
 import { createChatsStorage } from "../../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../../services/storage/connections.storage.js";
+import { findLastUserMessageIdBefore } from "../../services/generation/message-history.js";
 import { resolveConnectionImageDefaults } from "../../services/image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../../services/image/image-generation-settings.js";
 import { compileImagePrompt } from "../../services/image/image-prompt-compiler.js";
@@ -91,21 +96,6 @@ type PersonaContext = {
 
 function cardPromptText(value: unknown): string {
   return typeof value === "string" ? stripMacroComments(value).trim() : "";
-}
-
-async function findLastUserMessageIdBefore(
-  chats: ReturnType<typeof createChatsStorage>,
-  chatId: string,
-  beforeMessageId?: string | null,
-): Promise<string | null> {
-  const rows = await chats.listMessages(chatId);
-  const beforeIndex = beforeMessageId ? rows.findIndex((message: any) => message.id === beforeMessageId) : -1;
-  const startIndex = beforeIndex >= 0 ? beforeIndex - 1 : rows.length - 1;
-  for (let index = startIndex; index >= 0; index -= 1) {
-    const message = rows[index] as any;
-    if (message?.role === "user" && typeof message.id === "string") return message.id;
-  }
-  return null;
 }
 
 type ResolvedRetryAgent = {
@@ -355,18 +345,36 @@ async function buildRetryAgentContext(args: {
     .filter((message: any) => message.role === "assistant")
     .map((message: any) => message.id as string);
   const retryCommittedSnapshots = await gameStateStore.getCommittedForMessages(retryAssistantMsgIds);
+  const retryVisibleAnchor =
+    historicalGameStateAnchor ??
+    (useLatestGameStateFallback && lastAssistant ? resolveVisibleGameStateAnchor([lastAssistant]) : null);
+  const retryVisibleHistorySnapshot = retryVisibleAnchor
+    ? await gameStateStore.getByChatAndMessage(chatId, retryVisibleAnchor.messageId, retryVisibleAnchor.swipeIndex)
+    : null;
 
   const agentContext: AgentContext = {
     chatId,
     chatMode: (chat as any).mode ?? "conversation",
     recentMessages: agentSlice.map((message: any) => {
       const nextMessage: AgentContext["recentMessages"][number] = {
+        id: typeof message.id === "string" ? message.id : undefined,
         role: message.role,
         content: message.content,
         characterId: message.characterId ?? undefined,
       };
       if (message.role === "assistant") {
-        const snapRow = retryCommittedSnapshots.get(message.id as string);
+        const messageSwipeIndex =
+          typeof message.activeSwipeIndex === "number" &&
+          Number.isInteger(message.activeSwipeIndex) &&
+          message.activeSwipeIndex >= 0
+            ? message.activeSwipeIndex
+            : 0;
+        const snapRow =
+          retryVisibleHistorySnapshot &&
+          message.id === retryVisibleHistorySnapshot.messageId &&
+          messageSwipeIndex === retryVisibleHistorySnapshot.swipeIndex
+            ? retryVisibleHistorySnapshot
+            : retryCommittedSnapshots.get(message.id as string);
         if (snapRow) {
           nextMessage.gameState = parseGameStateRow(snapRow as Record<string, unknown>);
         }
@@ -581,6 +589,19 @@ async function buildRetryAgentContext(args: {
     }
   }
 
+  if (resolvedAgentTypes.has("youtube")) {
+    const mode = ((chat as any).mode ?? "conversation") as string;
+    agentContext.memory._youtubeDjConstraints = {
+      manualRetry: true,
+      forceFreshPick: true,
+      mode,
+      retryNote:
+        mode === "game"
+          ? "This is a manual YouTube DJ retry from game mode. Pick a fresh fitting track now with action 'play' and a new searchQuery; do not keep the current track merely because it still fits."
+          : "This is a manual YouTube DJ retry. Pick a fresh fitting track now with action 'play' and a new searchQuery.",
+    };
+  }
+
   if (resolvedAgentTypes.has("spotify")) {
     const mode = ((chat as any).mode ?? "conversation") as string;
     agentContext.memory._spotifyDjConstraints = {
@@ -608,6 +629,8 @@ async function resolveRetryAgents(args: {
 }): Promise<ResolvedRetryAgents> {
   const { agentTypes, chat, conns, agentsStore } = args;
   const chatMode = ((chat as { mode?: ChatMode }).mode ?? "conversation") as ChatMode;
+  const chatMeta = parseExtra((chat as { metadata?: unknown }).metadata);
+  const agentPromptTemplateSelections = normalizeAgentPromptTemplateSelectionMap(chatMeta.agentPromptTemplateIds);
   const agentTypeSet = new Set(
     filterGameInternalAgentIds(chatMode, agentTypes).filter((agentType) =>
       isAgentAvailableInChatMode(chatMode, agentType),
@@ -723,6 +746,14 @@ async function resolveRetryAgents(args: {
       }
     }
     const rawSettings = typeof cfg.settings === "string" ? JSON.parse(cfg.settings) : (cfg.settings ?? {});
+    const settings = applyDefaultBuiltInAgentTools(cfg.type, rawSettings);
+    const selectedPromptTemplate = resolveAgentPromptTemplate({
+      agentType: cfg.type as string,
+      promptTemplate: cfg.promptTemplate as string,
+      fallbackPromptTemplate: getDefaultAgentPrompt(cfg.type as string),
+      settings,
+      selectedPromptTemplateId: agentPromptTemplateSelections[cfg.type as string] ?? null,
+    });
 
     resolvedAgents.push({
       cfg,
@@ -731,9 +762,9 @@ async function resolveRetryAgents(args: {
         type: cfg.type,
         name: cfg.name,
         phase: cfg.phase as string,
-        promptTemplate: cfg.promptTemplate as string,
+        promptTemplate: selectedPromptTemplate,
         connectionId: effectiveConnectionId,
-        settings: applyDefaultBuiltInAgentTools(cfg.type, rawSettings),
+        settings,
         provider: agentProvider,
         model: agentModel,
         maxParallelJobs: agentMaxParallelJobs,
@@ -757,6 +788,15 @@ async function resolveRetryAgents(args: {
       defaultAgentConnectionAgents.push(builtIn.name);
     }
 
+    const settings = applyDefaultBuiltInAgentTools(builtIn.id, getDefaultBuiltInAgentSettings(builtIn.id));
+    const selectedPromptTemplate = resolveAgentPromptTemplate({
+      agentType: builtIn.id,
+      promptTemplate: "",
+      fallbackPromptTemplate: getDefaultAgentPrompt(builtIn.id),
+      settings,
+      selectedPromptTemplateId: agentPromptTemplateSelections[builtIn.id] ?? null,
+    });
+
     resolvedAgents.push({
       cfg: { id: `builtin:${builtIn.id}`, type: builtIn.id, name: builtIn.name } as any,
       resolved: {
@@ -764,9 +804,9 @@ async function resolveRetryAgents(args: {
         type: builtIn.id,
         name: builtIn.name,
         phase: builtIn.phase,
-        promptTemplate: "",
+        promptTemplate: selectedPromptTemplate,
         connectionId: builtInProvider.connectionId,
-        settings: applyDefaultBuiltInAgentTools(builtIn.id, getDefaultBuiltInAgentSettings(builtIn.id)),
+        settings,
         provider: builtInProvider.provider,
         model: builtInProvider.model,
         maxParallelJobs: builtInProvider.maxParallelJobs,
@@ -2296,6 +2336,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
       chatId: string;
       agentTypes: string[];
       streaming?: boolean;
+      debugMode?: boolean;
       lorebookKeeperBackfill?: boolean;
       /** When set, scope history and game state to this assistant message (as at original generation), not the latest turn. */
       forMessageId?: string;
@@ -2307,6 +2348,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
       chatId,
       agentTypes,
       streaming = true,
+      debugMode = false,
       lorebookKeeperBackfill = false,
       forMessageId,
       secretPlotRerollMode = "full",
@@ -2425,6 +2467,13 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
               useLatestGameStateFallback: false,
             })
           : null;
+      if (debugMode) {
+        const emitRetryAgentDebug = (event: AgentCallDebugEvent) => {
+          sendSseEvent(reply, { type: "agent_debug", data: event });
+        };
+        agentContext.agentDebug = emitRetryAgentDebug;
+        if (preGenerationAgentContext) preGenerationAgentContext.agentDebug = emitRetryAgentDebug;
+      }
 
       sendSseEvent(reply, { type: "agent_start", data: { phase: "retry" } });
       for (const warning of warnings) {
@@ -2536,6 +2585,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
             agentName: cfg?.name ?? result.agentType,
             resultType: result.type,
             data: result.data,
+            tokensUsed: result.tokensUsed,
             success: result.success,
             error: result.error,
             durationMs: result.durationMs,
@@ -2559,6 +2609,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
             agentName: cfg?.name ?? entry.result.agentType,
             resultType: entry.result.type,
             data: entry.result.data,
+            tokensUsed: entry.result.tokensUsed,
             success: entry.result.success,
             error: entry.result.error,
             durationMs: entry.result.durationMs,

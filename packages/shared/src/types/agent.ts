@@ -34,13 +34,16 @@ export type AgentResultType =
   | "custom_tracker_update"
   | "chat_summary"
   | "spotify_control"
+  | "youtube_control"
   | "haptic_command"
   | "cyoa_choices"
   | "secret_plot"
   | "game_master_narration"
   | "party_action"
   | "game_map_update"
-  | "game_state_transition";
+  | "game_state_transition"
+  | "prompt_patch"
+  | "frontend_theme_update";
 
 /** Configuration for a single agent. */
 export interface AgentConfig {
@@ -68,6 +71,139 @@ export interface AgentConfig {
   updatedAt: string;
 }
 
+export const DEFAULT_AGENT_AUTHOR = "Pasta Devs";
+export const DEFAULT_AGENT_PROMPT_TEMPLATE_ID = "default";
+
+/** A named prompt variant that can be selected per chat for an agent. */
+export interface AgentPromptTemplateOption {
+  id: string;
+  name: string;
+  promptTemplate: string;
+  description?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+export function parseAgentSettingsRecord(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return isRecord(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return isRecord(value) ? value : {};
+}
+
+function normalizePromptTemplateId(value: unknown, fallback: string): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+  return normalized || fallback;
+}
+
+function normalizePromptTemplateName(value: unknown, fallback: string): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return raw || fallback;
+}
+
+function getUniquePromptTemplateId(id: string, usedIds: Set<string>): string {
+  let candidate = id;
+  let attempt = 2;
+  while (usedIds.has(candidate) || candidate === DEFAULT_AGENT_PROMPT_TEMPLATE_ID) {
+    candidate = `${id}-${attempt}`;
+    attempt++;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
+export function normalizeAgentPromptTemplateOptions(value: unknown): AgentPromptTemplateOption[] {
+  const entries = Array.isArray(value)
+    ? value
+    : isRecord(value)
+      ? Object.entries(value).map(([id, entry]) => (isRecord(entry) ? { ...entry, id } : entry))
+      : [];
+  const usedIds = new Set<string>();
+  const options: AgentPromptTemplateOption[] = [];
+
+  for (const [index, entry] of entries.entries()) {
+    if (!isRecord(entry)) continue;
+    const promptTemplate =
+      typeof entry.promptTemplate === "string"
+        ? entry.promptTemplate
+        : typeof entry.prompt === "string"
+          ? entry.prompt
+          : "";
+    if (!promptTemplate.trim()) continue;
+    const name = normalizePromptTemplateName(entry.name ?? entry.label, `Option ${index + 1}`);
+    const id = getUniquePromptTemplateId(
+      normalizePromptTemplateId(entry.id, `option-${index + 1}`),
+      usedIds,
+    );
+    const description = typeof entry.description === "string" ? entry.description.trim() : "";
+    options.push({
+      id,
+      name,
+      promptTemplate,
+      ...(description ? { description } : {}),
+    });
+  }
+
+  return options;
+}
+
+export function getAgentPromptTemplateOptions(input: {
+  promptTemplate?: string | null;
+  fallbackPromptTemplate?: string | null;
+  settings?: unknown;
+}): AgentPromptTemplateOption[] {
+  const settings = parseAgentSettingsRecord(input.settings);
+  const basePromptTemplate = input.promptTemplate?.trim() ? input.promptTemplate : (input.fallbackPromptTemplate ?? "");
+  return [
+    {
+      id: DEFAULT_AGENT_PROMPT_TEMPLATE_ID,
+      name: "Default",
+      promptTemplate: basePromptTemplate,
+    },
+    ...normalizeAgentPromptTemplateOptions(settings.promptTemplates),
+  ];
+}
+
+export function normalizeAgentPromptTemplateSelectionMap(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const selections: Record<string, string> = {};
+  for (const [agentType, promptTemplateId] of Object.entries(value)) {
+    if (typeof promptTemplateId !== "string") continue;
+    const cleanedType = agentType.trim();
+    const cleanedId = normalizePromptTemplateId(promptTemplateId, "");
+    if (!cleanedType || !cleanedId) continue;
+    selections[cleanedType] = cleanedId;
+  }
+  return selections;
+}
+
+export function resolveAgentPromptTemplate(input: {
+  agentType: string;
+  promptTemplate?: string | null;
+  fallbackPromptTemplate?: string | null;
+  settings?: unknown;
+  selectedPromptTemplateId?: string | null;
+}): string {
+  const selectedId = normalizePromptTemplateId(input.selectedPromptTemplateId, "");
+  if (!selectedId || selectedId === DEFAULT_AGENT_PROMPT_TEMPLATE_ID) {
+    return input.promptTemplate?.trim() ? input.promptTemplate : (input.fallbackPromptTemplate ?? "");
+  }
+  const option = getAgentPromptTemplateOptions(input).find((entry) => entry.id === selectedId);
+  return option?.promptTemplate ?? (input.promptTemplate?.trim() ? input.promptTemplate : (input.fallbackPromptTemplate ?? ""));
+}
+
 /** Result produced by an agent after execution. */
 export interface AgentResult {
   agentId: string;
@@ -84,16 +220,48 @@ export interface AgentResult {
   error: string | null;
 }
 
+export interface AgentCallDebugMessage {
+  role: string;
+  content: string;
+  name?: string;
+}
+
+export interface AgentCallDebugEvent {
+  stage: "request" | "response" | "retry_request" | "retry_response" | "error";
+  agentId: string;
+  agentType: string;
+  agentName: string;
+  phase: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  messageCount: number;
+  messages?: AgentCallDebugMessage[];
+  tools?: string[];
+  round?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+  durationMs?: number;
+  finishReason?: string | null;
+  response?: string;
+  responsePreview?: string;
+  error?: string;
+  batchedAgentTypes?: string[];
+}
+
 /** Shared context passed to every agent. */
 export interface AgentContext {
   chatId: string;
   chatMode: string;
   /** Recent chat history (last N messages) */
   recentMessages: Array<{
+    id?: string;
     role: string;
     content: string;
     characterId?: string;
-    /** Committed game state snapshot for this message (if any). */
+    /** Tracker state snapshot for this message (if any). */
     gameState?: import("./game-state.js").GameState | null;
   }>;
   /** The main response text (available for post-processing agents) */
@@ -149,6 +317,8 @@ export interface AgentContext {
   parallelResults?: AgentResult[];
   /** Whether internal agent LLM calls should use transport streaming. */
   streaming?: boolean;
+  /** Emits full agent call diagnostics for the client debug console. */
+  agentDebug?: (event: AgentCallDebugEvent) => void;
   /** Abort signal — when triggered, agent execution should stop. Typed as `any` to avoid DOM/Node lib dependency. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   signal?: any;
@@ -192,21 +362,25 @@ export interface BuiltInAgentMeta {
   id: string;
   name: string;
   description: string;
+  author: string;
   phase: AgentPhase;
   enabledByDefault: boolean;
   /** Whether "Add as Prompt Section" should default to on when first created */
   defaultInjectAsSection?: boolean;
   category: AgentCategory;
+  promptTemplates?: AgentPromptTemplateOption[];
 }
 
 export const BUILT_IN_AGENTS: BuiltInAgentMeta[] = BUILT_IN_AGENT_MANIFESTS.map((agent) => ({
   id: agent.id,
   name: agent.name,
   description: agent.description,
+  author: agent.author ?? DEFAULT_AGENT_AUTHOR,
   phase: agent.phase,
   enabledByDefault: agent.enabledByDefault,
   ...(agent.defaultInjectAsSection !== undefined ? { defaultInjectAsSection: agent.defaultInjectAsSection } : {}),
   category: agent.category,
+  ...(agent.promptTemplates !== undefined ? { promptTemplates: [...agent.promptTemplates] } : {}),
 }));
 
 export const BUILT_IN_AGENT_RUN_INTERVAL_DEFAULTS: Readonly<Record<string, number>> = Object.fromEntries(
@@ -218,12 +392,87 @@ export const DEFAULT_AGENT_MAX_TOKENS = 4096;
 export const MIN_AGENT_MAX_TOKENS = 128;
 export const MAX_AGENT_MAX_TOKENS = 32768;
 
+export const CUSTOM_AGENT_CAPABILITY_IDS = [
+  "create_lorebooks",
+  "edit_lorebooks",
+  "edit_messages",
+  "edit_trackers",
+  "change_frontend_styling",
+  "trigger_image_generation",
+  "access_vectors",
+  "edit_main_prompt",
+] as const;
+
+export type CustomAgentCapability = (typeof CUSTOM_AGENT_CAPABILITY_IDS)[number];
+export type CustomAgentCapabilityMap = Partial<Record<CustomAgentCapability, boolean>>;
+
+const CUSTOM_AGENT_CAPABILITY_SET = new Set<string>(CUSTOM_AGENT_CAPABILITY_IDS);
+
+const CUSTOM_AGENT_RESULT_CAPABILITY: Partial<Record<AgentResultType, CustomAgentCapability>> = {
+  text_rewrite: "edit_messages",
+  lorebook_update: "edit_lorebooks",
+  character_tracker_update: "edit_trackers",
+  persona_stats_update: "edit_trackers",
+  custom_tracker_update: "edit_trackers",
+  game_state_update: "edit_trackers",
+  image_prompt: "trigger_image_generation",
+  prompt_patch: "edit_main_prompt",
+  frontend_theme_update: "change_frontend_styling",
+};
+
+function normalizeCapabilityMap(value: unknown): CustomAgentCapabilityMap {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const output: CustomAgentCapabilityMap = {};
+  for (const [key, enabled] of Object.entries(value as Record<string, unknown>)) {
+    if (!CUSTOM_AGENT_CAPABILITY_SET.has(key) || enabled !== true) continue;
+    output[key as CustomAgentCapability] = true;
+  }
+  return output;
+}
+
+export function normalizeCustomAgentCapabilities(settings: Record<string, unknown> | null | undefined): CustomAgentCapabilityMap {
+  const capabilities = normalizeCapabilityMap(settings?.customCapabilities ?? settings?.capabilities);
+  const enabledToolsValue = settings?.enabledTools;
+  const enabledTools = Array.isArray(enabledToolsValue) ? enabledToolsValue : [];
+  const resultType = typeof settings?.resultType === "string" ? settings.resultType : null;
+
+  if (settings?.lorebookWriteEnabled === true || enabledTools.includes("save_lorebook_entry")) {
+    capabilities.edit_lorebooks = true;
+  }
+
+  if (resultType && Object.prototype.hasOwnProperty.call(CUSTOM_AGENT_RESULT_CAPABILITY, resultType)) {
+    const capability = CUSTOM_AGENT_RESULT_CAPABILITY[resultType as AgentResultType];
+    if (capability) capabilities[capability] = true;
+  }
+
+  return capabilities;
+}
+
+export function customAgentHasCapability(
+  settings: Record<string, unknown> | null | undefined,
+  capability: CustomAgentCapability,
+): boolean {
+  return normalizeCustomAgentCapabilities(settings)[capability] === true;
+}
+
+export function getCustomAgentResultCapability(resultType: AgentResultType): CustomAgentCapability | null {
+  return CUSTOM_AGENT_RESULT_CAPABILITY[resultType] ?? null;
+}
+
 export function getDefaultBuiltInAgentSettings(agentType: string): Record<string, unknown> {
   const builtIn = BUILT_IN_AGENT_MANIFESTS.find((agent) => agent.id === agentType);
   const settings: Record<string, unknown> = {
     maxTokens: DEFAULT_AGENT_MAX_TOKENS,
     ...(builtIn?.defaultSettings ?? {}),
   };
+
+  if (builtIn) {
+    settings.author = builtIn.author ?? DEFAULT_AGENT_AUTHOR;
+  }
+
+  if (builtIn?.promptTemplates?.length) {
+    settings.promptTemplates = [...builtIn.promptTemplates];
+  }
 
   if (builtIn?.defaultInjectAsSection) {
     settings.injectAsSection = true;

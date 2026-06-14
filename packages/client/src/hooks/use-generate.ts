@@ -17,6 +17,7 @@ import {
   createInlineThinkingStreamFilter,
   EDITABLE_CHARACTER_CARD_FIELDS,
   normalizeThinkingTagPairs,
+  type AgentCallDebugEvent,
   type CharacterCardFieldUpdate,
   type EditableCharacterCardField,
   type ThinkingTagPair,
@@ -80,6 +81,32 @@ function applyAgentBackgroundChoice(chosen: string | null | undefined) {
       }
     })
     .catch(() => {});
+}
+
+function applyAgentFrontendStyle(chatId: string, raw: unknown) {
+  if (typeof document === "undefined") return;
+  if (!raw || typeof raw !== "object") return;
+  const data = raw as Record<string, unknown>;
+  const css = typeof data.css === "string" ? data.css.trim() : "";
+  if (!css) return;
+  const durationMs =
+    typeof data.durationMs === "number" && Number.isFinite(data.durationMs)
+      ? Math.max(1_000, Math.min(10 * 60_000, Math.trunc(data.durationMs)))
+      : 60_000;
+  const id = `marinara-agent-style-${chatId}`;
+  let style = document.getElementById(id) as HTMLStyleElement | null;
+  if (!style) {
+    style = document.createElement("style");
+    style.id = id;
+    document.head.appendChild(style);
+  }
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  style.dataset.agentStyleToken = token;
+  style.textContent = css;
+  window.setTimeout(() => {
+    const current = document.getElementById(id) as HTMLStyleElement | null;
+    if (current?.dataset.agentStyleToken === token) current.remove();
+  }, durationMs);
 }
 
 const editableCharacterCardFieldSet = new Set<string>(EDITABLE_CHARACTER_CARD_FIELDS);
@@ -783,6 +810,8 @@ export function useGenerate() {
   const addEchoMessage = useAgentStore((s) => s.addEchoMessage);
   const setCyoaChoices = useAgentStore((s) => s.setCyoaChoices);
   const clearCyoaChoices = useAgentStore((s) => s.clearCyoaChoices);
+  const setYoutubePlay = useAgentStore((s) => s.setYoutubePlay);
+  const setYoutubeVolume = useAgentStore((s) => s.setYoutubeVolume);
   const enqueuePendingCardUpdate = useAgentStore((s) => s.enqueuePendingCardUpdate);
   const setFailedAgentFailures = useAgentStore((s) => s.setFailedAgentFailures);
   const clearFailedAgentTypes = useAgentStore((s) => s.clearFailedAgentTypes);
@@ -942,6 +971,8 @@ export function useGenerate() {
       let pendingText = ""; // Tokens waiting to be typed out
       let receivedContent = false; // Whether any actual message content was received
       let receivedThinking = false; // Whether provider-native thinking chunks were received
+      let gameTurnLoadedSoundPlayed = false;
+      let sawDoneEvent = false;
       let typingActive = false;
       let typewriterDone: (() => void) | null = null;
       let rafId = 0;
@@ -1245,6 +1276,7 @@ export function useGenerate() {
                 agentName: string;
                 resultType: string;
                 data: unknown;
+                tokensUsed?: number;
                 success: boolean;
                 error: string | null;
                 durationMs: number;
@@ -1291,7 +1323,7 @@ export function useGenerate() {
                 agentType: result.agentType,
                 type: result.resultType as any,
                 data: result.data,
-                tokensUsed: 0,
+                tokensUsed: result.tokensUsed ?? 0,
                 durationMs: result.durationMs,
                 success: result.success,
                 error: result.error,
@@ -1323,6 +1355,18 @@ export function useGenerate() {
                     setCyoaChoices(choices, params.chatId);
                   }
                 }
+
+                // Drive the embedded YouTube DJ player from the agent's intent.
+                if (result.agentType === "youtube") {
+                  const d = result.data as Record<string, unknown>;
+                  const action = d.action as string;
+                  if (typeof d.volume === "number" && Number.isFinite(d.volume)) {
+                    setYoutubeVolume(Math.max(0, Math.min(100, d.volume)));
+                  }
+                  if (action === "play" && typeof d.searchQuery === "string" && d.searchQuery.trim()) {
+                    setYoutubePlay({ searchQuery: d.searchQuery.trim(), mood: (d.mood as string) ?? "" });
+                  }
+                }
               }
 
               // Character card updates are never applied automatically — enqueue
@@ -1346,6 +1390,10 @@ export function useGenerate() {
                 if (bg.chosen) {
                   applyAgentBackgroundChoice(bg.chosen);
                 }
+              }
+
+              if (result.success && result.resultType === "frontend_theme_update" && result.data) {
+                applyAgentFrontendStyle(params.chatId, result.data);
               }
 
               // Apply quest updates directly so the widget updates immediately
@@ -1376,6 +1424,15 @@ export function useGenerate() {
                   console.warn(`[Agent] Quest agent returned success but 0 updates — data shape:`, Object.keys(qd));
                 }
               }
+              break;
+            }
+
+            case "agent_debug": {
+              if (!debugMode) break;
+              addDebugEntry({
+                phase: "agent_call",
+                agentCall: event.data as AgentCallDebugEvent,
+              });
               break;
             }
 
@@ -1795,6 +1852,7 @@ export function useGenerate() {
             }
 
             case "done": {
+              sawDoneEvent = true;
               if (spriteChangeReceived) {
                 qc.invalidateQueries({ queryKey: chatKeys.messages(params.chatId) });
               }
@@ -1916,6 +1974,10 @@ export function useGenerate() {
           // persisted active-swipe row after generation-time SSE patches.
           await refreshVisibleGameStateAfterGeneration(params.chatId);
         }
+        if (isGameGeneration && sawDoneEvent && receivedContent && useUIStore.getState().gameNotificationSound) {
+          playNotificationPing();
+          gameTurnLoadedSoundPlayed = true;
+        }
         // Re-sort sidebar so this chat floats to the top
         qc.invalidateQueries({ queryKey: chatKeys.list() });
         // If the user navigated away from this chat during generation,
@@ -1949,9 +2011,13 @@ export function useGenerate() {
               .addNotification(params.chatId, identity.name ?? "Character", identity.avatarUrl, identity.avatarCrop);
           }
           const isRp = chat?.mode === "roleplay" || chat?.mode === "visual_novel";
-          const soundEnabled = isRp
-            ? useUIStore.getState().rpNotificationSound
-            : useUIStore.getState().convoNotificationSound;
+          const isGame = chat?.mode === "game" || isGameGeneration;
+          const uiState = useUIStore.getState();
+          const soundEnabled = isGame
+            ? sawDoneEvent && uiState.gameNotificationSound && !gameTurnLoadedSoundPlayed
+            : isRp
+              ? uiState.rpNotificationSound
+              : uiState.convoNotificationSound;
           if (soundEnabled) {
             playNotificationPing();
           }
@@ -2096,6 +2162,8 @@ export function useGenerate() {
       addEchoMessage,
       setCyoaChoices,
       clearCyoaChoices,
+      setYoutubePlay,
+      setYoutubeVolume,
       enqueuePendingCardUpdate,
       clearFailedAgentTypes,
       setFailedAgentFailures,
@@ -2136,6 +2204,7 @@ export function useGenerate() {
             chatId,
             agentTypes,
             streaming: useUIStore.getState().enableStreaming,
+            debugMode: useUIStore.getState().debugMode,
             lorebookKeeperBackfill: options?.lorebookKeeperBackfill === true,
             ...(options?.forMessageId ? { forMessageId: options.forMessageId } : {}),
             ...(options?.secretPlotRerollMode ? { secretPlotRerollMode: options.secretPlotRerollMode } : {}),
@@ -2154,6 +2223,7 @@ export function useGenerate() {
                 agentName: string;
                 resultType: string;
                 data: unknown;
+                tokensUsed?: number;
                 success: boolean;
                 error: string | null;
                 durationMs: number;
@@ -2189,7 +2259,7 @@ export function useGenerate() {
                 agentType: result.agentType,
                 type: result.resultType as any,
                 data: result.data,
-                tokensUsed: 0,
+                tokensUsed: result.tokensUsed ?? 0,
                 durationMs: result.durationMs,
                 success: result.success,
                 error: result.error,
@@ -2224,6 +2294,17 @@ export function useGenerate() {
                   const d = result.data as Record<string, unknown>;
                   const choices = (d.choices as Array<{ label: string; text: string }>) ?? [];
                   if (isActiveChat()) setCyoaChoices(choices, chatId);
+                }
+                // YouTube DJ re-pick: drive the in-app player with the fresh intent.
+                if (result.agentType === "youtube" && isActiveChat()) {
+                  const d = result.data as Record<string, unknown>;
+                  const action = d.action as string;
+                  if (typeof d.volume === "number" && Number.isFinite(d.volume)) {
+                    setYoutubeVolume(Math.max(0, Math.min(100, d.volume)));
+                  }
+                  if (action === "play" && typeof d.searchQuery === "string" && d.searchQuery.trim()) {
+                    setYoutubePlay({ searchQuery: d.searchQuery.trim(), mood: (d.mood as string) ?? "" });
+                  }
                 }
                 if (result.resultType === "background_change") {
                   const bg = result.data as { chosen?: string | null };
@@ -2262,6 +2343,14 @@ export function useGenerate() {
                   void retryAgentsRef.current?.(chatId, [failure.agentType], options);
                 });
               }
+              break;
+            }
+            case "agent_debug": {
+              if (!useUIStore.getState().debugMode) break;
+              addDebugEntry({
+                phase: "agent_call",
+                agentCall: event.data as AgentCallDebugEvent,
+              });
               break;
             }
             case "agents_retry_failed": {
@@ -2362,12 +2451,15 @@ export function useGenerate() {
     },
     [
       addResult,
+      addDebugEntry,
       addThoughtBubble,
       addEchoMessage,
       enqueuePendingCardUpdate,
       clearFailedAgentTypes,
       clearThoughtBubbles,
       setCyoaChoices,
+      setYoutubePlay,
+      setYoutubeVolume,
       setFailedAgentFailures,
       setProcessing,
       setGameState,
@@ -2525,6 +2617,21 @@ function formatAgentBubble(agentType: string, agentName: string, data: unknown):
       }
       if (action === "volume") {
         return `🔊 Volume → ${d.volume}%${mood ? ` (${mood})` : ""}`;
+      }
+      return mood ? `🎵 ${mood}` : null;
+    }
+
+    case "youtube": {
+      const error = typeof d.error === "string" ? d.error.trim() : "";
+      if (error) return `🎵 YouTube DJ could not run: ${error}`;
+      if (d.parseError === true) return "🎵 YouTube DJ ran, but did not return a playable pick";
+      const action = d.action as string;
+      const mood = (d.mood as string) ?? "";
+      if (action === "none") return mood ? `🎵 Keeping current track — ${mood}` : "🎵 Keeping current track";
+      if (action === "volume") return `🔊 Volume → ${d.volume}%${mood ? ` (${mood})` : ""}`;
+      if (action === "play") {
+        const query = typeof d.searchQuery === "string" ? d.searchQuery.trim() : "";
+        return `🎵 ${query || "Now playing"}${mood ? ` — ${mood}` : ""}`;
       }
       return mood ? `🎵 ${mood}` : null;
     }
