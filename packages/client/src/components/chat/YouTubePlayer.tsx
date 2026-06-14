@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Music, Pause, Play, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, Music, Pause, Play, X } from "lucide-react";
 import { useAgentStore } from "@/stores/agent.store";
 import { useUIStore } from "@/stores/ui.store";
 import { api } from "@/lib/api-client";
+import { cn } from "@/lib/utils";
 
 // The YouTube IFrame API attaches itself to window; it has no bundled types.
 type YTPlayer = {
@@ -63,6 +64,7 @@ export function YouTubePlayer() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
 
   volumeRef.current = youtubeVolume;
 
@@ -188,57 +190,83 @@ export function YouTubePlayer() {
     clearYoutube();
   };
 
-  const visible = youtubePlayerEnabled && (!!nowPlaying || loading || !!error);
+  const active = youtubePlayerEnabled && (!!nowPlaying || loading || !!error);
 
   return (
-    <div
-      className="fixed bottom-4 right-4 z-50 w-[270px] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-lg"
-      style={{ display: visible ? "block" : "none" }}
-    >
-      <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
-        <Music className="size-3.5 shrink-0 text-[var(--primary)]" />
-        <span className="flex-1 truncate text-xs font-medium text-[var(--foreground)]">YouTube DJ</span>
-        {nowPlaying && (
+    <>
+      {/* Compact mini-player pill — lives in the top bar (upper-left), like Spotify's. */}
+      {active && (
+        <div className="flex h-8 min-w-0 max-w-[15rem] items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--card)] pl-2.5 pr-1">
+          <Music className="size-3.5 shrink-0 text-[var(--primary)]" />
+          <span
+            className="hidden min-w-0 flex-1 truncate text-xs text-[var(--foreground)] sm:inline"
+            title={nowPlaying?.title ?? undefined}
+          >
+            {loading ? "Finding a track…" : error ? error : (nowPlaying?.title ?? "YouTube DJ")}
+          </span>
+          {loading && (
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-[var(--muted-foreground)] sm:hidden" />
+          )}
+          {nowPlaying && (
+            <button
+              type="button"
+              onClick={togglePlay}
+              className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] active:scale-90"
+              aria-label={paused ? "Play" : "Pause"}
+            >
+              {paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+            </button>
+          )}
           <button
             type="button"
-            onClick={togglePlay}
+            onClick={() => setShowVideo((v) => !v)}
             className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] active:scale-90"
-            aria-label={paused ? "Play" : "Pause"}
+            aria-label={showVideo ? "Hide video" : "Show video"}
           >
-            {paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+            {showVideo ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
           </button>
-        )}
-        <button
-          type="button"
-          onClick={close}
-          className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--destructive)] active:scale-90"
-          aria-label="Stop"
-        >
-          <X className="size-3.5" />
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={close}
+            className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--destructive)] active:scale-90"
+            aria-label="Stop"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
 
-      {/* The IFrame player lives here; YT injects the iframe into this host. */}
-      <div ref={hostRef} className="aspect-video w-full bg-black [&_iframe]:size-full" />
-
-      <div className="px-3 py-2">
-        {loading && (
-          <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-            <Loader2 className="size-3.5 animate-spin" /> Finding a track…
-          </div>
+      {/* Video panel anchored under the top bar. ALWAYS mounted so the IFrame keeps
+          playing; when collapsed it is parked offscreen (full size, never display:none)
+          so audio never stops. */}
+      <div
+        className={cn(
+          "fixed top-14 z-40 w-72 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-lg transition-opacity",
+          active && showVideo ? "left-2 opacity-100" : "pointer-events-none -left-[9999px] opacity-0",
         )}
-        {error && !loading && <div className="text-xs text-[var(--destructive)]">{error}</div>}
-        {nowPlaying && !loading && !error && (
-          <div className="min-w-0">
-            <div className="truncate text-xs font-medium text-[var(--foreground)]" title={nowPlaying.title}>
-              {nowPlaying.title}
-            </div>
-            {nowPlaying.mood && (
-              <div className="truncate text-[11px] text-[var(--muted-foreground)]">{nowPlaying.mood}</div>
+      >
+        {/* The IFrame player lives here; YT injects the iframe into this host. */}
+        <div ref={hostRef} className="aspect-video w-full bg-black [&_iframe]:size-full" />
+        {(nowPlaying || error) && (
+          <div className="px-3 py-2">
+            {error ? (
+              <div className="text-xs text-[var(--destructive)]">{error}</div>
+            ) : (
+              <div className="min-w-0">
+                <div
+                  className="truncate text-xs font-medium text-[var(--foreground)]"
+                  title={nowPlaying?.title}
+                >
+                  {nowPlaying?.title}
+                </div>
+                {nowPlaying?.mood && (
+                  <div className="truncate text-[11px] text-[var(--muted-foreground)]">{nowPlaying.mood}</div>
+                )}
+              </div>
             )}
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }

@@ -4,7 +4,6 @@
 import { ChatSidebar } from "./ChatSidebar";
 import { TopBar } from "./TopBar";
 import { SpotifyMobileWidget } from "../spotify/SpotifyMiniPlayer";
-import { YouTubePlayer } from "../chat/YouTubePlayer";
 import { ChatNotificationBubbles } from "../chat/ChatNotificationBubbles";
 import {
   getTrackerPanelWidthForProfile,
@@ -889,7 +888,6 @@ export function AppShell() {
         </Suspense>
       )}
       <SpotifyMobileWidget />
-      <YouTubePlayer />
     </div>
   );
 }

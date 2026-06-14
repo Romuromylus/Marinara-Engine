@@ -1833,6 +1833,8 @@ export function GameSurface({
   const gameSnapshot = useGameStateStore((s) => (s.current?.chatId === activeChatId ? s.current : null));
   const chatCharacterIds = useMemo(() => getChatCharacterIds(chat.characterIds), [chat.characterIds]);
   const useSpotifyGameMusic = chatMeta.gameUseSpotifyMusic === true;
+  const useYoutubeGameMusic =
+    Array.isArray(chatMeta.activeAgentIds) && (chatMeta.activeAgentIds as string[]).includes("youtube");
   const activeGameMetaId = typeof chatMeta.gameId === "string" ? chatMeta.gameId : "";
   const sceneRuntimeScopeKey = `${activeChatId}:${activeGameMetaId}`;
   const { data: connectionsList } = useConnections();
@@ -2006,6 +2008,7 @@ export function GameSurface({
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [combatLogsOpen, setCombatLogsOpen] = useState(false);
   const [spotifyRetryPending, setSpotifyRetryPending] = useState(false);
+  const [youtubeRetryPending, setYoutubeRetryPending] = useState(false);
   const combatLogScrolledRef = useRef(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [mobileRetryMenuOpen, setMobileRetryMenuOpen] = useState(false);
@@ -3026,6 +3029,8 @@ export function GameSurface({
   const canRetryAssets = !!retryableAssetGeneration && (assetGenerationFailed || !pendingAssetGeneration);
   const canRetrySpotifyMusic =
     useSpotifyGameMusic && !!activeChatId && !isStreaming && !sceneAnalysis.isPending && !spotifyRetryPending;
+  const canRetryYoutubeMusic =
+    useYoutubeGameMusic && !!activeChatId && !isStreaming && !sceneAnalysis.isPending && !youtubeRetryPending;
 
   const fetchSpotifySceneCandidates = useCallback(
     async (
@@ -4657,6 +4662,26 @@ export function GameSurface({
       /* generate handles its own error toast */
     }
   }, [activeChatId, generate, isStreaming]);
+
+  const handleRetryYoutubeMusic = useCallback(async () => {
+    if (!activeChatId || !useYoutubeGameMusic || isStreaming || sceneAnalysis.isPending) return;
+    setRetryMenuOpen(false);
+    setMobileRetryMenuOpen(false);
+    setMobileActionsOpen(false);
+    setYoutubeRetryPending(true);
+    try {
+      // YouTube DJ needs no scene-candidate flow — re-running the agent (with the
+      // manualRetry constraint the server injects) emits a fresh play intent that
+      // the in-app player swaps in.
+      await retryAgents(activeChatId, ["youtube"]);
+      toast.success("YouTube DJ picking a fresh track…", { duration: 1800 });
+    } catch (error) {
+      console.warn("[youtube/game] Retry failed:", error);
+      toast.error("YouTube DJ retry failed.");
+    } finally {
+      setYoutubeRetryPending(false);
+    }
+  }, [activeChatId, isStreaming, retryAgents, sceneAnalysis.isPending, useYoutubeGameMusic]);
 
   const handleRetrySpotifyMusic = useCallback(async () => {
     if (!activeChatId || !useSpotifyGameMusic || isStreaming || sceneAnalysis.isPending) return;
@@ -8183,6 +8208,20 @@ export function GameSurface({
                             <span>Retry Spotify DJ Music Generation</span>
                           </button>
                         )}
+                        {useYoutubeGameMusic && (
+                          <button
+                            onClick={handleRetryYoutubeMusic}
+                            disabled={!canRetryYoutubeMusic}
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/85 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+                          >
+                            {youtubeRetryPending ? (
+                              <RefreshCw size={13} className="animate-spin" />
+                            ) : (
+                              <Volume2 size={13} />
+                            )}
+                            <span>Retry YouTube DJ Music</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setRetryMenuOpen(false);
@@ -8395,6 +8434,20 @@ export function GameSurface({
                                     <Volume2 size={13} />
                                   )}
                                   <span>Retry Spotify DJ Music Generation</span>
+                                </button>
+                              )}
+                              {useYoutubeGameMusic && (
+                                <button
+                                  onClick={handleRetryYoutubeMusic}
+                                  disabled={!canRetryYoutubeMusic}
+                                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/85 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+                                >
+                                  {youtubeRetryPending ? (
+                                    <RefreshCw size={13} className="animate-spin" />
+                                  ) : (
+                                    <Volume2 size={13} />
+                                  )}
+                                  <span>Retry YouTube DJ Music</span>
                                 </button>
                               )}
                               <button

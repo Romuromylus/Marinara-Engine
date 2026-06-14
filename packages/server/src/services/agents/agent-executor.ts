@@ -1336,6 +1336,12 @@ function buildAgentExtras(context: AgentContext, agentTypes: string[] = []): str
     parts.push(`</spotify_dj_constraints>`);
   }
 
+  if (agentTypes.includes("youtube") && context.memory._youtubeDjConstraints) {
+    parts.push(`<youtube_dj_constraints>`);
+    parts.push(JSON.stringify(context.memory._youtubeDjConstraints));
+    parts.push(`</youtube_dj_constraints>`);
+  }
+
   if (agentTypes.includes("lorebook-keeper") && context.memory._existingLorebookEntries) {
     const rawEntries = context.memory._existingLorebookEntries as Array<
       string | { id?: string; name?: string; content?: string; keys?: string[]; locked?: boolean }

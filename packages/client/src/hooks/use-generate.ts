@@ -2241,6 +2241,17 @@ export function useGenerate() {
                   const choices = (d.choices as Array<{ label: string; text: string }>) ?? [];
                   if (isActiveChat()) setCyoaChoices(choices, chatId);
                 }
+                // YouTube DJ re-pick: drive the in-app player with the fresh intent.
+                if (result.agentType === "youtube" && isActiveChat()) {
+                  const d = result.data as Record<string, unknown>;
+                  const action = d.action as string;
+                  if (typeof d.volume === "number" && Number.isFinite(d.volume)) {
+                    setYoutubeVolume(Math.max(0, Math.min(100, d.volume)));
+                  }
+                  if (action === "play" && typeof d.searchQuery === "string" && d.searchQuery.trim()) {
+                    setYoutubePlay({ searchQuery: d.searchQuery.trim(), mood: (d.mood as string) ?? "" });
+                  }
+                }
                 if (result.resultType === "background_change") {
                   const bg = result.data as { chosen?: string | null };
                   if (bg.chosen) {
@@ -2384,6 +2395,8 @@ export function useGenerate() {
       clearFailedAgentTypes,
       clearThoughtBubbles,
       setCyoaChoices,
+      setYoutubePlay,
+      setYoutubeVolume,
       setFailedAgentFailures,
       setProcessing,
       setGameState,
