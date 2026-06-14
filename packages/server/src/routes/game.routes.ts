@@ -97,6 +97,7 @@ import { dedupeSessionSummaryLists } from "../services/game/session-summary-norm
 import {
   generationParametersSchema,
   isClaudeAdaptiveOnlyNoSamplingModel,
+  supportsXhighReasoningEffort,
   resolveMacros,
   scoreMusic,
   scoreAmbient,
@@ -1367,15 +1368,11 @@ function resolveGameReasoningEffort(
   ) {
     return undefined;
   }
+  const supportsXhigh = supportsXhighReasoningEffort(modelLower);
   if (reasoningEffort === "max") return isNativeAnthropicAdaptiveOnly ? "max" : "high";
-  if (reasoningEffort === "xhigh") return reasoningEffort;
+  if (reasoningEffort === "xhigh") return supportsXhigh ? "xhigh" : "high";
   if (reasoningEffort !== "maximum") return reasoningEffort;
 
-  const supportsXhigh =
-    modelLower.startsWith("gpt-5.5") ||
-    modelLower.startsWith("gpt-5.4") ||
-    modelLower === "grok-4.20-multi-agent" ||
-    isClaudeAdaptiveOnly;
   return isNativeAnthropicAdaptiveOnly ? "max" : supportsXhigh ? "xhigh" : "high";
 }
 
@@ -1397,8 +1394,7 @@ function gameGenOptions(
   const isNativeAnthropicAdaptiveOnly =
     (providerLower === "anthropic" || providerLower === "claude_subscription") && isClaudeAdaptiveOnly;
   const isGrokAutoReasoning = m.startsWith("grok-4.3") || m.startsWith("grok-4-1-fast") || m.startsWith("x-ai/grok-");
-  const supportsXhigh =
-    m.startsWith("gpt-5.5") || m.startsWith("gpt-5.4") || m === "grok-4.20-multi-agent" || isClaudeAdaptiveOnly;
+  const supportsXhigh = supportsXhighReasoningEffort(m);
   const base: ChatOptions = {
     model,
     maxTokens: 8192,
@@ -2141,7 +2137,7 @@ async function runGameLorebookKeeperAfterConclusion(args: {
     });
 
     const result = await provider.chatComplete(fitted.trimmed ? fitted.messages : keeperMessages, options);
-    const extraction = extractLeadingThinkingBlocks(result.content ?? "");
+    const extraction = extractLeadingThinkingBlocks(result.content ?? "", generationParameters?.customThinkingTags);
     const parsed = parseJSON(extraction.content) as Record<string, unknown>;
     const entries = normalizeGameLorebookKeeperEntries(parsed);
     const createdCount = await createGameLorebookKeeperEntries({
@@ -3376,7 +3372,10 @@ export async function gameRoutes(app: FastifyInstance) {
     }
 
     const result = await provider.chatComplete(messages, setupOptions);
-    const setupExtraction = extractLeadingThinkingBlocks(result.content ?? "");
+    const setupExtraction = extractLeadingThinkingBlocks(
+      result.content ?? "",
+      setupGenerationParameters?.customThinkingTags,
+    );
     const responseText = setupExtraction.content;
 
     if (debugLogsEnabled) {
@@ -3923,7 +3922,10 @@ export async function gameRoutes(app: FastifyInstance) {
 
     const result = await provider.chatComplete(conclusionMessages, conclusionOptions);
     logger.info("[game/session/conclude] Conclusion generation completed for chat %s", chatId);
-    const conclusionExtraction = extractLeadingThinkingBlocks(result.content ?? "");
+    const conclusionExtraction = extractLeadingThinkingBlocks(
+      result.content ?? "",
+      conclusionGenerationParameters?.customThinkingTags,
+    );
     if (conclusionExtraction.thinking) {
       logger.debug(
         "[game/session/conclude] Thinking tokens (%d chars):\n%s",
@@ -4289,7 +4291,10 @@ export async function gameRoutes(app: FastifyInstance) {
     }
 
     const result = await provider.chatComplete(conclusionMessages, conclusionOptions);
-    const conclusionExtraction = extractLeadingThinkingBlocks(result.content ?? "");
+    const conclusionExtraction = extractLeadingThinkingBlocks(
+      result.content ?? "",
+      conclusionGenerationParameters?.customThinkingTags,
+    );
     let appliedConclusion: SessionConclusionApplication;
     try {
       const parsedConclusion = parseJSON(conclusionExtraction.content) as Record<string, unknown>;
@@ -4551,7 +4556,10 @@ export async function gameRoutes(app: FastifyInstance) {
 
     const result = await provider.chatComplete(fit.trimmed ? fit.messages : progressionMessages, progressionOptions);
     const rawProgressionContent = result.content ?? "";
-    const extraction = extractLeadingThinkingBlocks(rawProgressionContent);
+    const extraction = extractLeadingThinkingBlocks(
+      rawProgressionContent,
+      progressionGenerationParameters?.customThinkingTags,
+    );
     logger.info(
       "[game/session/update-campaign-progression] Response length=%d chars, extracted=%d chars, maxTokens=%d",
       rawProgressionContent.length,
@@ -4866,7 +4874,10 @@ export async function gameRoutes(app: FastifyInstance) {
           ],
           gameGenOptions(conn.model, { temperature: 0.6, maxTokens: 1200 }, generationParameters, conn.provider),
         );
-        const recruitExtraction = extractLeadingThinkingBlocks(result.content ?? "");
+        const recruitExtraction = extractLeadingThinkingBlocks(
+          result.content ?? "",
+          generationParameters?.customThinkingTags,
+        );
         const cardContent = recruitExtraction.content;
         if (recruitExtraction.thinking) {
           logger.debug(
@@ -5980,7 +5991,10 @@ export async function gameRoutes(app: FastifyInstance) {
         conn.provider,
       ),
     );
-    const partyTurnExtraction = extractLeadingThinkingBlocks(result.content || "");
+    const partyTurnExtraction = extractLeadingThinkingBlocks(
+      result.content || "",
+      gameGenerationParameters?.customThinkingTags,
+    );
     const raw = partyTurnExtraction.content;
     const requestDebug = input.debugMode === true;
     const debugOverrideEnabled = requestDebug || isDebugAgentsEnabled();
@@ -6292,7 +6306,10 @@ export async function gameRoutes(app: FastifyInstance) {
     );
     const result = await provider.chatComplete(messages, sceneWrapOptions);
 
-    let sceneWrapExtraction = extractLeadingThinkingBlocks(result.content || "");
+    let sceneWrapExtraction = extractLeadingThinkingBlocks(
+      result.content || "",
+      gameGenerationParameters?.customThinkingTags,
+    );
     let raw = sceneWrapExtraction.content;
     // Some provider/model combos can still return empty content on the buffered
     // path. Retry once via streamed collection using the same JSON mode.
@@ -6302,7 +6319,7 @@ export async function gameRoutes(app: FastifyInstance) {
       for await (const chunk of provider.chat(messages, { ...sceneWrapOptions, stream: true })) {
         streamed += chunk;
       }
-      sceneWrapExtraction = extractLeadingThinkingBlocks(streamed);
+      sceneWrapExtraction = extractLeadingThinkingBlocks(streamed, gameGenerationParameters?.customThinkingTags);
       raw = sceneWrapExtraction.content;
     }
     if (debugLogsEnabled) {

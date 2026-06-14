@@ -25,6 +25,9 @@ import {
   buildQuestJournalData,
   compactQuestProgressForContext,
   isClaudeAdaptiveOnlyNoSamplingModel,
+  isAgentAvailableInChatMode,
+  normalizeThinkingTagPairs,
+  supportsXhighReasoningEffort,
 } from "@marinara-engine/shared";
 import type {
   AgentContext,
@@ -39,6 +42,8 @@ import type {
   PlayerStats,
   LorebookEntryTimingState,
   ChatSummaryEntry,
+  ChatMode,
+  ThinkingTagPair,
 } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
@@ -52,7 +57,7 @@ import { createRegexScriptsStorage } from "../services/storage/regex-scripts.sto
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
 import { resolveConversationSelfieSystemPrompt } from "../services/conversation/selfie-prompt.js";
-import { processLorebooks } from "../services/lorebook/index.js";
+import { filterRelevantLorebooks, processLorebooks } from "../services/lorebook/index.js";
 import {
   filterGameInternalAgentIds,
   resolveGameLorebookScopeExclusions,
@@ -112,6 +117,7 @@ import {
   type UpdatePersonaCommand,
   type CreateLorebookCommand,
   type UpdateLorebookCommand,
+  type CreatePresetCommand,
   type CreateChatCommand,
   type NavigateCommand,
   type FetchCommand,
@@ -263,7 +269,7 @@ import {
   type PerceptionContext,
 } from "../services/game/perception.service.js";
 import { getMoraleTier, formatMoraleContext } from "../services/game/morale.service.js";
-import type { GameMap, GameNpc, LorebookEntry } from "@marinara-engine/shared";
+import type { GameMap, GameNpc, Lorebook, LorebookEntry } from "@marinara-engine/shared";
 import { sidecarModelService } from "../services/sidecar/sidecar-model.service.js";
 
 function cardPromptText(value: unknown): string {
@@ -867,6 +873,7 @@ function parseRuntimeAgentSettings(settings: unknown): Record<string, unknown> {
 export function buildRuntimeAgentSectionEligibleTypesForTest(input: {
   enableAgents: boolean;
   activeAgentIds: string[];
+  chatMode?: ChatMode;
   configuredAgents?: Array<{ type: string; phase: string; settings?: unknown }>;
 }): Set<RuntimeAgentSectionType> {
   const eligible = new Set<RuntimeAgentSectionType>();
@@ -876,6 +883,7 @@ export function buildRuntimeAgentSectionEligibleTypesForTest(input: {
 
   for (const agent of BUILT_IN_AGENTS) {
     if (!activeAgentIds.has(agent.id)) continue;
+    if (input.chatMode && !isAgentAvailableInChatMode(input.chatMode, agent.id)) continue;
     if (agent.phase !== "pre_generation" || agent.id === "html") continue;
     if (
       resolveAgentResultType({ type: agent.id, settings: getDefaultBuiltInAgentSettings(agent.id) }) !==
@@ -888,6 +896,7 @@ export function buildRuntimeAgentSectionEligibleTypesForTest(input: {
 
   for (const agent of input.configuredAgents ?? []) {
     if (!activeAgentIds.has(agent.type)) continue;
+    if (input.chatMode && !isAgentAvailableInChatMode(input.chatMode, agent.type)) continue;
     if (agent.phase !== "pre_generation" || agent.type === "html") continue;
     const settings = parseRuntimeAgentSettings(agent.settings);
     if (resolveAgentResultType({ type: agent.type, settings }) !== "context_injection") continue;
@@ -1076,6 +1085,12 @@ function readSpotifyTrackNamesForUris(agent: SpotifyRuntimeAgent, uris: string[]
     .map((uri) => byUri.get(uri))
     .filter((track): track is SpotifyRuntimeTrack => Boolean(track))
     .map(formatSpotifyTrackName);
+}
+
+function spotifyUrisAreFromKnownCandidates(agent: SpotifyRuntimeAgent, uris: string[]): boolean {
+  if (uris.length === 0) return false;
+  const knownUris = new Set((agent.__spotifyCandidateTracks ?? []).map((track) => track.uri));
+  return uris.every((uri) => knownUris.has(uri));
 }
 
 function readSpotifyPlaybackTrackUri(data: unknown): string | null {
@@ -1365,6 +1380,15 @@ async function applySpotifyAgentPlaybackFallback(
   if (action !== "play" || requestedUris.length === 0) return normalizedResult;
 
   const spotifyPlayCalled = agent.__spotifyToolCalls instanceof Set && agent.__spotifyToolCalls.has("spotify_play");
+  if (!spotifyPlayCalled && !spotifyUrisAreFromKnownCandidates(agent, requestedUris)) {
+    return playSpotifyFallbackCandidates({
+      agent,
+      result: normalizedResult,
+      resultData: data,
+      context,
+      reason: readSpotifyStringField(data, "mood") || "Spotify DJ grouped-result playback",
+    });
+  }
   if (spotifyPlayCalled && agent.__spotifyPlayError) {
     return { ...normalizedResult, success: false, error: agent.__spotifyPlayError };
   }
@@ -1418,6 +1442,119 @@ async function applySpotifyAgentPlaybackFallbacks(
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const MAX_MARI_FETCHED_PRESET_CONTEXT_CHARS = 8000;
+type AssistantPresetWrapFormat = "xml" | "markdown" | "none";
+type AssistantPresetRole = "system" | "user" | "assistant";
+type AssistantPresetInjectionPosition = "ordered" | "depth";
+const ASSISTANT_PRESET_WRAP_FORMATS = new Set<AssistantPresetWrapFormat>(["xml", "markdown", "none"]);
+const ASSISTANT_PRESET_ROLES = new Set<AssistantPresetRole>(["system", "user", "assistant"]);
+const ASSISTANT_PRESET_INJECTION_POSITIONS = new Set<AssistantPresetInjectionPosition>(["ordered", "depth"]);
+
+function resolveAssistantPresetWrapFormat(value: unknown): AssistantPresetWrapFormat {
+  return typeof value === "string" && ASSISTANT_PRESET_WRAP_FORMATS.has(value as AssistantPresetWrapFormat)
+    ? (value as AssistantPresetWrapFormat)
+    : "xml";
+}
+
+function resolveAssistantPresetRole(value: unknown): AssistantPresetRole {
+  return typeof value === "string" && ASSISTANT_PRESET_ROLES.has(value as AssistantPresetRole)
+    ? (value as AssistantPresetRole)
+    : "system";
+}
+
+function resolveAssistantPresetInjectionPosition(value: unknown): AssistantPresetInjectionPosition {
+  return typeof value === "string" &&
+    ASSISTANT_PRESET_INJECTION_POSITIONS.has(value as AssistantPresetInjectionPosition)
+    ? (value as AssistantPresetInjectionPosition)
+    : "ordered";
+}
+
+function normalizeAssistantPresetIdentifier(
+  value: string | undefined,
+  fallbackIndex: number,
+  used: Set<string>,
+): string {
+  const base =
+    value
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 80) || `mari_section_${fallbackIndex + 1}`;
+  let candidate = base;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+function normalizeAssistantPresetVariableName(value: string, fallbackIndex: number, used: Set<string>): string {
+  const base =
+    value
+      .trim()
+      .replace(/[^\w]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 96) || `choice_${fallbackIndex + 1}`;
+  let candidate = /^\w+$/.test(base) ? base : `choice_${fallbackIndex + 1}`;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+function normalizeAssistantPresetOptionId(value: string | undefined, fallbackIndex: number, used: Set<string>): string {
+  const base =
+    value
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 64) || `option_${fallbackIndex + 1}`;
+  let candidate = base;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+function truncateMariFetchedText(value: unknown, maxLength = 4000): string {
+  const text = String(value ?? "");
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}\n...[truncated ${text.length - maxLength} chars]`;
+}
+
+function parseMariJsonRecord(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseMariJsonArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function pruneEmptyPromptWrappers(messages: Array<{ content: string }>): void {
@@ -1770,7 +1907,7 @@ export async function generateRoutes(app: FastifyInstance) {
     if (!chat) {
       return reply.status(404).send({ error: "Chat not found" });
     }
-    const requestChatMode = (chat.mode as string) ?? "roleplay";
+    const requestChatMode = (chat.mode as ChatMode) ?? "roleplay";
     let conversationGenerationStartedAt: number | null = null;
     let conversationAssistantSaved = false;
     const activeGenerations = (app as any).activeGenerations as Map<
@@ -2271,10 +2408,11 @@ export async function generateRoutes(app: FastifyInstance) {
         let frequencyPenalty = 0;
         let presencePenalty = 0;
         let showThoughts = true;
-        let reasoningEffort: "low" | "medium" | "high" | "maximum" | null = null;
+        let reasoningEffort: "low" | "medium" | "high" | "xhigh" | "maximum" | null = null;
         let verbosity: "low" | "medium" | "high" | null = null;
         let serviceTier: "flex" | "priority" | null = null;
         let assistantPrefill = "";
+        let customThinkingTags: ThinkingTagPair[] = [];
         let customParameters: Record<string, unknown> = {};
         let wrapFormat: "xml" | "markdown" | "none" = "xml";
         const runtimeAgentSectionTypes = new Set<RuntimeAgentSectionType>();
@@ -2285,8 +2423,8 @@ export async function generateRoutes(app: FastifyInstance) {
         );
         let effectiveMaxContext = minContextLimit(connectionMaxContext, knownModelContext);
 
-        // Determine whether agents are enabled for this chat (needed by assembler + agent pipeline)
-        // Conversation mode chats never run roleplay agents — force agents off.
+        // Determine whether agents are enabled for this chat (needed by assembler + agent pipeline).
+        // Mode policy filters which agents may run for conversation, roleplay, visual novel, and game chats.
         logger.info("[generate] chatId=%s, chatMode=%s", input.chatId, chatMode);
         const gameSpotifyMusicEnabled = chatMode === "game" && chatMeta.gameUseSpotifyMusic === true;
         const chatEnableAgents = shouldEnableAgentsForGeneration({
@@ -2298,9 +2436,9 @@ export async function generateRoutes(app: FastifyInstance) {
         const persistedChatActiveAgentIds: string[] = Array.isArray(chatMeta.activeAgentIds)
           ? (chatMeta.activeAgentIds as string[])
           : [];
-        const chatActiveAgentIds: string[] = filterGameInternalAgentIds(chatMode, persistedChatActiveAgentIds).filter(
-          (agentId) => !(gameSpotifyMusicEnabled && agentId === "spotify"),
-        );
+        const chatActiveAgentIds: string[] = filterGameInternalAgentIds(chatMode, persistedChatActiveAgentIds)
+          .filter((agentId) => isAgentAvailableInChatMode(chatMode, agentId))
+          .filter((agentId) => !(gameSpotifyMusicEnabled && agentId === "spotify"));
         const hasPerChatAgentList = chatActiveAgentIds.length > 0;
         const perChatAgentSet = new Set(chatActiveAgentIds);
         const chatSummaryAgentActive = chatEnableAgents && perChatAgentSet.has("chat-summary");
@@ -2309,6 +2447,7 @@ export async function generateRoutes(app: FastifyInstance) {
         const runtimeSectionEligibleAgentTypes = buildRuntimeAgentSectionEligibleTypesForTest({
           enableAgents: chatEnableAgents,
           activeAgentIds: chatActiveAgentIds,
+          chatMode,
           configuredAgents: configuredPromptAgents.map((agent) => ({
             type: agent.type,
             phase: agent.phase,
@@ -2445,6 +2584,30 @@ export async function generateRoutes(app: FastifyInstance) {
             })),
             input,
           );
+        let promptScopedLorebookIdSetPromise: Promise<Set<string>> | null = null;
+        const getPromptScopedLorebookIdSet = () => {
+          promptScopedLorebookIdSetPromise ??= (async () => {
+            const allLorebooks = (await lorebooksStore.list()) as unknown as Lorebook[];
+            const relevantLorebooks = filterRelevantLorebooks(allLorebooks, {
+              chatId: input.chatId,
+              characterIds: promptCharacterIds,
+              personaId,
+              activeLorebookIds: chatActiveLorebookIds,
+              excludedLorebookIds: gameLorebookScopeExclusions.excludedLorebookIds,
+              excludedSourceAgentIds: gameLorebookScopeExclusions.excludedSourceAgentIds,
+            });
+            return new Set(relevantLorebooks.map((lorebook) => lorebook.id));
+          })();
+          return promptScopedLorebookIdSetPromise;
+        };
+        const filterChatActiveLorebookSourceIdsForPrompt = async (
+          sourceIds: string[],
+          source: "manual" | "chat_active" | "none",
+        ) => {
+          if (source !== "chat_active" || sourceIds.length === 0) return sourceIds;
+          const scopedIds = await getPromptScopedLorebookIdSet();
+          return sourceIds.filter((id) => scopedIds.has(id));
+        };
 
         // ── Compute chat embedding for semantic lorebook matching (if any entries are vectorized) ──
         sendProgress("embedding");
@@ -2598,6 +2761,7 @@ export async function generateRoutes(app: FastifyInstance) {
           verbosity = assembled.parameters.verbosity ?? null;
           serviceTier = assembled.parameters.serviceTier ?? null;
           assistantPrefill = assembled.parameters.assistantPrefill ?? "";
+          customThinkingTags = normalizeThinkingTagPairs(assembled.parameters.customThinkingTags);
           customParameters = mergeCustomParameters(customParameters, assembled.parameters.customParameters);
 
           const presetMaxContext = assembled.parameters.useMaxContext
@@ -3305,6 +3469,7 @@ export async function generateRoutes(app: FastifyInstance) {
               const allPersonasList = await chars.listPersonas();
               const allLorebooks = await lorebooksStore.list();
               const allChats = await chats.list();
+              const allPresets = await presets.list();
 
               const charNames = allChars
                 .filter((c: any) => c.id !== PROFESSOR_MARI_ID)
@@ -3320,6 +3485,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 .slice(0, 50)
                 .map((c: any) => c.name)
                 .filter(Boolean);
+              const presetNames = (allPresets as any[]).map((preset: any) => preset.name).filter(Boolean);
 
               const namesSections: string[] = [];
               if (charNames.length > 0)
@@ -3332,6 +3498,8 @@ export async function generateRoutes(app: FastifyInstance) {
                 );
               if (chatNames.length > 0)
                 namesSections.push(`<available_names type="chat">\n${chatNames.join(", ")}\n</available_names>`);
+              if (presetNames.length > 0)
+                namesSections.push(`<available_names type="preset">\n${presetNames.join(", ")}\n</available_names>`);
 
               if (namesSections.length > 0) {
                 conversationSystemPrompt += "\n\n" + namesSections.join("\n\n");
@@ -3651,7 +3819,7 @@ export async function generateRoutes(app: FastifyInstance) {
             sendProgress("lorebooks");
             const lorebookResult = await processLorebooks(app.db, toLorebookScanMessages(), null, {
               chatId: input.chatId,
-              characterIds,
+              characterIds: promptCharacterIds,
               personaId,
               activeLorebookIds: chatActiveLorebookIds,
               excludedLorebookIds: gameLorebookScopeExclusions.excludedLorebookIds,
@@ -3707,7 +3875,7 @@ export async function generateRoutes(app: FastifyInstance) {
           sendProgress("lorebooks");
           const lorebookResult = await processLorebooks(app.db, toLorebookScanMessages(), null, {
             chatId: input.chatId,
-            characterIds,
+            characterIds: promptCharacterIds,
             personaId,
             activeLorebookIds: chatActiveLorebookIds,
             excludedLorebookIds: gameLorebookScopeExclusions.excludedLorebookIds,
@@ -3883,6 +4051,9 @@ export async function generateRoutes(app: FastifyInstance) {
           if (params.verbosity !== undefined) verbosity = params.verbosity;
           if (params.serviceTier !== undefined) serviceTier = normalizeServiceTier(params.serviceTier);
           if (typeof params.assistantPrefill === "string") assistantPrefill = params.assistantPrefill;
+          if (params.customThinkingTags !== undefined) {
+            customThinkingTags = normalizeThinkingTagPairs(params.customThinkingTags);
+          }
           customParameters = mergeCustomParameters(customParameters, params.customParameters);
 
           const paramsMaxContext = params.useMaxContext ? knownModelContext : normalizeMaxContext(params.maxContext);
@@ -3921,19 +4092,18 @@ export async function generateRoutes(app: FastifyInstance) {
         const modelLower = (conn.model ?? "").toLowerCase();
         const providerLower = (conn.provider ?? "").toLowerCase();
 
-        // Resolve "maximum" reasoning effort to the highest provider-facing level.
+        // Resolve "xhigh" and "maximum" reasoning effort to provider-facing levels.
         // Native Anthropic/Claude subscription adaptive-only models use "max";
         // OpenAI-compatible Claude routes keep "xhigh". All other models get "high".
         let resolvedEffort: "low" | "medium" | "high" | "xhigh" | "max" | null =
           reasoningEffort !== "maximum" ? reasoningEffort : null;
+        const supportsXhigh = supportsXhighReasoningEffort(modelLower);
+        if (reasoningEffort === "xhigh" && !supportsXhigh) {
+          resolvedEffort = "high";
+        }
         if (reasoningEffort === "maximum") {
           const isNativeAnthropicAdaptiveOnly =
             (providerLower === "anthropic" || providerLower === "claude_subscription") &&
-            isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
-          const supportsXhigh =
-            modelLower.startsWith("gpt-5.5") ||
-            modelLower.startsWith("gpt-5.4") ||
-            modelLower === "grok-4.20-multi-agent" ||
             isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
           resolvedEffort = isNativeAnthropicAdaptiveOnly ? "max" : supportsXhigh ? "xhigh" : "high";
         }
@@ -5362,8 +5532,9 @@ export async function generateRoutes(app: FastifyInstance) {
         }
         const getLatestUserExpressionSource = () =>
           (
-            [...agentContext.recentMessages].reverse().find((message) => message.role === "user" && message.content.trim())
-              ?.content ??
+            [...agentContext.recentMessages]
+              .reverse()
+              .find((message) => message.role === "user" && message.content.trim())?.content ??
             currentUserInputContent() ??
             input.userMessage ??
             ""
@@ -5639,10 +5810,11 @@ export async function generateRoutes(app: FastifyInstance) {
 
           // Load lorebook entries
           try {
-            const { sourceLorebookIds: sourceIds } = resolveKnowledgeSourceLorebookIds({
+            const { sourceLorebookIds: rawSourceIds, source } = resolveKnowledgeSourceLorebookIds({
               settings: knowledgeRetrievalAgent.settings,
               chatActiveLorebookIds: chatActiveLorebookIds,
             });
+            const sourceIds = await filterChatActiveLorebookSourceIdsForPrompt(rawSourceIds, source);
             if (sourceIds.length > 0) {
               const entries = await lorebooksStore.listEntriesByLorebooks(sourceIds);
               const activeEntries = entries.filter((e: any) => e.enabled !== false);
@@ -5704,10 +5876,11 @@ export async function generateRoutes(app: FastifyInstance) {
         let knowledgeRouterKeywordScanEntries: LorebookEntry[] = [];
         if (knowledgeRouterAgent) {
           try {
-            const { sourceLorebookIds: sourceIds } = resolveKnowledgeSourceLorebookIds({
+            const { sourceLorebookIds: rawSourceIds, source } = resolveKnowledgeSourceLorebookIds({
               settings: knowledgeRouterAgent.settings,
               chatActiveLorebookIds: chatActiveLorebookIds,
             });
+            const sourceIds = await filterChatActiveLorebookSourceIdsForPrompt(rawSourceIds, source);
             if (sourceIds.length > 0) {
               const entries = (await lorebooksStore.listEntriesByLorebooks(sourceIds)) as LorebookEntry[];
               // Honor per-chat entry state overrides — a user can disable an entry for
@@ -6210,7 +6383,7 @@ export async function generateRoutes(app: FastifyInstance) {
         const searchLorebookForTools = async (query: string, category?: string | null) => {
           const entries = await lorebooksStore.listActiveEntries({
             chatId: input.chatId,
-            characterIds,
+            characterIds: promptCharacterIds,
             personaId,
             activeLorebookIds: chatActiveLorebookIds,
             excludedLorebookIds: gameLorebookScopeExclusions.excludedLorebookIds,
@@ -6268,7 +6441,9 @@ export async function generateRoutes(app: FastifyInstance) {
           }
           const writableIds = agentSettings.writableLorebookIds;
           if (Array.isArray(writableIds)) {
-            const first = writableIds.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+            const first = writableIds.find(
+              (value): value is string => typeof value === "string" && value.trim().length > 0,
+            );
             if (first) return first.trim();
           }
           return null;
@@ -6330,7 +6505,9 @@ export async function generateRoutes(app: FastifyInstance) {
                   ? existingContent
                   : `${existingContent.trim()}\n\n${entry.content}`
                 : entry.content;
-            const existingKeys = Array.isArray(existing.keys) ? existing.keys.filter((key: unknown): key is string => typeof key === "string") : [];
+            const existingKeys = Array.isArray(existing.keys)
+              ? existing.keys.filter((key: unknown): key is string => typeof key === "string")
+              : [];
             const updated = await lorebooksStore.updateEntry(existing.id, {
               content: nextContent,
               description: entry.description ?? existing.description ?? "",
@@ -7040,9 +7217,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
               if (wrapFormat === "xml") {
                 const ctxIdx = finalMessages.findIndex(
-                  (m) =>
-                    (m.contextKind === "injection" || m.role === "system") &&
-                    m.content.includes("<context>"),
+                  (m) => (m.contextKind === "injection" || m.role === "system") && m.content.includes("<context>"),
                 );
                 if (ctxIdx >= 0) {
                   const ctxMsg = finalMessages[ctxIdx]!;
@@ -7063,9 +7238,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 }
               } else if (wrapFormat === "markdown") {
                 const ctxIdx = finalMessages.findIndex(
-                  (m) =>
-                    (m.contextKind === "injection" || m.role === "system") &&
-                    m.content.includes("# Context"),
+                  (m) => (m.contextKind === "injection" || m.role === "system") && m.content.includes("# Context"),
                 );
                 if (ctxIdx >= 0) {
                   const ctxMsg = finalMessages[ctxIdx]!;
@@ -7210,7 +7383,8 @@ export async function generateRoutes(app: FastifyInstance) {
         let allResponses: string[] = [];
         const generatedExpressionTargetIds = new Set<string>();
         const recordExpressionTarget = (savedMsg: any, fallbackCharacterId: string | null) => {
-          const savedRole = typeof savedMsg?.role === "string" ? savedMsg.role : input.impersonate ? "user" : "assistant";
+          const savedRole =
+            typeof savedMsg?.role === "string" ? savedMsg.role : input.impersonate ? "user" : "assistant";
           if (savedRole === "assistant" && fallbackCharacterId) {
             generatedExpressionTargetIds.add(fallbackCharacterId);
           } else if (savedRole === "user" && personaId) {
@@ -7606,8 +7780,8 @@ export async function generateRoutes(app: FastifyInstance) {
             if (isDebug || requestDebug) {
               const effModel = conn.model.toLowerCase();
               const tempSuppressed =
-                (conn.provider === "openai" || conn.provider === "openrouter") &&
-                (/^(o1|o3|o4)/.test(effModel) || (effModel.startsWith("gpt-5") && !!resolvedEffort)) ||
+                ((conn.provider === "openai" || conn.provider === "openrouter") &&
+                  (/^(o1|o3|o4)/.test(effModel) || (effModel.startsWith("gpt-5") && !!resolvedEffort))) ||
                 isClaudeNoSampling;
               const effTemp = tempSuppressed ? "N/A" : temperature;
               const effTopP = tempSuppressed ? "N/A" : topP;
@@ -7971,7 +8145,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
             // Some models inline reasoning blocks instead of using provider-native
             // thinking channels. Lift those blocks into message.extra.thinking.
-            const inlineThinking = extractLeadingThinkingBlocks(fullResponse);
+            const inlineThinking = extractLeadingThinkingBlocks(fullResponse, customThinkingTags);
             if (inlineThinking.stripped) {
               if (inlineThinking.thinking) {
                 fullThinking = fullThinking ? fullThinking + "\n\n" + inlineThinking.thinking : inlineThinking.thinking;
@@ -8159,10 +8333,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 const cName = charRow.name;
                 const escapedName = cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
                 // Strip <speaker="Name">...</speaker> wrapper if present
-                const speakerWrap = new RegExp(
-                  `^\\s*<speaker="${escapedName}">[\\s\\S]*?<\\/speaker>\\s*$`,
-                  "i",
-                );
+                const speakerWrap = new RegExp(`^\\s*<speaker="${escapedName}">[\\s\\S]*?<\\/speaker>\\s*$`, "i");
                 const speakerMatch = fullResponse.match(speakerWrap);
                 if (speakerMatch) {
                   fullResponse = fullResponse
@@ -8803,7 +8974,9 @@ export async function generateRoutes(app: FastifyInstance) {
                       )
                     : null;
                 const phaseRetryContext: AgentContext =
-                  agentCfg.phase === "post_processing" ? { ...agentContext, mainResponse: combinedResponse } : agentContext;
+                  agentCfg.phase === "post_processing"
+                    ? { ...agentContext, mainResponse: combinedResponse }
+                    : agentContext;
                 const retryCtx: AgentContext = historicalLorebookTarget
                   ? (buildHistoricalLorebookKeeperContext(
                       agentContext,
@@ -8816,7 +8989,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   retryCtx,
                   agentCfg.provider,
                   agentCfg.model,
-                  agentCfg.toolContext,
+                  agentCfg.type === "spotify" ? undefined : agentCfg.toolContext,
                 );
                 const finalizedRetryResults = await applySpotifyAgentPlaybackFallbacks(
                   [retried],
@@ -9868,8 +10041,12 @@ export async function generateRoutes(app: FastifyInstance) {
                 );
                 const imagePositivePrompt = ((illustratorAgent?.settings?.imagePositivePrompt as string) ?? "").trim();
                 const savedNegativePrompt = ((illustratorAgent?.settings?.imageNegativePrompt as string) ?? "").trim();
-                const imageConnectionOverride = ((illustratorAgent?.settings?.imageConnectionId as string) ?? "").trim();
-                let imgConnFull = imageConnectionOverride ? await connections.getWithKey(imageConnectionOverride) : null;
+                const imageConnectionOverride = (
+                  (illustratorAgent?.settings?.imageConnectionId as string) ?? ""
+                ).trim();
+                let imgConnFull = imageConnectionOverride
+                  ? await connections.getWithKey(imageConnectionOverride)
+                  : null;
                 if (imageConnectionOverride && !imgConnFull) {
                   logger.warn(
                     "[illustrator] Image connection override %s could not be resolved; falling back to default Illustrator connection",
@@ -9902,9 +10079,8 @@ export async function generateRoutes(app: FastifyInstance) {
                         (chatMeta.imageStyleProfileId as string | undefined) ??
                         null;
 
-                      // Scene illustrations share the landscape background canvas.
-                      const imgWidth = imageSettings.background.width;
-                      const imgHeight = imageSettings.background.height;
+                      const imgWidth = imageSettings.illustration.width;
+                      const imgHeight = imageSettings.illustration.height;
 
                       // Prepend style to the prompt for better results
                       let fullPrompt = style ? `${style}, ${imagePrompt}` : imagePrompt;
@@ -9951,7 +10127,8 @@ export async function generateRoutes(app: FastifyInstance) {
                         });
                         if (referenceResolution.referenceImages.length > 0) {
                           illustratorRefImages = referenceResolution.referenceImages;
-                          if (referenceResolution.referenceLine) fullPrompt += `\n\n${referenceResolution.referenceLine}`;
+                          if (referenceResolution.referenceLine)
+                            fullPrompt += `\n\n${referenceResolution.referenceLine}`;
                           logger.debug(
                             "[illustrator] Sending %d character reference(s) for: %s",
                             referenceResolution.referenceImages.length,
@@ -10158,6 +10335,7 @@ export async function generateRoutes(app: FastifyInstance) {
             "update_persona",
             "create_lorebook",
             "update_lorebook",
+            "create_preset",
             "create_chat",
             "navigate",
             "fetch",
@@ -11265,6 +11443,143 @@ export async function generateRoutes(app: FastifyInstance) {
                   }
                 }
 
+                if (command.type === "create_preset") {
+                  const presetCmd = command as CreatePresetCommand;
+                  try {
+                    const createdPresetAction = await app.db.transaction(async (tx) => {
+                      const txPresets = createPromptsStorage(tx as unknown as typeof app.db);
+                      const created = await txPresets.create({
+                        name: presetCmd.name,
+                        description: presetCmd.description ?? "",
+                        wrapFormat: resolveAssistantPresetWrapFormat(presetCmd.wrapFormat),
+                        isDefault: false,
+                        author: presetCmd.author ?? "Professor Mari",
+                      });
+
+                      if (!created) return null;
+
+                      const createdPreset = created as unknown as { id: string };
+                      const groupIds = new Map<string, string>();
+                      const groupKey = (name: string) => name.trim().toLowerCase();
+
+                      const ensureGroup = async (
+                        name: string,
+                        order?: number,
+                        enabled?: boolean,
+                      ): Promise<string | null> => {
+                        const trimmed = name.trim();
+                        if (!trimmed) return null;
+                        const key = groupKey(trimmed);
+                        const existing = groupIds.get(key);
+                        if (existing) return existing;
+                        const group = await txPresets.createGroup({
+                          presetId: createdPreset.id,
+                          name: trimmed,
+                          order: order ?? (groupIds.size + 1) * 100,
+                          enabled: enabled ?? true,
+                        });
+                        if (!group) return null;
+                        groupIds.set(key, group.id);
+                        return group.id;
+                      };
+
+                      for (const group of presetCmd.groups ?? []) {
+                        await ensureGroup(group.name, group.order, group.enabled);
+                      }
+
+                      for (const group of presetCmd.groups ?? []) {
+                        if (!group.parentGroupName) continue;
+                        const childId = groupIds.get(groupKey(group.name));
+                        const parentId = await ensureGroup(group.parentGroupName);
+                        if (childId && parentId) {
+                          await txPresets.updateGroup(childId, { parentGroupId: parentId });
+                        }
+                      }
+
+                      const usedIdentifiers = new Set<string>();
+                      let sectionCount = 0;
+                      for (const [index, section] of (presetCmd.sections ?? []).entries()) {
+                        const groupId = section.groupName ? await ensureGroup(section.groupName) : null;
+                        await txPresets.createSection({
+                          presetId: createdPreset.id,
+                          identifier: normalizeAssistantPresetIdentifier(
+                            section.identifier ?? section.name,
+                            index,
+                            usedIdentifiers,
+                          ),
+                          name: section.name,
+                          content: section.content ?? "",
+                          role: resolveAssistantPresetRole(section.role),
+                          enabled: section.enabled ?? true,
+                          isMarker: false,
+                          groupId,
+                          markerConfig: null,
+                          injectionPosition: resolveAssistantPresetInjectionPosition(section.injectionPosition),
+                          injectionDepth: Math.max(0, section.injectionDepth ?? 0),
+                          injectionOrder: section.injectionOrder ?? (index + 1) * 100,
+                          forbidOverrides: section.forbidOverrides ?? false,
+                        });
+                        sectionCount += 1;
+                      }
+
+                      const usedVariableNames = new Set<string>();
+                      let choiceBlockCount = 0;
+                      for (const [index, choiceBlock] of (presetCmd.choiceBlocks ?? []).entries()) {
+                        const optionIds = new Set<string>();
+                        await txPresets.createChoiceBlock({
+                          presetId: createdPreset.id,
+                          variableName: normalizeAssistantPresetVariableName(
+                            choiceBlock.variableName,
+                            index,
+                            usedVariableNames,
+                          ),
+                          question: choiceBlock.question,
+                          options: choiceBlock.options.map((option, optionIndex) => ({
+                            id: normalizeAssistantPresetOptionId(option.id ?? option.label, optionIndex, optionIds),
+                            label: option.label,
+                            value: option.value,
+                          })),
+                          multiSelect: choiceBlock.multiSelect ?? false,
+                          separator: choiceBlock.separator ?? ", ",
+                          randomPick: choiceBlock.randomPick ?? false,
+                        });
+                        choiceBlockCount += 1;
+                      }
+
+                      return {
+                        id: createdPreset.id,
+                        name: presetCmd.name,
+                        sectionCount,
+                        choiceBlockCount,
+                      };
+                    });
+
+                    if (createdPresetAction) {
+                      reply.raw.write(
+                        `data: ${JSON.stringify({
+                          type: "assistant_action",
+                          data: {
+                            action: "preset_created",
+                            id: createdPresetAction.id,
+                            name: createdPresetAction.name,
+                            sectionCount: createdPresetAction.sectionCount,
+                            choiceBlockCount: createdPresetAction.choiceBlockCount,
+                          },
+                        })}\n\n`,
+                      );
+                      logger.info(
+                        '[commands] Assistant created preset: "%s" (%s), sections=%d choiceBlocks=%d',
+                        createdPresetAction.name,
+                        createdPresetAction.id,
+                        createdPresetAction.sectionCount,
+                        createdPresetAction.choiceBlockCount,
+                      );
+                    }
+                  } catch (err) {
+                    logger.error(err, "[commands] Create preset failed");
+                  }
+                }
+
                 if (command.type === "create_chat") {
                   const ctCmd = command as CreateChatCommand;
                   try {
@@ -11407,19 +11722,81 @@ export async function generateRoutes(app: FastifyInstance) {
                     } else if (fetchCmd.fetchType === "preset") {
                       const allPresetsList = await presets.list();
                       const found = (allPresetsList as any[]).find(
-                        (p: any) => p.name?.toLowerCase() === fetchCmd.name.toLowerCase(),
+                        (p: any) => p.id === fetchCmd.name || p.name?.toLowerCase() === fetchCmd.name.toLowerCase(),
                       );
                       if (found) {
                         const sections = await presets.listSections(found.id);
+                        const groups = await presets.listGroups(found.id);
+                        const choiceBlocks = await presets.listChoiceBlocksForPreset(found.id);
+                        const groupById = new Map((groups as any[]).map((group: any) => [group.id, group]));
+                        const parameters = parseMariJsonRecord(found.parameters);
+                        const defaultChoices = parseMariJsonRecord(found.defaultChoices);
                         const parts = [`Preset: ${found.name}`];
+                        parts.push(`ID: ${found.id}`);
                         if (found.description) parts.push(`Description: ${found.description}`);
-                        parts.push(`Sections (${sections.length}):`);
-                        for (const sec of sections) {
+                        if (found.author) parts.push(`Author: ${found.author}`);
+                        parts.push(`Wrap Format: ${found.wrapFormat ?? "xml"}`);
+                        parts.push(`Default Preset: ${String(found.isDefault) === "true" ? "yes" : "no"}`);
+                        if (Object.keys(parameters).length > 0) {
                           parts.push(
-                            `  [${sec.role}] ${sec.name ?? "Untitled"}: ${(sec.content as string).slice(0, 200)}`,
+                            `Generation Parameters: ${truncateMariFetchedText(JSON.stringify(parameters), 1200)}`,
                           );
                         }
-                        fetchedContent = parts.join("\n");
+                        if (Object.keys(defaultChoices).length > 0) {
+                          parts.push(
+                            `Default Choices: ${truncateMariFetchedText(JSON.stringify(defaultChoices), 1200)}`,
+                          );
+                        }
+                        if ((groups as any[]).length > 0) {
+                          parts.push(`Groups (${(groups as any[]).length}):`);
+                          for (const group of groups as any[]) {
+                            const parent = group.parentGroupId ? groupById.get(group.parentGroupId) : null;
+                            parts.push(
+                              `  - ${group.name} (enabled=${String(group.enabled) === "true" ? "true" : "false"}, order=${group.order}, parent=${parent?.name ?? "none"})`,
+                            );
+                          }
+                        }
+                        parts.push(`Sections (${sections.length}):`);
+                        for (const sec of sections) {
+                          const group = sec.groupId ? groupById.get(sec.groupId) : null;
+                          parts.push(
+                            [
+                              `\n  Section: ${sec.name ?? "Untitled"}`,
+                              `  Identifier: ${sec.identifier}`,
+                              `  Role: ${sec.role}`,
+                              `  Enabled: ${String(sec.enabled) === "true" ? "true" : "false"}`,
+                              `  Group: ${group?.name ?? "none"}`,
+                              `  Injection: ${sec.injectionPosition} depth=${sec.injectionDepth} order=${sec.injectionOrder}`,
+                              `  Forbid Overrides: ${String(sec.forbidOverrides) === "true" ? "true" : "false"}`,
+                              `  Content:\n${truncateMariFetchedText(sec.content, 3000)}`,
+                            ].join("\n"),
+                          );
+                        }
+                        if ((choiceBlocks as any[]).length > 0) {
+                          parts.push(`Choice Blocks (${(choiceBlocks as any[]).length}):`);
+                          for (const block of choiceBlocks as any[]) {
+                            const options = parseMariJsonArray(block.options)
+                              .map((option) => {
+                                const data = parseMariJsonRecord(option);
+                                return `${data.label ?? "Option"} => ${truncateMariFetchedText(data.value, 500)}`;
+                              })
+                              .join(" | ");
+                            parts.push(
+                              [
+                                `\n  Variable: ${block.variableName}`,
+                                `  Question: ${block.question}`,
+                                `  Multi Select: ${String(block.multiSelect) === "true" ? "true" : "false"}`,
+                                `  Random Pick: ${String(block.randomPick) === "true" ? "true" : "false"}`,
+                                `  Separator: ${block.separator ?? ", "}`,
+                                `  Options: ${options}`,
+                              ].join("\n"),
+                            );
+                          }
+                        }
+                        fetchedContent = truncateMariFetchedText(
+                          parts.join("\n"),
+                          MAX_MARI_FETCHED_PRESET_CONTEXT_CHARS,
+                        );
                       }
                     }
 

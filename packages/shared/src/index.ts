@@ -44,6 +44,7 @@ export * from "./schemas/app-settings.schema.js";
 export * from "./constants/providers.js";
 export * from "./constants/defaults.js";
 export * from "./constants/chat-modes.js";
+export * from "./constants/chat-mode-capabilities.js";
 export * from "./constants/model-lists.js"; // also exports IMAGE_GENERATION_SOURCES
 export * from "./constants/agent-prompts.js";
 export * from "./constants/agent-activation.js";
@@ -52,6 +53,11 @@ export * from "./constants/image-generation-defaults.js";
 export * from "./constants/image-style-profiles.js";
 export * from "./constants/security.js";
 export * from "./constants/game-assets.js";
+
+// Feature registries
+export * from "./features/agents/agent-manifest.types.js";
+export * from "./features/agents/agent-registry.js";
+export * from "./features/function-calls/tool-definitions.js";
 
 // Utils
 export * from "./utils/macro-engine.js";
@@ -68,3 +74,4 @@ export * from "./utils/chat-summary-entries.js";
 export * from "./utils/quest-state.js";
 export * from "./utils/quote-format.js";
 export * from "./utils/image-prompt-compiler.js";
+export * from "./utils/thinking-tags.js";
